@@ -72,7 +72,10 @@ class DockerBackend(SandboxBackend):
                 nano_cpus=int(limits.cpus * 1_000_000_000),
                 pids_limit=limits.pids_limit,
                 read_only=True,
-                tmpfs={_WORKDIR: "rw,size=8m,mode=1777"},
+                # Writable, ephemeral scratch space: /sandbox holds the code file,
+                # /tmp is general scratch (the system prompt promises code a writable /tmp).
+                # Everything else stays read-only.
+                tmpfs={_WORKDIR: "rw,size=8m,mode=1777", "/tmp": "rw,size=16m,mode=1777"},
                 cap_drop=["ALL"],
                 security_opt=["no-new-privileges"],
                 user="1000:1000",
