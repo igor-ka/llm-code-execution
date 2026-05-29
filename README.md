@@ -39,8 +39,8 @@ docker-compose.yml           backend + frontend + one-shot sandbox-image build
 ## Prerequisites
 
 - **Docker** (Desktop or Engine) — required to build/run the sandbox and the compose stack.
-  > ⚠️ Docker is **not** currently installed on this machine. Install Docker Desktop
-  > (https://www.docker.com/products/docker-desktop/) before running the steps below.
+  Install from https://www.docker.com/products/docker-desktop/ and make sure the engine is
+  running (`docker info` succeeds).
 - An **Anthropic API key** from https://console.anthropic.com — this is a *developer* account,
   **separate from a Claude Pro/Max subscription**. Add a small amount of pay-as-you-go credit
   ($5–10 is plenty for this project) and create an API key.
@@ -87,21 +87,46 @@ CPU and PID limits, a read-only root filesystem + small tmpfs, **all** Linux cap
 dropped, `no-new-privileges`, a non-root user, a wall-clock timeout (container killed on
 overrun), and `--rm` so nothing persists. Output is truncated to a safe size.
 
+## Security posture
+
+> ⚠️ **This is a local learning build, not production-ready.** The sandbox itself is solid;
+> the layers around it are intentionally minimal. Do **not** expose this to untrusted users
+> as-is.
+
+**Hardened (verified):** the per-execution sandbox isolation listed above. Generated code is
+passed into the container without mounting any host path, and unsupported languages are
+rejected server-side.
+
+**Known limitations — close these before any real/multi-tenant deployment:**
+
+- **No authentication or authorization** on `/api/execute`. Anyone who can reach the backend
+  can run code and spend your Anthropic credits. (`tenant_id`/`user_id` exist on the request
+  but are not yet enforced.)
+- **No rate limiting / concurrency cap.** A burst of requests can exhaust host resources
+  (one container each) and API budget. Add per-user quotas + a sandbox concurrency limit.
+- **Docker socket is mounted into the backend** (`docker-compose.yml`), which is
+  root-equivalent control of the host. Acceptable for local dev; in production use a
+  restricted socket proxy, or the planned `CloudRunBackend` (which removes the socket entirely).
+- Internal exception detail is surfaced in some error responses; HTTP only (no TLS).
+
+These map directly to the Roadmap below. See the in-repo security review notes for detail.
+
 ## Verification
+
+All of the checks below have been run and pass (✅). Re-run them anytime.
 
 - **Health:** `curl localhost:8000/api/health` → `{"status":"ok"}`.
 - **Backend unit tests** (no network / no Docker needed):
   ```bash
   cd backend && pip install -e ".[dev]" && pytest
   ```
-- **Happy path:** prompt *"compute the first 20 Fibonacci numbers"* → UI shows generated
-  Python + correct stdout; `docker ps -a` shows a container was created and removed.
-- **No-code path:** prompt *"tell me a joke"* → UI shows a friendly message; **no** container
-  is launched.
-- **Isolation checks** (run as prompts, confirm the sandbox contains them):
+- ✅ **Happy path:** *"compute the first 20 Fibonacci numbers"* → UI shows generated Python +
+  correct stdout; a container is created and removed per run (one new container ID each time).
+- ✅ **No-code path:** *"tell me a joke"* → friendly message; **no** container launched.
+- ✅ **Isolation checks** (each confirmed contained by the sandbox):
   - network access → fails (`--network none`)
-  - reading host paths / writing outside `/tmp` → blocked (read-only FS)
-  - infinite loop → killed at `SANDBOX_TIMEOUT_SECONDS` with `timed_out: true`
+  - reading host paths / writing outside the tmpfs → blocked (read-only FS); `/tmp` is writable
+  - infinite loop → killed at `SANDBOX_TIMEOUT_SECONDS` with `timed_out: true` (exit 124)
   - fork bomb → contained by `--pids-limit`
 
 ## Roadmap (intentionally out of scope here)
