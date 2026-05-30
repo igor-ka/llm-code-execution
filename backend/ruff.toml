@@ -1,0 +1,12 @@
+# Lenient first-pass lint config. Lint-only in CI (no autoformat of existing code).
+# Start with the small, high-signal default rule set; tighten over time.
+target-version = "py312"
+line-length = 100
+
+[lint]
+# E = pycodestyle errors, F = pyflakes (undefined names, unused imports, etc.).
+select = ["E", "F"]
+
+[lint.per-file-ignores]
+# Tests intentionally build partial objects / use fixtures; keep them quiet.
+"tests/**" = []
