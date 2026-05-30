@@ -52,15 +52,18 @@ _DECISION_TOOL = {
             "language": {
                 "type": "string",
                 "enum": _SUPPORTED_LANGUAGES,
-                "description": "Programming language of the generated code (only when should_execute is true).",
+                "description": "Programming language of the generated code "
+                "(only when should_execute is true).",
             },
             "code": {
                 "type": "string",
-                "description": "Self-contained source code that prints its result (only when should_execute is true).",
+                "description": "Self-contained source code that prints its result "
+                "(only when should_execute is true).",
             },
             "message": {
                 "type": "string",
-                "description": "Friendly explanation shown to the user when should_execute is false.",
+                "description": "Friendly explanation shown to the user "
+                "when should_execute is false.",
             },
         },
         "required": ["should_execute"],

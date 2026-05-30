@@ -102,7 +102,9 @@ class DockerBackend(SandboxBackend):
             stdout = container.logs(stdout=True, stderr=False).decode("utf-8", "replace")
             stderr = container.logs(stdout=False, stderr=True).decode("utf-8", "replace")
             if timed_out:
-                stderr = (stderr + f"\n[sandbox] killed after {limits.timeout_seconds}s timeout").strip()
+                stderr = (
+                    stderr + f"\n[sandbox] killed after {limits.timeout_seconds}s timeout"
+                ).strip()
 
             return SandboxResult(
                 stdout=_truncate(stdout, limits.max_output_chars),
