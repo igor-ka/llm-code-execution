@@ -4,9 +4,7 @@ FROM node:22-slim
 
 WORKDIR /app
 
-# Copy .npmrc too: it sets legacy-peer-deps, needed because eslint-plugin-jsx-a11y's
-# peer range still caps at eslint 9 while the project uses eslint 10.
-COPY package.json package-lock.json .npmrc ./
+COPY package.json package-lock.json ./
 RUN npm install
 
 COPY . .
