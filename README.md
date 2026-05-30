@@ -32,7 +32,10 @@ backend/
       docker_backend.py      hardened, ephemeral docker run per execution
   sandbox-image/Dockerfile   the minimal, non-root EXECUTION image
   tests/test_llm.py          LLMService parsing/branching (mocked client)
+  verify.sh                  one-command checks (ruff + pytest + docker), also run by CI
 frontend/                    React + Vite UI
+  src/                       App.tsx, api.ts (+ *.test.tsx / *.test.ts unit & component tests)
+  verify.sh                  one-command checks (lint + format + vitest + build + docker)
 docker-compose.yml           backend + frontend + one-shot sandbox-image build
 ```
 
@@ -113,13 +116,20 @@ These map directly to the Roadmap below. See the in-repo security review notes f
 
 ## Verification
 
-All of the checks below have been run and pass (✅). Re-run them anytime.
+Each side has a single `verify.sh` that runs everything CI runs — so local and CI can't
+drift (CI invokes the same scripts).
+
+- **Backend:** `cd backend && ./verify.sh` — installs deps, runs `ruff` + `pytest`, and
+  builds the backend and sandbox Docker images.
+- **Frontend:** `cd frontend && ./verify.sh` — installs deps, runs ESLint + Prettier +
+  Vitest, type-checks/builds, and builds the frontend Docker image.
+
+Both accept `SKIP_INSTALL=1` (reuse the current environment) and `SKIP_DOCKER=1`
+(host checks only, skip the image build).
+
+The behavioral checks below have been run and pass (✅). Re-run them anytime.
 
 - **Health:** `curl localhost:8000/api/health` → `{"status":"ok"}`.
-- **Backend unit tests** (no network / no Docker needed):
-  ```bash
-  cd backend && pip install -e ".[dev]" && pytest
-  ```
 - ✅ **Happy path:** *"compute the first 20 Fibonacci numbers"* → UI shows generated Python +
   correct stdout; a container is created and removed per run (one new container ID each time).
 - ✅ **No-code path:** *"tell me a joke"* → friendly message; **no** container launched.
