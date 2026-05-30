@@ -11,6 +11,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Convention: job `name:` values are a contract. The "Protect main" ruleset requires
+# these check names (Backend checks, Frontend checks), so renaming or removing a job
+# silently breaks merges until the ruleset's required status checks are updated to match.
+# Change what runs *inside* a job freely; keep its name stable. If a name must change,
+# update the ruleset's required_status_checks in the same PR.
 jobs:
   backend:
     name: Backend checks
