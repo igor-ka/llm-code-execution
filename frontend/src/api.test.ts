@@ -1,0 +1,90 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { execute, type MessageResponse, type ResultResponse } from "./api";
+
+// A minimal stand-in for the parts of the fetch Response we rely on.
+function mockResponse(opts: { ok: boolean; status?: number; json: () => unknown }): Response {
+  return {
+    ok: opts.ok,
+    status: opts.status ?? (opts.ok ? 200 : 500),
+    json: () => Promise.resolve(opts.json()),
+  } as unknown as Response;
+}
+
+describe("execute", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("parses and returns a message response", async () => {
+    const payload: MessageResponse = { type: "message", message: "no code needed" };
+    vi.mocked(fetch).mockResolvedValue(mockResponse({ ok: true, json: () => payload }));
+
+    await expect(execute("hi")).resolves.toEqual(payload);
+  });
+
+  it("parses and returns a result response", async () => {
+    const payload: ResultResponse = {
+      type: "result",
+      language: "python",
+      code: "print(1)",
+      stdout: "1\n",
+      stderr: "",
+      exit_code: 0,
+      duration_ms: 42,
+      timed_out: false,
+    };
+    vi.mocked(fetch).mockResolvedValue(mockResponse({ ok: true, json: () => payload }));
+
+    await expect(execute("compute")).resolves.toEqual(payload);
+  });
+
+  it("sends a correctly shaped POST request", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      mockResponse({ ok: true, json: () => ({ type: "message", message: "ok" }) }),
+    );
+
+    await execute("my prompt");
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = vi.mocked(fetch).mock.calls[0]!;
+    expect(url).toBe("http://localhost:8000/api/execute");
+    expect(init).toMatchObject({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(JSON.parse((init?.body as string) ?? "")).toEqual({ prompt: "my prompt" });
+  });
+
+  it("throws the server-provided detail on a non-2xx response", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      mockResponse({ ok: false, status: 400, json: () => ({ detail: "bad prompt" }) }),
+    );
+
+    await expect(execute("x")).rejects.toThrow("bad prompt");
+  });
+
+  it("throws a default message when the error body is not JSON", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      mockResponse({
+        ok: false,
+        status: 503,
+        json: () => {
+          throw new Error("not json");
+        },
+      }),
+    );
+
+    await expect(execute("x")).rejects.toThrow("Request failed (503)");
+  });
+
+  it("throws a default message when the error body has no detail", async () => {
+    vi.mocked(fetch).mockResolvedValue(mockResponse({ ok: false, status: 500, json: () => ({}) }));
+
+    await expect(execute("x")).rejects.toThrow("Request failed (500)");
+  });
+});
