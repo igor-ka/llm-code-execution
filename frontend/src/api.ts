@@ -30,7 +30,7 @@ export async function execute(prompt: string): Promise<ExecuteResponse> {
   if (!resp.ok) {
     let detail = `Request failed (${resp.status})`;
     try {
-      const body = await resp.json();
+      const body = (await resp.json()) as { detail?: string };
       if (body?.detail) detail = body.detail;
     } catch {
       /* keep default detail */
@@ -38,5 +38,5 @@ export async function execute(prompt: string): Promise<ExecuteResponse> {
     throw new Error(detail);
   }
 
-  return resp.json();
+  return (await resp.json()) as ExecuteResponse;
 }

@@ -13,7 +13,11 @@
     "jsx": "react-jsx",
     "strict": true,
     "noUnusedLocals": true,
-    "noUnusedParameters": true
+    "noUnusedParameters": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true
   },
   "include": ["src"]
 }
