@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     # CORS
     frontend_origin: str = "http://localhost:5173"
 
+    # Auth (OIDC bearer-token validation on protected endpoints).
+    # Off by default so the app stays usable before the frontend sends tokens;
+    # flip auth_required=True once login is wired (see issue #6 / epic #9).
+    auth_required: bool = False
+    oidc_issuer: str = ""
+    oidc_audience: str = ""
+    oidc_jwks_url: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:
