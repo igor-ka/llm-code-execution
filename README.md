@@ -83,9 +83,14 @@ uvicorn app.main:app --reload
 
 # 3. Frontend (separate terminal)
 cd frontend
+cp .env.example .env.local   # fill in your Auth0 SPA values (domain, client id, audience)
 npm install
 npm run dev
 ```
+
+The frontend requires logging in via Auth0 before you can run a prompt; it sends the access
+token to the backend as a bearer token. Set the `VITE_AUTH0_*` values in `frontend/.env.local`
+(see `frontend/.env.example`). These are public SPA values, not secrets.
 
 ## Sandbox hardening (DockerBackend)
 
