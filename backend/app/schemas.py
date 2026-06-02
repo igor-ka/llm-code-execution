@@ -7,10 +7,9 @@ from pydantic import BaseModel, Field
 # --- API request ---
 class ExecuteRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=8000)
-    # Enterprise seams: threaded through but unused in this phase. They let us add
-    # per-tenant config / per-user quotas later without changing the request shape.
-    tenant_id: Optional[str] = None
-    user_id: Optional[str] = None
+    # Note: tenant_id / user_id are intentionally NOT request fields. They are derived
+    # server-side from the verified access-token claims (see app/auth.py) so they cannot
+    # be spoofed by the client.
 
 
 # --- Internal: result of the single structured Claude call ---

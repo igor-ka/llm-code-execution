@@ -2,9 +2,10 @@
 import logging
 from functools import lru_cache
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.auth import Principal, require_principal
 from app.config import Settings, get_settings
 from app.llm import LLMService
 from app.sandbox.base import ExecutionLimits
@@ -55,8 +56,12 @@ def health() -> dict:
 
 
 @app.post("/api/execute", response_model=None)
-def execute(req: ExecuteRequest):
-    """Judge the prompt, generate code if appropriate, run it in the sandbox."""
+def execute(req: ExecuteRequest, principal: Principal = Depends(require_principal)):
+    """Judge the prompt, generate code if appropriate, run it in the sandbox.
+
+    `require_principal` enforces auth before we reach this body (401/403 on failure) and
+    yields the verified caller. When auth is disabled it yields an anonymous principal.
+    """
     settings = get_settings()
 
     try:

@@ -55,6 +55,10 @@ cp .env.example .env
 # edit .env and set ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+To turn on the `/api/execute` auth gate, also set `AUTH_REQUIRED=true` and the `OIDC_ISSUER`,
+`OIDC_AUDIENCE`, and `OIDC_JWKS_URL` values for your provider (see `.env.example`). Left off,
+the endpoint stays open — convenient for local dev before login is wired.
+
 ## Run (Docker Compose — recommended)
 
 ```bash
@@ -102,9 +106,13 @@ rejected server-side.
 
 **Known limitations — close these before any real/multi-tenant deployment:**
 
-- **No authentication or authorization** on `/api/execute`. Anyone who can reach the backend
-  can run code and spend your Anthropic credits. (`tenant_id`/`user_id` exist on the request
-  but are not yet enforced.)
+- **Authentication is implemented but off by default.** `/api/execute` has an OIDC
+  bearer-token gate (verifies an access token against the provider's JWKS — signature,
+  issuer, audience, expiry, and an `execute:code` scope), and `user_id`/`tenant_id` are now
+  derived from the verified token claims rather than the request body. It is gated behind
+  `AUTH_REQUIRED` (default `false`) pending the frontend login wiring, so **as shipped the
+  endpoint is still open** — set `AUTH_REQUIRED=true` once the SPA sends tokens. See the
+  `OIDC_*` settings below and the auth epic (#9).
 - **No rate limiting / concurrency cap.** A burst of requests can exhaust host resources
   (one container each) and API budget. Add per-user quotas + a sandbox concurrency limit.
 - **Docker socket is mounted into the backend** (`docker-compose.yml`), which is
@@ -141,8 +149,9 @@ The behavioral checks below have been run and pass (✅). Re-run them anytime.
 
 ## Roadmap (intentionally out of scope here)
 
-- Auth, multi-tenancy, per-user quotas / rate limiting (seams left in: `tenant_id`/`user_id`
-  on the request, limits centralized in `config.py`).
+- Auth: backend OIDC token gate is in (off by default via `AUTH_REQUIRED`); remaining work is
+  the frontend login + flipping it on, then multi-tenancy and per-user quotas / rate limiting
+  keyed on the verified `sub` (limits centralized in `config.py`).
 - GCP deploy: a `CloudRunBackend` implementing `SandboxBackend`, or GKE + gVisor.
 - Vertex AI for Claude (swap the client in `llm.py`), more languages, session persistence,
   artifact/chart return.

@@ -10,6 +10,9 @@ dependencies = [
     "docker>=7.1",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
+    # OIDC access-token validation (RS256 via JWKS). The [crypto] extra pulls in
+    # `cryptography`, used for RS256 verification (and for minting test tokens).
+    "pyjwt[crypto]>=2.9",
 ]
 
 [project.optional-dependencies]
