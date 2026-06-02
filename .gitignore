@@ -24,3 +24,6 @@ dist/
 # Claude Code (local / personal — not shared)
 .claude/settings.local.json
 .claude/worktrees/
+
+# Local scratch / captured config (non-secret, kept out of VCS)
+auth0-values.txt
