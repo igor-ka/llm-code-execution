@@ -20,3 +20,7 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# Claude Code (local / personal — not shared)
+.claude/settings.local.json
+.claude/worktrees/
