@@ -20,10 +20,13 @@ export type ResultResponse = {
 
 export type ExecuteResponse = MessageResponse | ResultResponse;
 
-export async function execute(prompt: string): Promise<ExecuteResponse> {
+export async function execute(prompt: string, accessToken?: string): Promise<ExecuteResponse> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
   const resp = await fetch(`${API_BASE}/api/execute`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ prompt }),
   });
 

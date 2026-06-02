@@ -8,7 +8,28 @@ import type { ExecuteResponse } from "./api";
 vi.mock("./api", () => ({ execute: vi.fn() }));
 import { execute } from "./api";
 
+// Mock Auth0 so we can drive the auth state without a provider.
+vi.mock("@auth0/auth0-react", () => ({ useAuth0: vi.fn() }));
+import { useAuth0 } from "@auth0/auth0-react";
+
 const mockedExecute = vi.mocked(execute);
+const mockedUseAuth0 = vi.mocked(useAuth0);
+
+const loginWithRedirect = vi.fn();
+const logout = vi.fn();
+const getAccessTokenSilently = vi.fn();
+
+function setAuth(overrides: Record<string, unknown> = {}) {
+  mockedUseAuth0.mockReturnValue({
+    isLoading: false,
+    isAuthenticated: true,
+    user: { email: "dev@example.com" },
+    loginWithRedirect,
+    logout,
+    getAccessTokenSilently,
+    ...overrides,
+  } as unknown as ReturnType<typeof useAuth0>);
+}
 
 const resultResponse: ExecuteResponse = {
   type: "result",
@@ -21,18 +42,51 @@ const resultResponse: ExecuteResponse = {
   timed_out: true,
 };
 
+function runButton() {
+  return screen.getByRole("button", { name: /Run/ });
+}
+
 describe("App", () => {
   beforeEach(() => {
     mockedExecute.mockReset();
+    getAccessTokenSilently.mockReset();
+    getAccessTokenSilently.mockResolvedValue("test-token");
+    setAuth(); // authenticated by default
   });
 
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  function runButton() {
-    return screen.getByRole("button");
-  }
+  it("shows a loading state while Auth0 initializes", () => {
+    setAuth({ isLoading: true });
+    render(<App />);
+    expect(screen.getByText(/Loading/)).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("shows a login button and hides the prompt when unauthenticated", () => {
+    setAuth({ isAuthenticated: false, user: undefined });
+    render(<App />);
+    expect(screen.getByRole("button", { name: /Log in/ })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("triggers Auth0 login when the login button is clicked", async () => {
+    const user = userEvent.setup();
+    setAuth({ isAuthenticated: false, user: undefined });
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /Log in/ }));
+    expect(loginWithRedirect).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the user and logs out when authenticated", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    expect(screen.getByText("dev@example.com")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Log out/ }));
+    expect(logout).toHaveBeenCalledTimes(1);
+  });
 
   it("disables the Run button when the prompt is empty", () => {
     render(<App />);
@@ -46,7 +100,7 @@ describe("App", () => {
     expect(runButton()).toBeEnabled();
   });
 
-  it("calls execute with the prompt and renders a result", async () => {
+  it("calls execute with the prompt and a fresh access token, and renders a result", async () => {
     const user = userEvent.setup();
     mockedExecute.mockResolvedValue(resultResponse);
     render(<App />);
@@ -54,7 +108,8 @@ describe("App", () => {
     await user.type(screen.getByRole("textbox"), "compute things");
     await user.click(runButton());
 
-    await waitFor(() => expect(mockedExecute).toHaveBeenCalledWith("compute things"));
+    await waitFor(() => expect(getAccessTokenSilently).toHaveBeenCalled());
+    expect(mockedExecute).toHaveBeenCalledWith("compute things", "test-token");
     expect(await screen.findByText(/Generated code \(python\)/)).toBeInTheDocument();
     expect(screen.getByText("print('hi')")).toBeInTheDocument();
     expect(screen.getByText("hi")).toBeInTheDocument();

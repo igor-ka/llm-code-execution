@@ -60,6 +60,28 @@ describe("execute", () => {
     expect(JSON.parse((init?.body as string) ?? "")).toEqual({ prompt: "my prompt" });
   });
 
+  it("attaches a Bearer Authorization header when a token is provided", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      mockResponse({ ok: true, json: () => ({ type: "message", message: "ok" }) }),
+    );
+
+    await execute("my prompt", "tok-123");
+
+    const [, init] = vi.mocked(fetch).mock.calls[0]!;
+    expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer tok-123");
+  });
+
+  it("omits the Authorization header when no token is provided", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      mockResponse({ ok: true, json: () => ({ type: "message", message: "ok" }) }),
+    );
+
+    await execute("my prompt");
+
+    const [, init] = vi.mocked(fetch).mock.calls[0]!;
+    expect((init?.headers as Record<string, string>).Authorization).toBeUndefined();
+  });
+
   it("throws the server-provided detail on a non-2xx response", async () => {
     vi.mocked(fetch).mockResolvedValue(
       mockResponse({ ok: false, status: 400, json: () => ({ detail: "bad prompt" }) }),

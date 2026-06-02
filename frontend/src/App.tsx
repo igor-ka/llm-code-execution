@@ -1,7 +1,11 @@
 import React, { useState } from "react";
+import { useAuth0 } from "@auth0/auth0-react";
 import { execute, type ExecuteResponse } from "./api";
 
 export default function App() {
+  const { isLoading, isAuthenticated, user, loginWithRedirect, logout, getAccessTokenSilently } =
+    useAuth0();
+
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -13,7 +17,8 @@ export default function App() {
     setError(null);
     setResponse(null);
     try {
-      setResponse(await execute(prompt));
+      const token = await getAccessTokenSilently();
+      setResponse(await execute(prompt, token));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -21,58 +26,88 @@ export default function App() {
     }
   }
 
+  if (isLoading) {
+    return (
+      <div style={styles.page}>
+        <p style={styles.sub}>Loading…</p>
+      </div>
+    );
+  }
+
   return (
     <div style={styles.page}>
-      <h1 style={styles.h1}>LLM Code Execution</h1>
+      <div style={styles.header}>
+        <h1 style={styles.h1}>LLM Code Execution</h1>
+        {isAuthenticated && (
+          <div style={styles.userBox}>
+            <span style={styles.userEmail}>{user?.email ?? user?.name}</span>
+            <button
+              style={styles.secondaryButton}
+              onClick={() => void logout({ logoutParams: { returnTo: window.location.origin } })}
+            >
+              Log out
+            </button>
+          </div>
+        )}
+      </div>
+
       <p style={styles.sub}>
         Describe a task. If it calls for code, it's generated and run in an isolated sandbox.
       </p>
 
-      <textarea
-        style={styles.textarea}
-        placeholder="e.g. compute the first 20 Fibonacci numbers"
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void onRun();
-        }}
-      />
-      <button
-        style={styles.button}
-        onClick={() => void onRun()}
-        disabled={loading || !prompt.trim()}
-      >
-        {loading ? "Running…" : "Run  (⌘/Ctrl + Enter)"}
-      </button>
+      {!isAuthenticated ? (
+        <button style={styles.button} onClick={() => void loginWithRedirect()}>
+          Log in to run code
+        </button>
+      ) : (
+        <>
+          <textarea
+            style={styles.textarea}
+            placeholder="e.g. compute the first 20 Fibonacci numbers"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void onRun();
+            }}
+          />
+          <button
+            style={styles.button}
+            onClick={() => void onRun()}
+            disabled={loading || !prompt.trim()}
+          >
+            {loading ? "Running…" : "Run  (⌘/Ctrl + Enter)"}
+          </button>
 
-      {error && <div style={styles.error}>⚠️ {error}</div>}
+          {error && <div style={styles.error}>⚠️ {error}</div>}
 
-      {response?.type === "message" && (
-        <div style={styles.messageBanner}>💬 {response.message}</div>
-      )}
-
-      {response?.type === "result" && (
-        <div>
-          <Section title={`Generated code (${response.language})`}>
-            <pre style={styles.code}>{response.code}</pre>
-          </Section>
-
-          <div style={styles.meta}>
-            exit code: <b>{response.exit_code}</b> · {response.duration_ms} ms
-            {response.timed_out && <span style={styles.timeout}> · timed out</span>}
-          </div>
-
-          {response.stdout && (
-            <Section title="Output (stdout)">
-              <pre style={styles.output}>{response.stdout}</pre>
-            </Section>
+          {response?.type === "message" && (
+            <div style={styles.messageBanner}>💬 {response.message}</div>
           )}
-          {response.stderr && (
-            <Section title="Errors (stderr)">
-              <pre style={styles.stderr}>{response.stderr}</pre>
-            </Section>
+
+          {response?.type === "result" && (
+            <div>
+              <Section title={`Generated code (${response.language})`}>
+                <pre style={styles.code}>{response.code}</pre>
+              </Section>
+
+              <div style={styles.meta}>
+                exit code: <b>{response.exit_code}</b> · {response.duration_ms} ms
+                {response.timed_out && <span style={styles.timeout}> · timed out</span>}
+              </div>
+
+              {response.stdout && (
+                <Section title="Output (stdout)">
+                  <pre style={styles.output}>{response.stdout}</pre>
+                </Section>
+              )}
+              {response.stderr && (
+                <Section title="Errors (stderr)">
+                  <pre style={styles.stderr}>{response.stderr}</pre>
+                </Section>
+              )}
+            </div>
           )}
-        </div>
+        </>
       )}
     </div>
   );
@@ -96,6 +131,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "system-ui, sans-serif",
     color: "#1a1a1a",
   },
+  header: {
+    display: "flex",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: 16,
+  },
+  userBox: { display: "flex", alignItems: "center", gap: 10 },
+  userEmail: { fontSize: 13, color: "#666" },
   h1: { fontSize: 26, marginBottom: 4 },
   sub: { color: "#666", marginTop: 0 },
   textarea: {
@@ -117,6 +160,15 @@ const styles: Record<string, React.CSSProperties> = {
     border: "none",
     background: "#2563eb",
     color: "white",
+    cursor: "pointer",
+  },
+  secondaryButton: {
+    padding: "6px 12px",
+    fontSize: 13,
+    borderRadius: 6,
+    border: "1px solid #ccc",
+    background: "white",
+    color: "#1a1a1a",
     cursor: "pointer",
   },
   error: {
