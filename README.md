@@ -107,7 +107,10 @@ overrun), and `--rm` so nothing persists. Output is truncated to a safe size.
 
 **Hardened (verified):** the per-execution sandbox isolation listed above. Generated code is
 passed into the container without mounting any host path, and unsupported languages are
-rejected server-side.
+rejected server-side. The frontend also sends a strict Content-Security-Policy (`script-src
+'self'` — no inline/eval, framing denied, network egress limited to the backend API and the
+Auth0 tenant) to limit XSS, since the access token lives in JS memory; the dev server relaxes
+it just enough for HMR.
 
 **Known limitations — close these before any real/multi-tenant deployment:**
 
