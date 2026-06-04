@@ -55,9 +55,10 @@ cp .env.example .env
 # edit .env and set ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-To turn on the `/api/execute` auth gate, also set `AUTH_REQUIRED=true` and the `OIDC_ISSUER`,
-`OIDC_AUDIENCE`, and `OIDC_JWKS_URL` values for your provider (see `.env.example`). Left off,
-the endpoint stays open — convenient for local dev before login is wired.
+The `/api/execute` auth gate is **on by default**. Set the `OIDC_ISSUER`, `OIDC_AUDIENCE`,
+and `OIDC_JWKS_URL` values for your provider (see `.env.example` and the Auth0 tenant setup
+below). To run the backend without an identity provider for local dev, set `AUTH_REQUIRED=false`
+— the endpoint then accepts anonymous requests.
 
 ## Run (Docker Compose — recommended)
 
@@ -67,7 +68,8 @@ docker compose up --build
 
 This builds the sandbox execution image, starts the backend on
 **http://localhost:8000** and the frontend on **http://localhost:5173**. Open the frontend
-and try a prompt.
+and try a prompt. Because auth is on by default, you'll need the Auth0 setup below (or set
+`AUTH_REQUIRED=false` in `.env` for an open local instance).
 
 ## Run locally without Compose
 
@@ -137,13 +139,13 @@ it just enough for HMR.
 
 **Known limitations — close these before any real/multi-tenant deployment:**
 
-- **Authentication is implemented but off by default.** `/api/execute` has an OIDC
+- **Authentication is on by default but single-tenant.** `/api/execute` has an OIDC
   bearer-token gate (verifies an access token against the provider's JWKS — signature,
-  issuer, audience, expiry, and an `execute:code` scope), and `user_id`/`tenant_id` are now
-  derived from the verified token claims rather than the request body. The SPA login that
-  sends those tokens is wired, but the gate is behind `AUTH_REQUIRED` (default `false`) so
-  anonymous local dev still works, meaning **as shipped the endpoint is still open** — set
-  `AUTH_REQUIRED=true` to enforce it. See the `OIDC_*` settings below and the auth epic (#9).
+  issuer, audience, expiry, and an `execute:code` scope), and `user_id`/`tenant_id` are
+  derived from the verified token claims rather than the request body. The SPA login is wired
+  and verified end-to-end; the gate is enforced by default (`AUTH_REQUIRED=true`, set `false`
+  only for IdP-less local dev). What's still missing for a real deployment is multi-tenancy
+  and per-user quotas. See the `OIDC_*` settings below and the auth epic (#9).
 - **No rate limiting / concurrency cap.** A burst of requests can exhaust host resources
   (one container each) and API budget. Add per-user quotas + a sandbox concurrency limit.
 - **Docker socket is mounted into the backend** (`docker-compose.yml`), which is
@@ -181,7 +183,7 @@ The behavioral checks below have been run and pass (✅). Re-run them anytime.
 ## Roadmap (intentionally out of scope here)
 
 - Auth: backend OIDC token gate and the Auth0 SPA login are both in and verified end-to-end
-  (off by default via `AUTH_REQUIRED`); remaining work is multi-tenancy and per-user quotas /
+  (on by default via `AUTH_REQUIRED`); remaining work is multi-tenancy and per-user quotas /
   rate limiting keyed on the verified `sub` (limits centralized in `config.py`).
 - GCP deploy: a `CloudRunBackend` implementing `SandboxBackend`, or GKE + gVisor.
 - Vertex AI for Claude (swap the client in `llm.py`), more languages, session persistence,
