@@ -92,6 +92,29 @@ The frontend requires logging in via Auth0 before you can run a prompt; it sends
 token to the backend as a bearer token. Set the `VITE_AUTH0_*` values in `frontend/.env.local`
 (see `frontend/.env.example`). These are public SPA values, not secrets.
 
+### Auth0 tenant setup (dashboard)
+
+The `.env` values above only work once the tenant is configured. In one Auth0 tenant, create
+both of these and wire them together:
+
+1. **An API** (Applications → APIs). Its **Identifier** is your `OIDC_AUDIENCE` /
+   `VITE_AUTH0_AUDIENCE` (e.g. `https://api.<something>.local`). Add a permission
+   **`execute:code`**, enable **RBAC**, and turn on **Add Permissions in the Access Token** —
+   otherwise the scope never reaches the backend and every request 403s.
+2. **A Single Page Application** (Applications → Applications). Its **Domain** and **Client ID**
+   are `VITE_AUTH0_DOMAIN` / `VITE_AUTH0_CLIENT_ID`. For local dev, add `http://localhost:5173`
+   to **Allowed Callback URLs**, **Allowed Logout URLs**, and **Allowed Web Origins**.
+3. **Authorize the SPA to request the API.** On the SPA app, open **APIs → API Application
+   Access** (or the API's application-access settings) and grant it **user-delegated** access
+   to the API. Without this, `/authorize` fails with *"Client … is not authorized to access
+   resource server …"* even though the audience is correct — this is easy to miss.
+4. **Grant your user the permission** (Users → your user → Permissions → add `execute:code`),
+   or login succeeds but `/api/execute` returns 403.
+
+The backend derives `OIDC_ISSUER` as `https://<domain>/` (trailing slash) and `OIDC_JWKS_URL`
+as `https://<domain>/.well-known/jwks.json`. `tenant_id` comes from the `org_id` claim, which
+is only present if you use Auth0 Organizations; it stays null otherwise.
+
 ## Sandbox hardening (DockerBackend)
 
 Each execution runs in a fresh container with: `--network none`, capped memory (no swap),
@@ -117,10 +140,10 @@ it just enough for HMR.
 - **Authentication is implemented but off by default.** `/api/execute` has an OIDC
   bearer-token gate (verifies an access token against the provider's JWKS — signature,
   issuer, audience, expiry, and an `execute:code` scope), and `user_id`/`tenant_id` are now
-  derived from the verified token claims rather than the request body. It is gated behind
-  `AUTH_REQUIRED` (default `false`) pending the frontend login wiring, so **as shipped the
-  endpoint is still open** — set `AUTH_REQUIRED=true` once the SPA sends tokens. See the
-  `OIDC_*` settings below and the auth epic (#9).
+  derived from the verified token claims rather than the request body. The SPA login that
+  sends those tokens is wired, but the gate is behind `AUTH_REQUIRED` (default `false`) so
+  anonymous local dev still works, meaning **as shipped the endpoint is still open** — set
+  `AUTH_REQUIRED=true` to enforce it. See the `OIDC_*` settings below and the auth epic (#9).
 - **No rate limiting / concurrency cap.** A burst of requests can exhaust host resources
   (one container each) and API budget. Add per-user quotas + a sandbox concurrency limit.
 - **Docker socket is mounted into the backend** (`docker-compose.yml`), which is
@@ -157,9 +180,9 @@ The behavioral checks below have been run and pass (✅). Re-run them anytime.
 
 ## Roadmap (intentionally out of scope here)
 
-- Auth: backend OIDC token gate is in (off by default via `AUTH_REQUIRED`); remaining work is
-  the frontend login + flipping it on, then multi-tenancy and per-user quotas / rate limiting
-  keyed on the verified `sub` (limits centralized in `config.py`).
+- Auth: backend OIDC token gate and the Auth0 SPA login are both in and verified end-to-end
+  (off by default via `AUTH_REQUIRED`); remaining work is multi-tenancy and per-user quotas /
+  rate limiting keyed on the verified `sub` (limits centralized in `config.py`).
 - GCP deploy: a `CloudRunBackend` implementing `SandboxBackend`, or GKE + gVisor.
 - Vertex AI for Claude (swap the client in `llm.py`), more languages, session persistence,
   artifact/chart return.
