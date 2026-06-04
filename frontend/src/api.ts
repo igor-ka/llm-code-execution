@@ -20,6 +20,17 @@ export type ResultResponse = {
 
 export type ExecuteResponse = MessageResponse | ResultResponse;
 
+export type AuthConfig = { authRequired: boolean };
+
+// Ask the backend whether it enforces auth, so the UI mirrors it instead of guessing.
+// Fails secure: any error or missing field is treated as "auth required".
+export async function fetchAuthConfig(): Promise<AuthConfig> {
+  const resp = await fetch(`${API_BASE}/api/config`);
+  if (!resp.ok) throw new Error(`Failed to load config (${resp.status})`);
+  const body = (await resp.json()) as { auth_required?: boolean };
+  return { authRequired: body.auth_required ?? true };
+}
+
 export async function execute(prompt: string, accessToken?: string): Promise<ExecuteResponse> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;

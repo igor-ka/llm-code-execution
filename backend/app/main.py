@@ -55,6 +55,14 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/api/config")
+def config() -> dict:
+    """Public, unauthenticated: lets the SPA mirror the server's auth requirement so the two
+    can't disagree. The backend remains the single source of truth for whether auth is enforced.
+    """
+    return {"auth_required": get_settings().auth_required}
+
+
 @app.post("/api/execute", response_model=None)
 def execute(req: ExecuteRequest, principal: Principal = Depends(require_principal)):
     """Judge the prompt, generate code if appropriate, run it in the sandbox.

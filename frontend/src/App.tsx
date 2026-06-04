@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useAuth0 } from "@auth0/auth0-react";
-import { execute, type ExecuteResponse } from "./api";
+import { execute, fetchAuthConfig, type ExecuteResponse } from "./api";
 
 export default function App() {
   const { isLoading, isAuthenticated, user, loginWithRedirect, logout, getAccessTokenSilently } =
@@ -10,6 +10,21 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<ExecuteResponse | null>(null);
+  // Whether the backend enforces auth. Defaults to true (fail secure) until the backend
+  // tells us otherwise, so the UI never shows an open mode the server doesn't actually allow.
+  const [authRequired, setAuthRequired] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    fetchAuthConfig()
+      .then((cfg) => active && setAuthRequired(cfg.authRequired))
+      .catch(() => {
+        /* keep the secure default */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function onRun() {
     if (!prompt.trim() || loading) return;
@@ -17,7 +32,9 @@ export default function App() {
     setError(null);
     setResponse(null);
     try {
-      const token = await getAccessTokenSilently();
+      // Only attach a token when actually signed in; in the auth-disabled mode the backend
+      // accepts anonymous requests.
+      const token = isAuthenticated ? await getAccessTokenSilently() : undefined;
       setResponse(await execute(prompt, token));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -55,7 +72,7 @@ export default function App() {
         Describe a task. If it calls for code, it's generated and run in an isolated sandbox.
       </p>
 
-      {!isAuthenticated ? (
+      {authRequired && !isAuthenticated ? (
         <button style={styles.button} onClick={() => void loginWithRedirect()}>
           Log in to run code
         </button>
