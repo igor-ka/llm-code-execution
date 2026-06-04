@@ -4,9 +4,9 @@ The flow this guards is intentionally simple (SPA-direct bearer): the frontend s
 access token as `Authorization: Bearer <jwt>` and this module verifies it against the OIDC
 provider's JWKS, then derives the caller's identity from the token claims.
 
-Staged rollout: when ``auth_required`` is False (the default) the dependency is a no-op that
-yields an anonymous principal, so the app keeps working before the frontend sends tokens.
-When True, every protected request must carry a valid, in-scope token.
+Secure by default: when ``auth_required`` is True (the default) every protected request must
+carry a valid, in-scope token. Setting it False makes the dependency a no-op that yields an
+anonymous principal — an explicit opt-out for local dev without an identity provider.
 """
 from dataclasses import dataclass
 from functools import lru_cache

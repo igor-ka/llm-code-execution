@@ -27,9 +27,9 @@ class Settings(BaseSettings):
     frontend_origin: str = "http://localhost:5173"
 
     # Auth (OIDC bearer-token validation on protected endpoints).
-    # Off by default so the app stays usable before the frontend sends tokens;
-    # flip auth_required=True once login is wired (see issue #6 / epic #9).
-    auth_required: bool = False
+    # On by default (secure by default) now that the SPA login is wired and verified.
+    # Set AUTH_REQUIRED=false to run the backend without an identity provider for local dev.
+    auth_required: bool = True
     oidc_issuer: str = ""
     oidc_audience: str = ""
     oidc_jwks_url: str = ""
