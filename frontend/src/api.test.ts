@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { execute, type MessageResponse, type ResultResponse } from "./api";
+import { execute, fetchAuthConfig, type MessageResponse, type ResultResponse } from "./api";
 
 // A minimal stand-in for the parts of the fetch Response we rely on.
 function mockResponse(opts: { ok: boolean; status?: number; json: () => unknown }): Response {
@@ -108,5 +108,37 @@ describe("execute", () => {
     vi.mocked(fetch).mockResolvedValue(mockResponse({ ok: false, status: 500, json: () => ({}) }));
 
     await expect(execute("x")).rejects.toThrow("Request failed (500)");
+  });
+});
+
+describe("fetchAuthConfig", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("GETs /api/config and maps auth_required", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      mockResponse({ ok: true, json: () => ({ auth_required: false }) }),
+    );
+
+    await expect(fetchAuthConfig()).resolves.toEqual({ authRequired: false });
+    expect(vi.mocked(fetch).mock.calls[0]![0]).toBe("http://localhost:8000/api/config");
+  });
+
+  it("fails secure (authRequired true) when the field is missing", async () => {
+    vi.mocked(fetch).mockResolvedValue(mockResponse({ ok: true, json: () => ({}) }));
+
+    await expect(fetchAuthConfig()).resolves.toEqual({ authRequired: true });
+  });
+
+  it("throws on a non-2xx response so the caller can fall back to the secure default", async () => {
+    vi.mocked(fetch).mockResolvedValue(mockResponse({ ok: false, status: 503, json: () => ({}) }));
+
+    await expect(fetchAuthConfig()).rejects.toThrow("Failed to load config (503)");
   });
 });

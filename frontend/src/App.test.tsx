@@ -5,14 +5,15 @@ import App from "./App";
 import type { ExecuteResponse } from "./api";
 
 // Mock the API client so the component is tested in isolation from the network.
-vi.mock("./api", () => ({ execute: vi.fn() }));
-import { execute } from "./api";
+vi.mock("./api", () => ({ execute: vi.fn(), fetchAuthConfig: vi.fn() }));
+import { execute, fetchAuthConfig } from "./api";
 
 // Mock Auth0 so we can drive the auth state without a provider.
 vi.mock("@auth0/auth0-react", () => ({ useAuth0: vi.fn() }));
 import { useAuth0 } from "@auth0/auth0-react";
 
 const mockedExecute = vi.mocked(execute);
+const mockedFetchAuthConfig = vi.mocked(fetchAuthConfig);
 const mockedUseAuth0 = vi.mocked(useAuth0);
 
 const loginWithRedirect = vi.fn();
@@ -49,6 +50,8 @@ function runButton() {
 describe("App", () => {
   beforeEach(() => {
     mockedExecute.mockReset();
+    mockedFetchAuthConfig.mockReset();
+    mockedFetchAuthConfig.mockResolvedValue({ authRequired: true });
     getAccessTokenSilently.mockReset();
     getAccessTokenSilently.mockResolvedValue("test-token");
     setAuth(); // authenticated by default
@@ -78,6 +81,23 @@ describe("App", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: /Log in/ }));
     expect(loginWithRedirect).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows anonymous use (no login wall, no token) when the backend doesn't require auth", async () => {
+    const user = userEvent.setup();
+    mockedFetchAuthConfig.mockResolvedValue({ authRequired: false });
+    mockedExecute.mockResolvedValue({ type: "message", message: "ran anon" });
+    setAuth({ isAuthenticated: false, user: undefined });
+    render(<App />);
+
+    // Once the config loads, the prompt is usable without logging in.
+    const textbox = await screen.findByRole("textbox");
+    await user.type(textbox, "do a thing");
+    await user.click(runButton());
+
+    await waitFor(() => expect(mockedExecute).toHaveBeenCalledWith("do a thing", undefined));
+    expect(getAccessTokenSilently).not.toHaveBeenCalled();
+    expect(await screen.findByText(/ran anon/)).toBeInTheDocument();
   });
 
   it("shows the user and logs out when authenticated", async () => {
