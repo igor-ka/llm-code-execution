@@ -96,22 +96,28 @@ token to the backend as a bearer token. Set the `VITE_AUTH0_*` values in `fronte
 
 ### Auth0 tenant setup (dashboard)
 
-The `.env` values above only work once the tenant is configured. In one Auth0 tenant, create
-both of these and wire them together:
+The `.env` values above only work once the tenant is configured. Create **two resources** in
+one Auth0 tenant — an API and a Single Page Application — then authorize the app to call the
+API:
 
 1. **An API** (Applications → APIs). Its **Identifier** is your `OIDC_AUDIENCE` /
-   `VITE_AUTH0_AUDIENCE` (e.g. `https://api.<something>.local`). Add a permission
-   **`execute:code`**, enable **RBAC**, and turn on **Add Permissions in the Access Token** —
-   otherwise the scope never reaches the backend and every request 403s.
+   `VITE_AUTH0_AUDIENCE` (e.g. `https://api.<something>.local`). Under **Permissions**, add a
+   scope **`execute:code`** — this is the scope the backend requires.
 2. **A Single Page Application** (Applications → Applications). Its **Domain** and **Client ID**
    are `VITE_AUTH0_DOMAIN` / `VITE_AUTH0_CLIENT_ID`. For local dev, add `http://localhost:5173`
    to **Allowed Callback URLs**, **Allowed Logout URLs**, and **Allowed Web Origins**.
-3. **Authorize the SPA to request the API.** On the SPA app, open **APIs → API Application
-   Access** (or the API's application-access settings) and grant it **user-delegated** access
-   to the API. Without this, `/authorize` fails with *"Client … is not authorized to access
-   resource server …"* even though the audience is correct — this is easy to miss.
-4. **Grant your user the permission** (Users → your user → Permissions → add `execute:code`),
-   or login succeeds but `/api/execute` returns 403.
+3. **Authorize the SPA to request the API** — once per app, *not* per user. On the SPA, open
+   **APIs / API Application Access** and grant it user-delegated access to the API. Without
+   this, `/authorize` fails with *"Client … is not authorized to access resource server …"*
+   even with the correct audience — this is easy to miss.
+
+**Authorization model.** The backend only checks that the token carries `execute:code` (in
+either the `scope` string or a `permissions` array). With **RBAC off** (the default), any
+logged-in user who requests the `execute:code` scope receives it — so every new signup can use
+the app with no per-user setup. Enable **RBAC** (+ *Add Permissions in the Access Token*) only
+if you want to gate *which* users may execute; the scope is then filtered to each user's
+assigned permissions, which you'd grant via a role / default role / post-registration Action
+(not by hand per user — that doesn't scale to open signup).
 
 The backend derives `OIDC_ISSUER` as `https://<domain>/` (trailing slash) and `OIDC_JWKS_URL`
 as `https://<domain>/.well-known/jwks.json`. `tenant_id` comes from the `org_id` claim, which
