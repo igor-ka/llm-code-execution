@@ -9,7 +9,7 @@ WORKDIR /work
 RUN pip install --no-cache-dir \
     "anthropic>=0.40" "pyjwt[crypto]>=2.9" "cryptography>=42" "httpx>=0.27" \
     "fastapi>=0.115" "uvicorn[standard]>=0.30" "pydantic>=2.7" "pydantic-settings>=2.3" \
-    "pytest>=8.2" "ruff>=0.6"
+    "pyyaml>=6" "pytest>=8.2" "ruff>=0.6"
 
 # Real auth code under test (we only import app.auth/app.config/app.schemas).
 COPY backend/ /work/backend/

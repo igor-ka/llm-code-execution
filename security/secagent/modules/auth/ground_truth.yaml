@@ -1,0 +1,30 @@
+# Ground truth for the eval: for each mutant, the finding the agent SHOULD report.
+# A finding "matches" an expected item if its text contains ANY of the `match` keywords
+# (case-insensitive). See secagent/agent_core/eval.py.
+#
+# The real auth.py has NO entry on purpose: the agent should report zero findings against it.
+
+mutants:
+  expiry_not_checked:
+    - id: expiry-bypass
+      severity: high
+      match: ["expired", "expiry", "exp claim", "exp not"]
+      attack: "Mint a token whose exp is in the past and see it accepted."
+
+  substring_scope:
+    - id: scope-substring
+      severity: high
+      match: ["execute:codex", "substring", "look-alike", "lookalike", "scope prefix"]
+      attack: "Present scope 'execute:codex' and see it accepted as 'execute:code'."
+
+  audience_not_checked:
+    - id: audience-bypass
+      severity: high
+      match: ["audience", "aud claim", "wrong audience"]
+      attack: "Mint a token with a wrong/foreign audience and see it accepted."
+
+  auth_disabled:
+    - id: auth-disabled
+      severity: critical
+      match: ["no token", "without a token", "unauthenticated", "auth disabled", "missing token"]
+      attack: "Call /api/execute with no Authorization header and see it accepted."
