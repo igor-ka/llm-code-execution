@@ -1,7 +1,9 @@
-# Ground truth for the eval. Two parts:
-#   mutants:          per planted-hole, the finding the agent MUST report (true positives)
-#   acceptable_noise: judgment-call findings the agent may surface against the REAL auth.py
-#                     (spec-compliant / low-value) that must NOT count as false positives
+# Ground truth for the eval. Three parts:
+#   mutants:    per planted-hole, the finding the agent MUST report (drives recall on mutants)
+#   real_auth:  GENUINE current findings in the real auth.py — real (low) issues the agent
+#               SHOULD surface. Credited as true positives; missing one is a regression.
+#   non_issues: spec-compliant / won't-fix behavior that is NOT a bug — ignored when scoring
+#               (neither credited nor penalised), so it can't masquerade as a false positive.
 # A finding "matches" an item if its text contains ANY of the `match` keywords (case-insensitive).
 # See secagent/agent_core/eval.py.
 
@@ -30,11 +32,16 @@ mutants:
       match: ["no token", "without a token", "unauthenticated", "auth disabled", "missing token"]
       attack: "Call /api/execute with no Authorization header and see it accepted."
 
-# Real auth.py: no planted holes, but a thorough agent surfaces these (both seen live 2026-06-07).
-acceptable_noise:
+# Genuine current findings in the real auth.py (the agent SHOULD report these). Seen live 2026-06-07.
+real_auth:
+  - id: empty-sub
+    severity: low
+    match: ["empty sub", "empty-string subject", "empty subject", "non-empty sub", "blank sub"]
+    note: "Real low-sev gap: sub is not required non-empty, so user_id can be ''. Harmless today
+      (user_id is unused) but must be fixed before user_ids/quotas/tenancy rely on it."
+
+# Spec-compliant / won't-fix — NOT bugs, ignored when scoring.
+non_issues:
   - id: aud-array-multivalue
     match: ["aud array", "multi-valued aud", "multivalued aud", "audience array", "array of audience", "array containing", "multiple audience"]
     note: "Spec-compliant: PyJWT/OIDC permit an aud array and pass if the expected aud is present."
-  - id: empty-sub
-    match: ["empty sub", "empty-string subject", "empty subject", "non-empty sub", "blank sub"]
-    note: "Low-value hardening; sub is not gated and user_id is unused today."
