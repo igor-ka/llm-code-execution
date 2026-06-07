@@ -52,6 +52,31 @@ Tunable via env (also wired in `docker-compose.test.yml`): `AGENT_MAX_STEPS`, `A
   agent never forgets/repeats what it tried, even after older turns are trimmed.
 - **Sliding window** caps retained raw turns as a backstop.
 
+## Compare against a baseline tool — Strix (#24)
+
+Diff our agent against [Strix](https://github.com/usestrix/strix) (an autonomous OSS pentest
+agent) over the same target, scored via the ground truth. Strix is an **external tool that
+spends its own LLM credits** — run by an operator, not by this harness.
+
+```bash
+# 1. our findings already exist (reports/findings.json from a live run above)
+# 2. run Strix against the running stack (its own credits):
+curl -sSL https://strix.ai/install | bash
+export STRIX_LLM=anthropic/claude-sonnet-4-6 LLM_API_KEY=sk-ant-...
+strix --target http://localhost:8000          # backend stack must be up
+# 3. diff the two against ground truth (`real_auth`, or a mutant name):
+python -m secagent.agent_core.compare \
+    reports/findings.json strix_runs/<run>/<results>.json real_auth
+```
+
+The report shows recall/precision for each tool and, per ground-truth id, who found it (shared /
+ours-only / theirs-only / missed-by-both), plus each tool's **unmatched** findings — candidates
+to either promote into ground truth or dismiss as false positives.
+
+> Strix's on-disk result schema isn't documented, so `normalize_strix` in `compare.py` is a
+> tolerant, **provisional** adapter over common field names — adjust it to the real schema after
+> the first Strix run.
+
 ## Safety
 
 - Tools are pinned to a single local target and refuse non-loopback hosts (operators may
