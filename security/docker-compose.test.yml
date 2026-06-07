@@ -1,0 +1,58 @@
+# Throwaway target stack for the auth agent. Loopback/local only — never expose this.
+#
+#   # 1. bring up the mock IdP + backend (auth ON, pointed at the mock):
+#   ANTHROPIC_API_KEY=sk-... docker compose -f security/docker-compose.test.yml up --build backend
+#   # 2. run the agent against it (spends credits):
+#   ANTHROPIC_API_KEY=sk-... docker compose -f security/docker-compose.test.yml --profile agent run --build agent
+name: llm-auth-agent-test
+
+services:
+  mock-oidc:
+    build:
+      context: ..
+      dockerfile: security/Dockerfile
+    command: ["uvicorn", "mock_oidc.server:app", "--host", "0.0.0.0", "--port", "9000"]
+    environment:
+      OIDC_ISSUER: http://mock-oidc:9000/
+      KEY_DIR: /keys
+      SIGNING_KID: mock-signing-key
+    volumes:
+      - keys:/keys
+    ports:
+      - "9000:9000"
+
+  backend:
+    build:
+      context: ../backend
+    environment:
+      AUTH_REQUIRED: "true"
+      OIDC_ISSUER: http://mock-oidc:9000/
+      OIDC_AUDIENCE: https://api.local
+      OIDC_JWKS_URL: http://mock-oidc:9000/.well-known/jwks.json
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    depends_on:
+      - mock-oidc
+    ports:
+      - "8000:8000"
+
+  agent:
+    build:
+      context: ..
+      dockerfile: security/Dockerfile
+    profiles: ["agent"]
+    command: ["python", "-m", "secagent.run"]
+    environment:
+      TARGET_BASE_URL: http://backend:8000
+      ALLOWED_TARGET_HOSTS: backend
+      OIDC_ISSUER: http://mock-oidc:9000/
+      OIDC_AUDIENCE: https://api.local
+      KEY_DIR: /keys
+      REPORT_DIR: /work/security/reports
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - keys:/keys
+    depends_on:
+      - backend
+
+volumes:
+  keys:
