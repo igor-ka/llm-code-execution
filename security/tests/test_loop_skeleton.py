@@ -60,6 +60,11 @@ def test_loop_dispatches_tools_and_records(registry, findings):
     assert not result.stopped_on_budget
     assert len(findings.findings) == 1
     assert "Demo finding" in findings.to_markdown(target="local")
+    # The transcript is the audit trail of what the agent actually did.
+    assert [s.step for s in result.transcript] == [1, 2, 3]
+    assert result.transcript[0].tool_calls[0]["name"] == "call_execute"
+    assert result.transcript[1].tool_calls[0]["name"] == "record_finding"
+    assert result.transcript[2].tool_calls == [] and result.transcript[2].stop_reason == "end_turn"
 
 
 def test_step_budget_stops_the_loop(registry):
