@@ -55,14 +55,20 @@ Tunable via env (also wired in `docker-compose.test.yml`): `AGENT_MAX_STEPS`, `A
 ## Compare against a baseline tool — Strix (#24)
 
 Diff our agent against [Strix](https://github.com/usestrix/strix) (an autonomous OSS pentest
-agent) over the same target, scored via the ground truth. Strix is an **external tool that
-spends its own LLM credits** — run by an operator, not by this harness.
+agent) over the same target, scored via the ground truth. Strix is **open source and
+bring-your-own-LLM** — it drives its loop with whatever model you configure, so any cost lands
+on *your* LLM key (or **zero**, with a local model via `LLM_API_BASE`, in which case nothing
+leaves your machine). It runs locally; this harness doesn't run it for you.
+
+> Data flow: scanning is local and doesn't require sending data to Strix-the-project, but a
+> **hosted** `STRIX_LLM` sends prompts (code/responses/findings) to *that LLM provider*. For
+> nothing-leaves-the-box, point `LLM_API_BASE` at a local model and leave `PERPLEXITY_API_KEY` unset.
 
 ```bash
 # 1. our findings already exist (reports/findings.json from a live run above)
-# 2. run Strix against the running stack (its own credits):
+# 2. run Strix against the running stack (uses YOUR LLM key; or a local model for $0):
 curl -sSL https://strix.ai/install | bash
-export STRIX_LLM=anthropic/claude-sonnet-4-6 LLM_API_KEY=sk-ant-...
+export STRIX_LLM=anthropic/claude-sonnet-4-6 LLM_API_KEY=sk-ant-...   # or a local model
 strix --target http://localhost:8000          # backend stack must be up
 # 3. diff the two against ground truth (`real_auth`, or a mutant name):
 python -m secagent.agent_core.compare \
