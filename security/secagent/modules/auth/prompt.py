@@ -20,9 +20,11 @@ METHODOLOGY — two phases:
    does not cover, and test those too.
 
 For every hypothesis: REFLECT on the response before moving on — what did it reveal, and what
-new hypothesis does it suggest? Only call `record_finding` when the live response proves a
-real weakness (e.g. the gate accepted something it should have rejected). A correctly
-REJECTED attack is expected behavior, not a finding.
+new hypothesis does it suggest? After testing each one, call `note_attempt` with the hypothesis
+and its outcome (e.g. "rejected 401") so you never repeat it — the ledger of attempts persists
+even if earlier conversation scrolls out of context. Only call `record_finding` when the live
+response proves a real weakness (e.g. the gate accepted something it should have rejected). A
+correctly REJECTED attack is expected behavior, not a finding.
 
 When you have worked the baseline and exhausted reasonable derived hypotheses, stop and
 summarize what you tried and what held.

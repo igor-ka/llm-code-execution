@@ -14,7 +14,7 @@ from anthropic import Anthropic
 
 from secagent.agent_core.keys import generate_keypair, load_keypair
 from secagent.agent_core.loop import Budget, run_agent
-from secagent.agent_core.report import FindingStore
+from secagent.agent_core.report import AttemptLedger, FindingStore
 from secagent.agent_core.tools import LoopbackHTTP, ToolRegistry, make_generic_tools
 from secagent.modules.auth.checklist import SEED_HYPOTHESES
 from secagent.modules.auth.prompt import SYSTEM_PROMPT, initial_goal
@@ -42,8 +42,9 @@ def main() -> None:
 
     http = LoopbackHTTP(target, extra_allowed_hosts=allowed)
     findings = FindingStore()
+    ledger = AttemptLedger()  # durable memory of what's been tried (survives context trimming)
     registry = ToolRegistry(
-        make_generic_tools(http, findings)
+        make_generic_tools(http, findings, ledger)
         + make_auth_tools(
             http=http, signing=signing, rogue=rogue, issuer=issuer, audience=audience
         )
@@ -56,6 +57,7 @@ def main() -> None:
         initial_user=initial_goal(SEED_HYPOTHESES, audience=audience, issuer=issuer),
         registry=registry,
         budget=budget,
+        ledger=ledger,
     )
 
     report_dir = pathlib.Path(os.environ.get("REPORT_DIR", "reports"))
@@ -65,6 +67,7 @@ def main() -> None:
     (report_dir / "findings.json").write_text(findings.to_json())
     # The transcript is the audit trail: which hypotheses the agent actually fired.
     (report_dir / "transcript.json").write_text(json.dumps(result.transcript_dicts(), indent=2))
+    (report_dir / "attempts.json").write_text(json.dumps(ledger.attempts, indent=2))
     print(md)
     print(
         f"\n[steps={result.steps} tokens≈{result.tokens_used} "
