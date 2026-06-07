@@ -38,8 +38,13 @@ ANTHROPIC_API_KEY=sk-... docker compose -f security/docker-compose.test.yml up -
 ANTHROPIC_API_KEY=sk-... docker compose -f security/docker-compose.test.yml --profile agent run --build agent
 ```
 
-The agent writes `reports/findings.md` and `reports/findings.json`. Against the real `auth.py`
-it should find nothing; the eval (#23) will prove it *can* find planted holes (mutants).
+The agent writes `reports/findings.md`, `reports/findings.json`, and `reports/transcript.json`
+(the audit trail of which hypotheses it actually fired). Against the real `auth.py` it should
+find nothing; the eval (#23) will prove it *can* find planted holes (mutants).
+
+Tunable via env: `AGENT_MAX_STEPS`, `AGENT_MAX_TOKENS` (cumulative billed-token cap), and
+`LLM_MODEL`. The loop also keeps only the last few (assistant, tool-result) pairs in context
+(a sliding window) so cost doesn't grow unbounded across turns.
 
 ## Safety
 
