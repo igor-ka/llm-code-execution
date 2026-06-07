@@ -24,6 +24,29 @@ class Finding:
 
 
 @dataclass
+class AttemptLedger:
+    """External memory of hypotheses already tested + their outcome.
+
+    Re-injected into context every turn so the agent doesn't forget (or repeat) what it tried,
+    even when raw history is trimmed by the sliding window. This is the durable state the
+    sliding window alone would lose.
+    """
+
+    attempts: List[dict] = field(default_factory=list)
+
+    def add(self, hypothesis: str, outcome: str) -> str:
+        self.attempts.append({"hypothesis": hypothesis, "outcome": outcome})
+        return f"noted attempt ({len(self.attempts)} total)"
+
+    def render(self) -> str:
+        if not self.attempts:
+            return ""
+        lines = ["Hypotheses already tested (do NOT repeat these):"]
+        lines += [f"- {a['hypothesis']} → {a['outcome']}" for a in self.attempts]
+        return "\n".join(lines)
+
+
+@dataclass
 class FindingStore:
     """Append-only sink the `record_finding` tool writes to."""
 

@@ -69,6 +69,30 @@ def _blocks_to_dicts(content: Any) -> List[dict]:
     return out
 
 
+def _cached_tools(schemas: List[dict]) -> List[dict]:
+    """Mark the (stable) tool list as cacheable so its tokens aren't re-billed each turn.
+
+    Caching kicks in only above the model's minimum cached-prefix size; below that it's a
+    harmless no-op. The breakpoint goes on the last tool so system + tools form one prefix.
+    """
+    if not schemas:
+        return schemas
+    out = [dict(s) for s in schemas]
+    out[-1] = {**out[-1], "cache_control": {"type": "ephemeral"}}
+    return out
+
+
+def _system_blocks(system: str, ledger: Any) -> List[dict]:
+    """Stable system prompt (cached) + a dynamic ledger block (refreshed each turn, not cached).
+
+    Splitting them keeps the big stable prefix cacheable while the ever-changing ledger rides
+    after the cache breakpoint."""
+    blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+    if ledger is not None and ledger.render():
+        blocks.append({"type": "text", "text": ledger.render()})
+    return blocks
+
+
 def trim_history(messages: List[dict], max_pairs: int) -> List[dict]:
     """Sliding window: always keep the initial user message, then the last `max_pairs`
     (assistant, tool-result) pairs. Pairs are kept intact so tool_use/tool_result stay
@@ -89,10 +113,11 @@ def run_agent(
     initial_user: str,
     registry: ToolRegistry,
     budget: Budget | None = None,
+    ledger: Any = None,
 ) -> RunResult:
     budget = budget or Budget()
     messages: List[dict] = [{"role": "user", "content": initial_user}]
-    tools = registry.schemas()
+    tools = _cached_tools(registry.schemas())
     tokens_used = 0
     transcript: List[StepLog] = []
 
@@ -101,7 +126,7 @@ def run_agent(
         resp = client.messages.create(
             model=model,
             max_tokens=budget.max_response_tokens,
-            system=system,
+            system=_system_blocks(system, ledger),  # cached base + live ledger
             messages=messages,
             tools=tools,
         )

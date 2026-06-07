@@ -38,13 +38,19 @@ ANTHROPIC_API_KEY=sk-... docker compose -f security/docker-compose.test.yml up -
 ANTHROPIC_API_KEY=sk-... docker compose -f security/docker-compose.test.yml --profile agent run --build agent
 ```
 
-The agent writes `reports/findings.md`, `reports/findings.json`, and `reports/transcript.json`
-(the audit trail of which hypotheses it actually fired). Against the real `auth.py` it should
-find nothing; the eval (#23) will prove it *can* find planted holes (mutants).
+The agent writes `reports/findings.md`, `reports/findings.json`, `reports/transcript.json`
+(which hypotheses it fired), and `reports/attempts.json` (the durable ledger). Against the real
+`auth.py` it should find nothing; the eval (#23) proves it *can* find planted holes (mutants).
 
-Tunable via env: `AGENT_MAX_STEPS`, `AGENT_MAX_TOKENS` (cumulative billed-token cap), and
-`LLM_MODEL`. The loop also keeps only the last few (assistant, tool-result) pairs in context
-(a sliding window) so cost doesn't grow unbounded across turns.
+Tunable via env (also wired in `docker-compose.test.yml`): `AGENT_MAX_STEPS`, `AGENT_MAX_TOKENS`
+(cumulative billed-token cap), `LLM_MODEL`.
+
+**Context management** (so cost doesn't grow unbounded across turns):
+- **Prompt caching** marks the stable system prompt + tool schemas as cacheable (a no-op below
+  the model's min cached-prefix size; effective as prompts grow).
+- **Attempt ledger** — durable memory of `{hypothesis → outcome}`, re-injected every turn so the
+  agent never forgets/repeats what it tried, even after older turns are trimmed.
+- **Sliding window** caps retained raw turns as a backstop.
 
 ## Safety
 

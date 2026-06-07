@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .report import FindingStore
+from .report import AttemptLedger, FindingStore
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
 
@@ -103,8 +103,11 @@ def _truncate(text: str, limit: int = 1500) -> str:
     return text if len(text) <= limit else text[:limit] + " …[truncated]"
 
 
-def make_generic_tools(http: LoopbackHTTP, findings: FindingStore) -> List[Tool]:
-    """Tools reusable by any capability module: probe an endpoint, record a finding."""
+def make_generic_tools(
+    http: LoopbackHTTP, findings: FindingStore, ledger: Optional[AttemptLedger] = None
+) -> List[Tool]:
+    """Tools reusable by any capability module: probe an endpoint, record a finding,
+    and (if a ledger is provided) note a tested hypothesis to durable memory."""
 
     def call_endpoint(
         method: str, path: str, token: Optional[str] = None, body: Optional[dict] = None
@@ -130,7 +133,7 @@ def make_generic_tools(http: LoopbackHTTP, findings: FindingStore) -> List[Tool]
         )
         return f"recorded [{severity}] {title!r} (total findings: {len(findings.findings)})"
 
-    return [
+    tools = [
         Tool(
             name="call_endpoint",
             description=(
@@ -183,3 +186,30 @@ def make_generic_tools(http: LoopbackHTTP, findings: FindingStore) -> List[Tool]
             handler=record_finding,
         ),
     ]
+
+    if ledger is not None:
+
+        def note_attempt(hypothesis: str, outcome: str) -> str:
+            return ledger.add(hypothesis, outcome)
+
+        tools.append(
+            Tool(
+                name="note_attempt",
+                description=(
+                    "Record that you tested a hypothesis and what happened (e.g. 'rejected "
+                    "with 401'). Call this after each test so you don't repeat work — the "
+                    "ledger is kept even when older conversation is trimmed."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "hypothesis": {"type": "string"},
+                        "outcome": {"type": "string"},
+                    },
+                    "required": ["hypothesis", "outcome"],
+                },
+                handler=note_attempt,
+            )
+        )
+
+    return tools

@@ -49,6 +49,10 @@ services:
       KEY_DIR: /keys
       REPORT_DIR: /work/security/reports
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Agent run controls (fall back to code defaults if unset):
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-6}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-30}
+      AGENT_MAX_TOKENS: ${AGENT_MAX_TOKENS:-250000}
     volumes:
       - keys:/keys
     depends_on:
