@@ -59,21 +59,24 @@ def main() -> None:
         registry=registry,
         budget=budget,
         ledger=ledger,
+        min_attempts=len(SEED_HYPOTHESES),  # don't accept "done" before the baseline is worked
     )
 
     report_dir = pathlib.Path(os.environ.get("REPORT_DIR", "reports"))
     report_dir.mkdir(parents=True, exist_ok=True)
-    md = findings.to_markdown(target=target, partial=result.stopped_on_budget)
+    md = findings.to_markdown(target=target, partial=result.partial)
     (report_dir / "findings.md").write_text(md)
     (report_dir / "findings.json").write_text(findings.to_json())
     # The transcript is the audit trail: which hypotheses the agent actually fired.
     (report_dir / "transcript.json").write_text(json.dumps(result.transcript_dicts(), indent=2))
     (report_dir / "attempts.json").write_text(json.dumps(ledger.attempts, indent=2))
     print(md)
+    if result.error:
+        print(f"\n[!] run ended on error: {result.error}")
     print(
         f"\n[steps={result.steps} tokens≈{result.tokens_used} "
-        f"budget_stop={result.stopped_on_budget} tool_calls="
-        f"{sum(len(s.tool_calls) for s in result.transcript)}]"
+        f"budget_stop={result.stopped_on_budget} attempts={len(ledger.attempts)} "
+        f"tool_calls={sum(len(s.tool_calls) for s in result.transcript)}]"
     )
 
 

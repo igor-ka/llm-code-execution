@@ -57,6 +57,12 @@ Tunable via env (also wired in `docker-compose.test.yml`): `AGENT_MAX_STEPS`, `A
   agent never forgets/repeats what it tried, even after older turns are trimmed.
 - **Sliding window** caps retained raw turns as a backstop.
 
+**Not exiting prematurely:**
+- **Coverage-gated termination** — the loop won't accept "done" until the agent has logged at
+  least the baseline hypotheses via `note_attempt` (nudged up to twice, then it relents).
+- **Retry + partial report** — `messages.create` is retried; an unrecoverable API error returns
+  a *partial* run (findings/transcript so far) instead of crashing the whole run.
+
 ## Compare against a baseline tool — Strix (#24)
 
 Diff our agent against [Strix](https://github.com/usestrix/strix) (an autonomous OSS pentest

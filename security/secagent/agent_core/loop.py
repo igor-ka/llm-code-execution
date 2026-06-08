@@ -46,6 +46,11 @@ class RunResult:
     tokens_used: int
     stopped_on_budget: bool
     transcript: List[StepLog] = field(default_factory=list)
+    error: str | None = None  # set if the run ended on an unrecoverable API error (partial)
+
+    @property
+    def partial(self) -> bool:
+        return self.stopped_on_budget or self.error is not None
 
     def transcript_dicts(self) -> List[dict]:
         return [asdict(s) for s in self.transcript]
@@ -105,6 +110,33 @@ def trim_history(messages: List[dict], max_pairs: int) -> List[dict]:
     return head + rest
 
 
+def _create_with_retry(client: LLMClient, attempts: int = 3, **kwargs):
+    """Call messages.create, retrying on error. The Anthropic SDK already backs off on
+    429/5xx; this adds a last line of defense so a transient failure doesn't lose the run."""
+    last_exc = None
+    for i in range(1, attempts + 1):
+        try:
+            return client.messages.create(**kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface as a partial run, never crash
+            last_exc = exc
+            logger.warning("messages.create failed (%d/%d): %s", i, attempts, exc)
+    raise last_exc
+
+
+def _coverage_nudge(ledger: Any, min_attempts: int) -> str | None:
+    """If the agent tries to finish before logging enough baseline attempts, return a nudge
+    message to keep it going; else None. Uses attempt COUNT (a robust proxy) rather than
+    fragile text-matching of which specific hypotheses were covered."""
+    done = len(ledger.attempts) if ledger is not None else 0
+    if done >= min_attempts:
+        return None
+    return (
+        f"You're stopping after logging only {done} of at least {min_attempts} baseline "
+        f"hypotheses via note_attempt. Do not finish yet: test the remaining seeded "
+        f"hypotheses (noting each outcome), then derive and test your own before concluding."
+    )
+
+
 def run_agent(
     *,
     client: LLMClient,
@@ -114,22 +146,33 @@ def run_agent(
     registry: ToolRegistry,
     budget: Budget | None = None,
     ledger: Any = None,
+    min_attempts: int = 0,
+    max_nudges: int = 2,
 ) -> RunResult:
     budget = budget or Budget()
     messages: List[dict] = [{"role": "user", "content": initial_user}]
     tools = _cached_tools(registry.schemas())
     tokens_used = 0
+    nudges_used = 0
     transcript: List[StepLog] = []
 
     for step in range(1, budget.max_steps + 1):
         messages = trim_history(messages, budget.max_history_pairs)
-        resp = client.messages.create(
-            model=model,
-            max_tokens=budget.max_response_tokens,
-            system=_system_blocks(system, ledger),  # cached base + live ledger
-            messages=messages,
-            tools=tools,
-        )
+        try:
+            resp = _create_with_retry(
+                client,
+                model=model,
+                max_tokens=budget.max_response_tokens,
+                system=_system_blocks(system, ledger),  # cached base + live ledger
+                messages=messages,
+                tools=tools,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("aborting after repeated API failures: %s", exc)
+            return RunResult(
+                "(stopped: API error)", step, tokens_used, False, transcript, error=str(exc)
+            )
+
         usage = getattr(resp, "usage", None)
         if usage is not None:
             tokens_used += getattr(usage, "input_tokens", 0) + getattr(usage, "output_tokens", 0)
@@ -143,11 +186,7 @@ def run_agent(
                 if block.type == "tool_use":
                     result = registry.dispatch(block.name, dict(block.input))
                     step_calls.append(
-                        {
-                            "name": block.name,
-                            "input": _clip(block.input),
-                            "result": _clip(result),
-                        }
+                        {"name": block.name, "input": _clip(block.input), "result": _clip(result)}
                     )
                     tool_results.append(
                         {"type": "tool_result", "tool_use_id": block.id, "content": result}
@@ -164,6 +203,12 @@ def run_agent(
         )
 
         if resp.stop_reason != "tool_use":
+            nudge = _coverage_nudge(ledger, min_attempts) if nudges_used < max_nudges else None
+            if nudge is not None:
+                nudges_used += 1
+                logger.info("coverage nudge %d: agent tried to finish early", nudges_used)
+                messages.append({"role": "user", "content": nudge})
+                continue
             final_text = "".join(b.text for b in resp.content if b.type == "text")
             return RunResult(final_text, step, tokens_used, False, transcript)
 
