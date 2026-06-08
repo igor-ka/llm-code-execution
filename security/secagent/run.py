@@ -15,7 +15,7 @@ from anthropic import Anthropic
 from secagent.agent_core.keys import generate_keypair, load_keypair
 from secagent.agent_core.loop import Budget, run_agent
 from secagent.agent_core.report import AttemptLedger, FindingStore
-from secagent.agent_core.tools import LoopbackHTTP, ToolRegistry, make_generic_tools
+from secagent.agent_core.tools import LogTail, LoopbackHTTP, ToolRegistry, make_generic_tools
 from secagent.modules.auth.checklist import SEED_HYPOTHESES
 from secagent.modules.auth.prompt import SYSTEM_PROMPT, initial_goal
 from secagent.modules.auth.tools import make_auth_tools
@@ -43,8 +43,9 @@ def main() -> None:
     http = LoopbackHTTP(target, extra_allowed_hosts=allowed)
     findings = FindingStore()
     ledger = AttemptLedger()  # durable memory of what's been tried (survives context trimming)
+    logs = LogTail(os.environ.get("BACKEND_LOG_FILE", "/logs/backend.log"))  # read-only tail
     registry = ToolRegistry(
-        make_generic_tools(http, findings, ledger)
+        make_generic_tools(http, findings, ledger, logs=logs)
         + make_auth_tools(
             http=http, signing=signing, rogue=rogue, issuer=issuer, audience=audience
         )

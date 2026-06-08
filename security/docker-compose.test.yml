@@ -24,14 +24,21 @@ services:
   backend:
     build:
       context: ../backend
+    # Tee server output to a file on a shared volume so the agent can READ logs without the
+    # Docker socket (white-box observability for read_backend_logs). App code is unchanged.
+    command:
+      ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 8000 2>&1 | tee /logs/backend.log"]
     environment:
       AUTH_REQUIRED: "true"
       OIDC_ISSUER: http://mock-oidc:9000/
       OIDC_AUDIENCE: https://api.local
       OIDC_JWKS_URL: http://mock-oidc:9000/.well-known/jwks.json
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      PYTHONUNBUFFERED: "1"  # flush logs promptly so the tail is fresh
     depends_on:
       - mock-oidc
+    volumes:
+      - logs:/logs
     ports:
       - "8000:8000"
 
@@ -53,10 +60,13 @@ services:
       LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-6}
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-30}
       AGENT_MAX_TOKENS: ${AGENT_MAX_TOKENS:-250000}
+      BACKEND_LOG_FILE: /logs/backend.log
     volumes:
       - keys:/keys
+      - logs:/logs:ro  # read-only: the agent may read the target's logs, never write them
     depends_on:
       - backend
 
 volumes:
   keys:
+  logs:
