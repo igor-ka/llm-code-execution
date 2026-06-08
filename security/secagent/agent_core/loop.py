@@ -15,6 +15,11 @@ from .tools import ToolRegistry
 
 logger = logging.getLogger("secagent.loop")
 
+_WRAP_UP = (
+    "You are approaching the run's budget limit. Stop testing new hypotheses now — "
+    "write your final findings summary and conclude."
+)
+
 
 class LLMClient(Protocol):
     """Minimal surface we need from `anthropic.Anthropic` (and from the test fake)."""
@@ -27,8 +32,9 @@ class LLMClient(Protocol):
 class Budget:
     max_steps: int = 30
     max_total_tokens: int = 250_000  # cumulative billed tokens (input+output) across turns
-    max_response_tokens: int = 4096  # per-call output cap
+    max_response_tokens: int = 8192  # per-call output cap (roomy enough for a closing summary)
     max_history_pairs: int = 8  # sliding window: keep the last N (assistant, tool-result) pairs
+    soft_fraction: float = 0.8  # at this fraction of the token budget, tell the agent to wrap up
 
 
 @dataclass
@@ -154,6 +160,8 @@ def run_agent(
     tools = _cached_tools(registry.schemas())
     tokens_used = 0
     nudges_used = 0
+    wrapping_up = False
+    soft_limit = int(budget.soft_fraction * budget.max_total_tokens)
     transcript: List[StepLog] = []
 
     for step in range(1, budget.max_steps + 1):
@@ -191,6 +199,12 @@ def run_agent(
                     tool_results.append(
                         {"type": "tool_result", "tool_use_id": block.id, "content": result}
                     )
+            if not wrapping_up and tokens_used >= soft_limit:
+                # Graceful landing: ride a wrap-up instruction in with the tool results (can't
+                # send two consecutive user messages) so the agent concludes before the hard cap.
+                wrapping_up = True
+                tool_results.append({"type": "text", "text": _WRAP_UP})
+                logger.info("soft budget reached (%d) — asking the agent to wrap up", soft_limit)
             messages.append({"role": "user", "content": tool_results})
 
         transcript.append(StepLog(step, step_calls, tokens_used, resp.stop_reason))
@@ -202,7 +216,21 @@ def run_agent(
             resp.stop_reason,
         )
 
-        if resp.stop_reason != "tool_use":
+        if resp.stop_reason == "max_tokens":
+            # Response was truncated by the per-call output cap, NOT finished. Drop any partial
+            # tool_use (it would dangle without a tool_result) and ask the agent to continue.
+            messages[-1]["content"] = [
+                b for b in messages[-1]["content"] if b.get("type") == "text"
+            ] or [{"type": "text", "text": "(continuing)"}]
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "Your previous response was cut off before you finished. "
+                    "Continue from where you left off.",
+                }
+            )
+            logger.info("response truncated (max_tokens) — asking the agent to continue")
+        elif resp.stop_reason != "tool_use":
             nudge = _coverage_nudge(ledger, min_attempts) if nudges_used < max_nudges else None
             if nudge is not None:
                 nudges_used += 1

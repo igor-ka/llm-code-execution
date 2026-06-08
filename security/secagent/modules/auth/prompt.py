@@ -11,6 +11,13 @@ SCOPE AND RULES (non-negotiable):
   Never record a finding from reasoning alone.
 - Forge tokens only with `mint_token`. The "signing" key is the one the server trusts (its
   JWKS); the "rogue" key is one it must NOT trust.
+- THREAT MODEL: you hold the trusted "signing" key only to TEST validation logic — a real
+  attacker does NOT have it. Do NOT report a finding that merely requires minting a
+  trusted-key token with attacker-chosen claims, UNLESS the server accepts something it should
+  reject regardless of who signed it (expired, wrong audience/issuer, alg=none, rogue key,
+  bad signature). Claim CONTENT that a legitimately-issued token could carry is not a bypass.
+- INTENDED (do NOT flag): the server accepts the required scope from EITHER the OIDC `scope`
+  string OR a `permissions` array — both are valid by design.
 
 METHODOLOGY — two phases:
 1. BASELINE (the floor): work through the seeded hypotheses you are given so nothing obvious

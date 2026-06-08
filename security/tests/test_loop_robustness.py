@@ -1,15 +1,25 @@
 """Anti-premature-exit: coverage-gated termination + retry/partial-report on API errors."""
 from types import SimpleNamespace
 
-from secagent.agent_core.loop import run_agent
+from secagent.agent_core.loop import Budget, run_agent
 from secagent.agent_core.report import AttemptLedger
-from secagent.agent_core.tools import ToolRegistry
+from secagent.agent_core.tools import Tool, ToolRegistry
 
 
 def _end(text="done"):
     return SimpleNamespace(
         content=[SimpleNamespace(type="text", text=text)],
         stop_reason="end_turn",
+        usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+    )
+
+
+def _truncated(text="partial", tool_use=False):
+    content = [SimpleNamespace(type="text", text=text)]
+    if tool_use:  # a partial tool_use block, as happens when output is cut mid-call
+        content.append(SimpleNamespace(type="tool_use", id="x", name="noop", input={}))
+    return SimpleNamespace(
+        content=content, stop_reason="max_tokens",
         usage=SimpleNamespace(input_tokens=1, output_tokens=1),
     )
 
@@ -22,6 +32,22 @@ class _AlwaysEnd:
             return _end()
 
     messages = _Messages()
+
+
+class _Capturing:
+    """Returns a scripted sequence and records each create() kwargs."""
+
+    def __init__(self, responses):
+        self.calls = []
+        self._responses = list(responses)
+        outer = self
+
+        class _Messages:
+            def create(self, **kwargs):
+                outer.calls.append(kwargs)
+                return outer._responses.pop(0)
+
+        self.messages = _Messages()
 
 
 def _run(client, **kw):
@@ -82,3 +108,51 @@ def test_create_retries_then_succeeds():
     assert result.error is None
     assert result.steps == 1
     assert _Flaky.calls == 3  # failed twice, recovered on the third attempt within one step
+
+
+def test_max_tokens_is_continued_not_treated_as_done():
+    client = _Capturing([_truncated("half a thought"), _end("the full conclusion")])
+    result = _run(client)
+    assert result.steps == 2  # truncation didn't end the run
+    assert result.final_text == "the full conclusion"
+
+
+def test_max_tokens_strips_partial_tool_use_before_continuing():
+    client = _Capturing([_truncated("cut", tool_use=True), _end("done")])
+    result = _run(client)
+    assert result.steps == 2
+    # The 2nd call's history must not carry a dangling tool_use (no matching tool_result).
+    second_msgs = client.calls[1]["messages"]
+    assert not any(
+        isinstance(m["content"], list)
+        and any(isinstance(b, dict) and b.get("type") == "tool_use" for b in m["content"])
+        for m in second_msgs
+    )
+
+
+def _tool_use(usage=10):
+    return SimpleNamespace(
+        content=[SimpleNamespace(type="tool_use", id="t", name="noop", input={})],
+        stop_reason="tool_use",
+        usage=SimpleNamespace(input_tokens=usage, output_tokens=0),
+    )
+
+
+def test_soft_budget_injects_wrapup_before_hard_cap():
+    reg = ToolRegistry([Tool("noop", "", {"type": "object", "properties": {}}, lambda: "ok")])
+    # Step 1 burns 60 tokens; soft limit = 0.5 * 100 = 50, so a wrap-up rides the tool results.
+    client = _Capturing([_tool_use(usage=60), _end("summary")])
+    result = run_agent(
+        client=client, model="m", system="s", initial_user="go", registry=reg,
+        budget=Budget(max_total_tokens=100, soft_fraction=0.5),
+    )
+    second_msgs = client.calls[1]["messages"]
+    assert any(
+        isinstance(m["content"], list)
+        and any(
+            isinstance(b, dict) and b.get("type") == "text" and "final" in b["text"].lower()
+            for b in m["content"]
+        )
+        for m in second_msgs
+    )
+    assert result.final_text == "summary"  # concluded cleanly, not on the hard cap
