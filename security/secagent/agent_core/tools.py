@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -103,11 +104,35 @@ def _truncate(text: str, limit: int = 1500) -> str:
     return text if len(text) <= limit else text[:limit] + " …[truncated]"
 
 
+class LogTail:
+    """Read-only tail of the target's server log.
+
+    White-box observability without the Docker socket: the target writes its logs to a file on
+    a shared volume (see docker-compose.test.yml) and the agent only ever *reads* it. The agent
+    gets no control over the target's host — just visibility into stack traces, leaked error
+    detail, and which code path a request hit.
+    """
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+
+    def tail(self, lines: int = 50) -> str:
+        try:
+            rows = Path(self.path).read_text().splitlines()
+        except FileNotFoundError:
+            return f"(no log file at {self.path})"
+        return "\n".join(rows[-lines:]) if rows else "(log is empty)"
+
+
 def make_generic_tools(
-    http: LoopbackHTTP, findings: FindingStore, ledger: Optional[AttemptLedger] = None
+    http: LoopbackHTTP,
+    findings: FindingStore,
+    ledger: Optional[AttemptLedger] = None,
+    logs: Optional[LogTail] = None,
 ) -> List[Tool]:
     """Tools reusable by any capability module: probe an endpoint, record a finding,
-    and (if a ledger is provided) note a tested hypothesis to durable memory."""
+    optionally note a tested hypothesis to durable memory (ledger), and read the target's
+    server logs (logs)."""
 
     def call_endpoint(
         method: str, path: str, token: Optional[str] = None, body: Optional[dict] = None
@@ -209,6 +234,34 @@ def make_generic_tools(
                     "required": ["hypothesis", "outcome"],
                 },
                 handler=note_attempt,
+            )
+        )
+
+    if logs is not None:
+
+        def read_backend_logs(lines: int = 50) -> str:
+            n = max(1, min(int(lines), 500))
+            return _truncate(logs.tail(n), 4000)
+
+        tools.append(
+            Tool(
+                name="read_backend_logs",
+                description=(
+                    "Read the tail of the target backend's server logs (read-only). Use to "
+                    "observe server-side behavior an HTTP response hides — stack traces, leaked "
+                    "internal error detail, or which code path a request took."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "lines": {
+                            "type": "integer",
+                            "description": "How many trailing log lines to read (default 50).",
+                        }
+                    },
+                    "required": [],
+                },
+                handler=read_backend_logs,
             )
         )
 

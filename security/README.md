@@ -42,6 +42,11 @@ The agent writes `reports/findings.md`, `reports/findings.json`, `reports/transc
 (which hypotheses it fired), and `reports/attempts.json` (the durable ledger). Against the real
 `auth.py` it should find nothing; the eval (#23) proves it *can* find planted holes (mutants).
 
+The agent also has **read-only** white-box visibility into the target via `read_backend_logs`:
+the backend tees its output to a shared `logs` volume and the agent mounts it read-only (no
+Docker socket), so it can observe stack traces / leaked error detail without any control over
+the target's host.
+
 Tunable via env (also wired in `docker-compose.test.yml`): `AGENT_MAX_STEPS`, `AGENT_MAX_TOKENS`
 (cumulative billed-token cap), `LLM_MODEL`.
 
