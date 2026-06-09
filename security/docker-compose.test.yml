@@ -64,6 +64,7 @@ services:
     volumes:
       - keys:/keys
       - logs:/logs:ro  # read-only: the agent may read the target's logs, never write them
+      - ./reports:/work/security/reports  # persist findings/attempts/transcript to the host
     depends_on:
       - backend
 
