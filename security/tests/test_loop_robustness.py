@@ -156,3 +156,41 @@ def test_soft_budget_injects_wrapup_before_hard_cap():
         for m in second_msgs
     )
     assert result.final_text == "summary"  # concluded cleanly, not on the hard cap
+
+
+def test_soft_budget_step_bound_injects_wrapup():
+    # A cheap-but-chatty run: tokens stay far below the token soft-limit, so only the STEP
+    # threshold can trigger the wrap-up. soft_step = int(0.5 * 2) = 1, so step 1 rides a wrap-up.
+    reg = ToolRegistry([Tool("noop", "", {"type": "object", "properties": {}}, lambda: "ok")])
+    client = _Capturing([_tool_use(usage=1), _end("summary")])
+    result = run_agent(
+        client=client, model="m", system="s", initial_user="go", registry=reg,
+        budget=Budget(max_steps=2, soft_fraction=0.5, max_total_tokens=10_000_000),
+    )
+    second_msgs = client.calls[1]["messages"]
+    assert any(
+        isinstance(m["content"], list)
+        and any(
+            isinstance(b, dict) and b.get("type") == "text" and "final" in b["text"].lower()
+            for b in m["content"]
+        )
+        for m in second_msgs
+    )
+    assert result.final_text == "summary"  # step-bound run still concluded cleanly
+    assert result.stopped_on_budget is False
+
+
+def test_wrapup_overrides_coverage_gate():
+    # The conflict: soft budget triggers wrap-up, the agent concludes (end_turn), but the
+    # ledger is short of min_attempts. The coverage gate must NOT nudge it back — wrap-up wins,
+    # so the run lands cleanly instead of thrashing to the hard cap.
+    reg = ToolRegistry([Tool("noop", "", {"type": "object", "properties": {}}, lambda: "ok")])
+    client = _Capturing([_tool_use(usage=1), _end("summary")])  # step 1 tool, step 2 concludes
+    result = run_agent(
+        client=client, model="m", system="s", initial_user="go", registry=reg,
+        budget=Budget(max_steps=2, soft_fraction=0.5, max_total_tokens=10_000_000),
+        ledger=AttemptLedger(), min_attempts=5, max_nudges=2,  # ledger stays empty (0 < 5)
+    )
+    assert result.final_text == "summary"  # accepted the conclusion despite short coverage
+    assert result.steps == 2
+    assert result.stopped_on_budget is False  # landed cleanly, not nudged into the step cap

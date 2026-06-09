@@ -162,6 +162,7 @@ def run_agent(
     nudges_used = 0
     wrapping_up = False
     soft_limit = int(budget.soft_fraction * budget.max_total_tokens)
+    soft_step = int(budget.soft_fraction * budget.max_steps)
     transcript: List[StepLog] = []
 
     for step in range(1, budget.max_steps + 1):
@@ -199,12 +200,20 @@ def run_agent(
                     tool_results.append(
                         {"type": "tool_result", "tool_use_id": block.id, "content": result}
                     )
-            if not wrapping_up and tokens_used >= soft_limit:
+            if not wrapping_up and (tokens_used >= soft_limit or step >= soft_step):
                 # Graceful landing: ride a wrap-up instruction in with the tool results (can't
                 # send two consecutive user messages) so the agent concludes before the hard cap.
+                # Triggered by WHICHEVER budget runs out first — a cheap-but-chatty run (many
+                # small steps) is step-bound and would otherwise hit the step cap without ever
+                # crossing the token soft-limit, dying on a partial instead of a clean end_turn.
                 wrapping_up = True
                 tool_results.append({"type": "text", "text": _WRAP_UP})
-                logger.info("soft budget reached (%d) — asking the agent to wrap up", soft_limit)
+                trigger = "step" if step >= soft_step else "token"
+                logger.info(
+                    "soft budget reached (%s: step %d/%d, tokens %d/%d) — asking the agent "
+                    "to wrap up", trigger, step, budget.max_steps, tokens_used,
+                    budget.max_total_tokens,
+                )
             messages.append({"role": "user", "content": tool_results})
 
         transcript.append(StepLog(step, step_calls, tokens_used, resp.stop_reason))
@@ -231,7 +240,16 @@ def run_agent(
             )
             logger.info("response truncated (max_tokens) — asking the agent to continue")
         elif resp.stop_reason != "tool_use":
-            nudge = _coverage_nudge(ledger, min_attempts) if nudges_used < max_nudges else None
+            # Once we've asked the agent to wrap up (soft budget hit), accept its end_turn as
+            # final — don't let the coverage gate nudge it back into testing. The two otherwise
+            # fight: wrap-up says "conclude", the gate says "keep going", and the run thrashes
+            # to the hard cap instead of landing cleanly. The gate guards against PREMATURE
+            # exit; once we're deliberately landing the run, that concern no longer applies.
+            nudge = (
+                _coverage_nudge(ledger, min_attempts)
+                if not wrapping_up and nudges_used < max_nudges
+                else None
+            )
             if nudge is not None:
                 nudges_used += 1
                 logger.info("coverage nudge %d: agent tried to finish early", nudges_used)
