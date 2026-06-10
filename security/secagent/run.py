@@ -5,17 +5,14 @@ descriptively-named report set: an at-a-glance HTML report plus markdown + JSON 
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
-import pathlib
-from datetime import datetime, timezone
 
 from anthropic import Anthropic
 
+from secagent.agent_core.html_report import write_report_set
 from secagent.agent_core.keys import generate_keypair, load_keypair
 from secagent.agent_core.loop import Budget, StoppingPolicy, run_agent
-from secagent.agent_core.html_report import render_html_report
 from secagent.agent_core.report import AttemptLedger, FindingStore
 from secagent.agent_core.tools import LogTail, LoopbackHTTP, ToolRegistry, make_generic_tools
 from secagent.modules.auth.checklist import SEED_HYPOTHESES, SEED_IDS
@@ -71,34 +68,16 @@ def main() -> None:
         ),
     )
 
-    report_dir = pathlib.Path(os.environ.get("REPORT_DIR", "reports"))
-    report_dir.mkdir(parents=True, exist_ok=True)
-    # Descriptive, per-run filenames so repeated runs (e.g. Haiku vs Sonnet) never clobber each
-    # other on the persisted host mount. Slug: auth-<model>-<UTC timestamp>.
-    generated = datetime.now(timezone.utc)
-    slug = f"auth-{model}-{generated.strftime('%Y%m%d-%H%M%SZ')}"
-    transcript = result.transcript_dicts()
     tool_calls = sum(len(s.tool_calls) for s in result.transcript)
-
-    md = findings.to_markdown(target=target, partial=result.partial)
-    html = render_html_report(
-        target=target, model=model, findings=findings, ledger=ledger,
-        seeds=[(s.id, s.text) for s in SEED_HYPOTHESES],
+    paths = write_report_set(
+        report_dir=os.environ.get("REPORT_DIR", "reports"), model=model, target=target,
+        findings=findings, ledger=ledger, seeds=[(s.id, s.text) for s in SEED_HYPOTHESES],
         steps=result.steps, tokens_used=result.tokens_used, tool_calls=tool_calls,
         stopped_on_budget=result.stopped_on_budget, partial=result.partial,
-        error=result.error, transcript=transcript, generated=generated,
+        error=result.error, transcript=result.transcript_dicts(),
     )
-    artifacts = {
-        f"{slug}.html": html,                                         # at-a-glance human report
-        f"{slug}.findings.md": md,                                    # quick text read
-        f"{slug}.findings.json": findings.to_json(),                  # eval scorer input
-        f"{slug}.transcript.json": json.dumps(transcript, indent=2),  # which hypotheses fired
-        f"{slug}.attempts.json": json.dumps(ledger.attempts, indent=2),  # durable ledger
-    }
-    for name, content in artifacts.items():
-        (report_dir / name).write_text(content)
 
-    print(md)
+    print(findings.to_markdown(target=target, partial=result.partial))
     if result.error:
         print(f"\n[!] run ended on error: {result.error}")
     uncovered = ledger.uncovered(SEED_IDS)
@@ -110,7 +89,7 @@ def main() -> None:
         + (f" uncovered={sorted(uncovered)}" if uncovered else "")
         + "]"
     )
-    print(f"\n[report] {report_dir / (slug + '.html')}")
+    print(f"\n[report] {paths['html']}")
 
 
 if __name__ == "__main__":

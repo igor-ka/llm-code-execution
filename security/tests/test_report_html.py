@@ -1,5 +1,5 @@
-"""The self-contained HTML run report (render_html_report)."""
-from secagent.agent_core.html_report import render_html_report
+"""The self-contained HTML run report (render_html_report) + the report-set writer."""
+from secagent.agent_core.html_report import render_html_report, write_report_set
 from secagent.agent_core.report import AttemptLedger, FindingStore
 
 SEEDS = [
@@ -62,3 +62,20 @@ def test_partial_and_error_runs_are_flagged():
     assert "partial run" in html and "ended on error" in html
     assert "Stopped on budget" in html
     assert "529 overloaded" in html
+
+
+def test_write_report_set_emits_descriptive_bundle(tmp_path):
+    ledger = AttemptLedger()
+    ledger.add("no token", "401", seed_id="no_token")
+    paths = write_report_set(
+        report_dir=tmp_path, model="claude-haiku-4-5", target="http://backend:8000",
+        findings=FindingStore(), ledger=ledger, seeds=SEEDS,
+        steps=3, tokens_used=10, tool_calls=1, stopped_on_budget=False, partial=False,
+        error=None, transcript=[],
+    )
+    html_path = paths["html"]
+    assert html_path.suffix == ".html"
+    assert html_path.name.startswith("auth-claude-haiku-4-5-")  # descriptive, model-stamped
+    names = sorted(p.name for p in paths.values())
+    assert any(n.endswith(".findings.json") for n in names)  # full bundle, one shared slug
+    assert html_path.read_text().startswith("<!doctype html>")
