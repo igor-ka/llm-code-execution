@@ -38,9 +38,14 @@ ANTHROPIC_API_KEY=sk-... docker compose -f security/docker-compose.test.yml up -
 ANTHROPIC_API_KEY=sk-... docker compose -f security/docker-compose.test.yml --profile agent run --build agent
 ```
 
-The agent writes `reports/findings.md`, `reports/findings.json`, `reports/transcript.json`
-(which hypotheses it fired), and `reports/attempts.json` (the durable ledger). Against the real
-`auth.py` it should find nothing; the eval (#23) proves it *can* find planted holes (mutants).
+Each run writes a descriptively-named, non-clobbering report set under `reports/`, slugged
+`auth-<model>-<timestamp>` (so repeated runs — e.g. Haiku vs Sonnet — don't overwrite each
+other). The set is: an at-a-glance **`.html`** report (summary banner, findings, baseline
+**seed coverage**, the attempt ledger, and the step transcript), plus `.findings.md`,
+`.findings.json` (the eval scorer's input), `.transcript.json` (which hypotheses it fired), and
+`.attempts.json` (the durable ledger). The runner prints the exact `.html` path on exit. Against
+the real `auth.py` it should find nothing; the eval (#23) proves it *can* find planted holes
+(mutants).
 
 The agent also has **read-only** white-box visibility into the target via `read_backend_logs`:
 the backend tees its output to a shared `logs` volume and the agent mounts it read-only (no
@@ -48,7 +53,8 @@ Docker socket), so it can observe stack traces / leaked error detail without any
 the target's host.
 
 Tunable via env (also wired in `docker-compose.test.yml`): `AGENT_MAX_STEPS`, `AGENT_MAX_TOKENS`
-(cumulative billed-token cap), `LLM_MODEL`.
+(cumulative billed-token cap), `LLM_MODEL`, `AGENT_NOVELTY_PATIENCE` (diminishing-returns stop;
+0 disables it).
 
 **Context management** (so cost doesn't grow unbounded across turns):
 - **Prompt caching** marks the stable system prompt + tool schemas as cacheable (a no-op below
@@ -58,10 +64,19 @@ Tunable via env (also wired in `docker-compose.test.yml`): `AGENT_MAX_STEPS`, `A
 - **Sliding window** caps retained raw turns as a backstop.
 
 **Not exiting prematurely:**
-- **Coverage-gated termination** — the loop won't accept "done" until the agent has logged at
-  least the baseline hypotheses via `note_attempt` (nudged up to twice, then it relents).
+- **Identity-based coverage gate** — the loop won't accept "done" until every seeded baseline
+  hypothesis is *covered by id* (each `note_attempt` tags a `seed_id`); the nudge names the
+  specific seeds still missing (nudged up to twice, then it relents). Tracking coverage by
+  identity rather than attempt *count* stops duplicate attempts from satisfying the gate while
+  real seeds slip through.
 - **Retry + partial report** — `messages.create` is retried; an unrecoverable API error returns
   a *partial* run (findings/transcript so far) instead of crashing the whole run.
+
+**Not over-exploring (stopping smart):**
+- **Diminishing-returns stop** — once the baseline floor is met, if `AGENT_NOVELTY_PATIENCE`
+  consecutive steps surface nothing new (no newly-covered seed, no new finding), the loop lands
+  the run gracefully (a clean conclusion, not a budget cap). It's an *external, measurable*
+  stopping rule, not the model's self-judgment, and can never fire before the baseline is done.
 
 ## Compare against a baseline tool — Strix (#24)
 
@@ -76,14 +91,15 @@ leaves your machine). It runs locally; this harness doesn't run it for you.
 > nothing-leaves-the-box, point `LLM_API_BASE` at a local model and leave `PERPLEXITY_API_KEY` unset.
 
 ```bash
-# 1. our findings already exist (reports/findings.json from a live run above)
+# 1. our findings already exist (reports/<run>.findings.json from a live run above —
+#    the runner prints the exact path; <run> = auth-<model>-<timestamp>)
 # 2. run Strix against the running stack (uses YOUR LLM key; or a local model for $0):
 curl -sSL https://strix.ai/install | bash
 export STRIX_LLM=anthropic/claude-sonnet-4-6 LLM_API_KEY=sk-ant-...   # or a local model
 strix --target http://localhost:8000          # backend stack must be up
 # 3. diff the two against ground truth (`real_auth`, or a mutant name):
 python -m secagent.agent_core.compare \
-    reports/findings.json strix_runs/<run>/<results>.json real_auth
+    reports/<run>.findings.json strix_runs/<run>/<results>.json real_auth
 ```
 
 The report shows recall/precision for each tool and, per ground-truth id, who found it (shared /

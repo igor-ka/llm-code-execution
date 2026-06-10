@@ -29,7 +29,9 @@ METHODOLOGY — two phases:
 For every hypothesis: REFLECT on the response before moving on — what did it reveal, and what
 new hypothesis does it suggest? After testing each one, call `note_attempt` with the hypothesis
 and its outcome (e.g. "rejected 401") so you never repeat it — the ledger of attempts persists
-even if earlier conversation scrolls out of context. Only call `record_finding` when the live
+even if earlier conversation scrolls out of context. When the attempt addresses one of the
+seeded baseline hypotheses, pass its `seed_id` (shown as `[id]` in the goal) so coverage is
+tracked precisely; omit it for your own derived hypotheses. Only call `record_finding` when the live
 response proves a real weakness (e.g. the gate accepted something it should have rejected). A
 correctly REJECTED attack is expected behavior, not a finding.
 
@@ -38,12 +40,13 @@ summarize what you tried and what held.
 """
 
 
-def initial_goal(checklist: list[str], *, audience: str, issuer: str) -> str:
-    items = "\n".join(f"{i}. {h}" for i, h in enumerate(checklist, 1))
+def initial_goal(checklist, *, audience: str, issuer: str) -> str:
+    items = "\n".join(f"{i}. [{s.id}] {s.text}" for i, s in enumerate(checklist, 1))
     return (
         f"Target: POST /api/execute on the local app.\n"
         f"A VALID token has: iss={issuer!r}, aud={audience!r}, a future `exp`, a `sub`, and "
         f"scope 'execute:code'. A minimal accepted request body is {{\"prompt\": \"hi\"}}.\n\n"
-        f"Baseline hypotheses to work through first:\n{items}\n\n"
+        f"Baseline hypotheses to work through first (tag each note_attempt with the [id]):\n"
+        f"{items}\n\n"
         f"Begin with hypothesis 1. After the baseline, derive and test your own."
     )
