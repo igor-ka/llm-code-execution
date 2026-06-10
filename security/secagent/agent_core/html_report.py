@@ -80,7 +80,6 @@ def render_html_report(
     tokens_used: int,
     tool_calls: int,
     stopped_on_budget: bool,
-    partial: bool,
     error: str | None = None,
     transcript: Sequence[dict] = (),
     generated: datetime | None = None,
@@ -89,6 +88,7 @@ def render_html_report(
     baseline seed coverage (by identity), the attempt ledger, and the step-by-step transcript.
     All inputs are plain data so this stays decoupled from the loop/Seed types."""
     ts = (generated or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M UTC")
+    partial = stopped_on_budget or error is not None  # derived, never passed (can't drift)
 
     # Findings, worst-first.
     order = {s: i for i, s in enumerate(reversed(SEVERITIES))}
@@ -273,7 +273,6 @@ def write_report_set(
     tokens_used: int,
     tool_calls: int,
     stopped_on_budget: bool,
-    partial: bool,
     error: str | None,
     transcript: Sequence[dict],
     generated: datetime | None = None,
@@ -287,10 +286,11 @@ def write_report_set(
     report_dir.mkdir(parents=True, exist_ok=True)
     generated = generated or datetime.now(timezone.utc)
     slug = f"auth-{model}-{generated.strftime('%Y%m%d-%H%M%SZ')}"
+    partial = stopped_on_budget or error is not None  # one source of truth for the .md + .html
     html = render_html_report(
         target=target, model=model, findings=findings, ledger=ledger, seeds=seeds,
         steps=steps, tokens_used=tokens_used, tool_calls=tool_calls,
-        stopped_on_budget=stopped_on_budget, partial=partial, error=error,
+        stopped_on_budget=stopped_on_budget, error=error,
         transcript=transcript, generated=generated,
     )
     bundle = {
@@ -303,6 +303,6 @@ def write_report_set(
     paths = {}
     for kind, (name, content) in bundle.items():
         path = report_dir / name
-        path.write_text(content)
+        path.write_text(content, encoding="utf-8")  # report has non-ASCII (✓ ≈ —); pin encoding
         paths[kind] = path
     return paths

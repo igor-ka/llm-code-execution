@@ -73,8 +73,8 @@ def main() -> None:
         report_dir=os.environ.get("REPORT_DIR", "reports"), model=model, target=target,
         findings=findings, ledger=ledger, seeds=[(s.id, s.text) for s in SEED_HYPOTHESES],
         steps=result.steps, tokens_used=result.tokens_used, tool_calls=tool_calls,
-        stopped_on_budget=result.stopped_on_budget, partial=result.partial,
-        error=result.error, transcript=result.transcript_dicts(),
+        stopped_on_budget=result.stopped_on_budget, error=result.error,
+        transcript=result.transcript_dicts(),
     )
 
     print(findings.to_markdown(target=target, partial=result.partial))

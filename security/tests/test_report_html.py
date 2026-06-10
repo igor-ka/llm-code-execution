@@ -13,7 +13,7 @@ def _render(findings, ledger, **kw):
     defaults = dict(
         target="http://backend:8000", model="claude-haiku-4-5", findings=findings,
         ledger=ledger, seeds=SEEDS, steps=5, tokens_used=1234, tool_calls=3,
-        stopped_on_budget=False, partial=False,
+        stopped_on_budget=False,
     )
     defaults.update(kw)
     return render_html_report(**defaults)
@@ -56,8 +56,8 @@ def test_uncovered_seeds_and_derived_attempts_are_surfaced():
 
 def test_partial_and_error_runs_are_flagged():
     html = _render(
-        FindingStore(), AttemptLedger(), partial=True, stopped_on_budget=True,
-        error="529 overloaded",
+        FindingStore(), AttemptLedger(), stopped_on_budget=True,
+        error="529 overloaded",  # partial is derived from stopped_on_budget/error, not passed
     )
     assert "partial run" in html and "ended on error" in html
     assert "Stopped on budget" in html
@@ -70,7 +70,7 @@ def test_write_report_set_emits_descriptive_bundle(tmp_path):
     paths = write_report_set(
         report_dir=tmp_path, model="claude-haiku-4-5", target="http://backend:8000",
         findings=FindingStore(), ledger=ledger, seeds=SEEDS,
-        steps=3, tokens_used=10, tool_calls=1, stopped_on_budget=False, partial=False,
+        steps=3, tokens_used=10, tool_calls=1, stopped_on_budget=False,
         error=None, transcript=[],
     )
     html_path = paths["html"]

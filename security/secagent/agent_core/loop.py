@@ -220,19 +220,23 @@ class _StopController:
     def _finding_count(self) -> int:
         return len(self._findings.findings) if self._findings is not None else 0
 
-    def _floor_met(self) -> bool:
-        return self._ledger is None or not self._ledger.uncovered(self._policy.required_seeds)
+    def _floor_met(self, covered: set | None = None) -> bool:
+        if self._ledger is None:
+            return True
+        covered = self._ledger.covered_seeds if covered is None else covered
+        return self._policy.required_seeds <= covered
 
     def _diminishing(self) -> bool:
         """Advance the novelty counter for this tool step; report whether returns have dried up.
         Gated on the floor, so it can never short-circuit baseline coverage."""
         if self._policy.novelty_patience <= 0:
             return False
-        covered, found = self._covered_count(), self._finding_count()
+        covered_set = self._ledger.covered_seeds if self._ledger is not None else set()
+        covered, found = len(covered_set), self._finding_count()
         progressed = covered > self._covered_seen or found > self._findings_seen
         self._covered_seen, self._findings_seen = covered, found
         self._stalled_steps = 0 if progressed else self._stalled_steps + 1
-        return self._floor_met() and self._stalled_steps >= self._policy.novelty_patience
+        return self._floor_met(covered_set) and self._stalled_steps >= self._policy.novelty_patience
 
     def wrap_up(self, step: int, tokens_used: int) -> str | None:
         """Call once per tool step. Returns the wind-down instruction to ride in with the tool

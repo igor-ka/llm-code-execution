@@ -105,7 +105,7 @@ def test_coverage_gate_names_the_uncovered_seeds():
 
 
 def test_no_gate_without_required_seeds():
-    # Backward-compatible: required_seeds defaults to None, so the model finishes when it says so.
+    # Default StoppingPolicy has empty required_seeds (no floor), so the model finishes at will.
     result = _run(_AlwaysEnd())
     assert result.steps == 1
 
