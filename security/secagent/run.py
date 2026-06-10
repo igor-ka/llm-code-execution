@@ -15,7 +15,8 @@ from anthropic import Anthropic
 
 from secagent.agent_core.keys import generate_keypair, load_keypair
 from secagent.agent_core.loop import Budget, StoppingPolicy, run_agent
-from secagent.agent_core.report import AttemptLedger, FindingStore, render_html_report
+from secagent.agent_core.html_report import render_html_report
+from secagent.agent_core.report import AttemptLedger, FindingStore
 from secagent.agent_core.tools import LogTail, LoopbackHTTP, ToolRegistry, make_generic_tools
 from secagent.modules.auth.checklist import SEED_HYPOTHESES, SEED_IDS
 from secagent.modules.auth.prompt import SYSTEM_PROMPT, initial_goal
