@@ -35,8 +35,8 @@ class LLMClient(Protocol):
 
 @dataclass
 class Budget:
-    max_steps: int = 30
-    max_total_tokens: int = 250_000  # cumulative billed tokens (input+output) across turns
+    max_steps: int = 60  # room for the 14-seed baseline (~3 steps each) + a derive phase
+    max_total_tokens: int = 350_000  # cumulative billed tokens (input+output); ~$1.3 on Sonnet
     max_response_tokens: int = 8192  # per-call output cap (roomy enough for a closing summary)
     max_history_pairs: int = 8  # sliding window: keep the last N (assistant, tool-result) pairs
     soft_fraction: float = 0.8  # at this fraction of the token budget, tell the agent to wrap up

@@ -58,8 +58,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # Agent run controls (fall back to code defaults if unset):
       LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-6}
-      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-30}
-      AGENT_MAX_TOKENS: ${AGENT_MAX_TOKENS:-250000}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-60}      # room for the 14-seed baseline + derive phase
+      AGENT_MAX_TOKENS: ${AGENT_MAX_TOKENS:-350000}  # cumulative billed-token cap (~$1.3 on Sonnet)
       AGENT_NOVELTY_PATIENCE: ${AGENT_NOVELTY_PATIENCE:-4}  # diminishing-returns stop; 0 disables
       BACKEND_LOG_FILE: /logs/backend.log
     volumes:
