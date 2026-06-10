@@ -20,6 +20,11 @@ _WRAP_UP = (
     "write your final findings summary and conclude."
 )
 
+_WRAP_UP_NOVELTY = (
+    "You have worked the full baseline and your recent attempts are no longer surfacing "
+    "anything new. Stop here — write your final findings summary and conclude."
+)
+
 
 class LLMClient(Protocol):
     """Minimal surface we need from `anthropic.Anthropic` (and from the test fake)."""
@@ -35,6 +40,17 @@ class Budget:
     max_response_tokens: int = 8192  # per-call output cap (roomy enough for a closing summary)
     max_history_pairs: int = 8  # sliding window: keep the last N (assistant, tool-result) pairs
     soft_fraction: float = 0.8  # at this fraction of the token budget, tell the agent to wrap up
+
+
+@dataclass
+class StoppingPolicy:
+    """When may the run end? The two-sided stop the session settled on: a coverage FLOOR (don't
+    quit before the baseline seeds are covered) and a novelty CEILING (wind down once returns
+    dry up). The token/step soft-limits live on Budget; these are the content-aware knobs."""
+
+    required_seeds: set[str] = field(default_factory=set)  # the coverage floor (by seed identity)
+    novelty_patience: int = 0  # consecutive no-progress steps before an early stop; 0 disables it
+    max_nudges: int = 2  # how many times the floor may nudge a premature finish
 
 
 @dataclass
@@ -129,18 +145,129 @@ def _create_with_retry(client: LLMClient, attempts: int = 3, **kwargs):
     raise last_exc
 
 
-def _coverage_nudge(ledger: Any, min_attempts: int) -> str | None:
-    """If the agent tries to finish before logging enough baseline attempts, return a nudge
-    message to keep it going; else None. Uses attempt COUNT (a robust proxy) rather than
-    fragile text-matching of which specific hypotheses were covered."""
-    done = len(ledger.attempts) if ledger is not None else 0
-    if done >= min_attempts:
-        return None
-    return (
-        f"You're stopping after logging only {done} of at least {min_attempts} baseline "
-        f"hypotheses via note_attempt. Do not finish yet: test the remaining seeded "
-        f"hypotheses (noting each outcome), then derive and test your own before concluding."
+def _usage_tokens(resp: Any) -> int:
+    """Billed tokens (input+output) for one response, tolerant of a missing usage object."""
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return 0
+    return getattr(usage, "input_tokens", 0) + getattr(usage, "output_tokens", 0)
+
+
+def _dispatch_tools(registry: ToolRegistry, content: Any) -> tuple[List[dict], List[dict]]:
+    """Run every tool_use block in an assistant turn. Returns (step_calls, tool_results):
+    the first is summarized for the transcript, the second is the API-shaped reply."""
+    step_calls, tool_results = [], []
+    for block in content:
+        if block.type == "tool_use":
+            result = registry.dispatch(block.name, dict(block.input))
+            step_calls.append(
+                {"name": block.name, "input": _clip(block.input), "result": _clip(result)}
+            )
+            tool_results.append(
+                {"type": "tool_result", "tool_use_id": block.id, "content": result}
+            )
+    return step_calls, tool_results
+
+
+def _queue_continuation(messages: List[dict]) -> None:
+    """Handle a response truncated by the per-call output cap (max_tokens) — NOT a finish.
+    Drop any partial tool_use (it would dangle without a tool_result) and ask to continue."""
+    messages[-1]["content"] = [
+        b for b in messages[-1]["content"] if b.get("type") == "text"
+    ] or [{"type": "text", "text": "(continuing)"}]
+    messages.append(
+        {
+            "role": "user",
+            "content": "Your previous response was cut off before you finished. "
+            "Continue from where you left off.",
+        }
     )
+    logger.info("response truncated (max_tokens) — asking the agent to continue")
+
+
+class _StopController:
+    """Owns both sides of "when does the run stop?" — the two-sided stop the session settled on:
+
+    - FLOOR (premature-exit guard): on an attempted finish, `nudge()` returns a message naming
+      the still-uncovered required seeds (up to `policy.max_nudges` times), else None to accept.
+      Coverage is by seed IDENTITY, not attempt count (a count gate is satisfied by duplicate
+      attempts while real seeds slip through).
+    - CEILING (graceful landing): after a tool step, `wrap_up()` returns a wind-down message
+      when any external stopping rule fires first — token soft-limit, step soft-limit (catches
+      cheap-but-chatty step-bound runs that would otherwise die on a partial at the step cap),
+      or diminishing returns (baseline covered + `policy.novelty_patience` steps with nothing
+      new). All three are *measurable* rules, not the model's self-judgment.
+
+    Once a wrap-up fires, `landing` latches True and the floor stands down — wrap-up wins over
+    the gate, so the two never fight and thrash the run to the hard cap."""
+
+    def __init__(self, budget: Budget, policy: StoppingPolicy, *, ledger: Any, findings: Any):
+        self._budget = budget
+        self._policy = policy
+        self._ledger = ledger
+        self._findings = findings
+        self._soft_tokens = int(budget.soft_fraction * budget.max_total_tokens)
+        self._soft_step = int(budget.soft_fraction * budget.max_steps)
+        self._covered_seen = self._covered_count()
+        self._findings_seen = self._finding_count()
+        self._stalled_steps = 0
+        self._nudges_used = 0
+        self.landing = False
+
+    def _covered_count(self) -> int:
+        return len(self._ledger.covered_seeds) if self._ledger is not None else 0
+
+    def _finding_count(self) -> int:
+        return len(self._findings.findings) if self._findings is not None else 0
+
+    def _floor_met(self) -> bool:
+        return self._ledger is None or not self._ledger.uncovered(self._policy.required_seeds)
+
+    def _diminishing(self) -> bool:
+        """Advance the novelty counter for this tool step; report whether returns have dried up.
+        Gated on the floor, so it can never short-circuit baseline coverage."""
+        if self._policy.novelty_patience <= 0:
+            return False
+        covered, found = self._covered_count(), self._finding_count()
+        progressed = covered > self._covered_seen or found > self._findings_seen
+        self._covered_seen, self._findings_seen = covered, found
+        self._stalled_steps = 0 if progressed else self._stalled_steps + 1
+        return self._floor_met() and self._stalled_steps >= self._policy.novelty_patience
+
+    def wrap_up(self, step: int, tokens_used: int) -> str | None:
+        """Call once per tool step. Returns the wind-down instruction to ride in with the tool
+        results (a clean graceful landing before the hard cap), or None to keep going."""
+        diminishing = self._diminishing()  # always advance the counter, even once landing
+        if self.landing or not (
+            tokens_used >= self._soft_tokens or step >= self._soft_step or diminishing
+        ):
+            return None
+        self.landing = True
+        trigger = "novelty" if diminishing else "step" if step >= self._soft_step else "token"
+        logger.info(
+            "wrap-up triggered (%s: step %d/%d, tokens %d/%d) — asking the agent to conclude",
+            trigger, step, self._budget.max_steps, tokens_used, self._budget.max_total_tokens,
+        )
+        return _WRAP_UP_NOVELTY if diminishing else _WRAP_UP
+
+    def nudge(self) -> str | None:
+        """Call when the agent tries to finish. Returns a coverage nudge naming the missing
+        seeds, or None to accept the finish. Stands down once we're landing."""
+        if self.landing or self._nudges_used >= self._policy.max_nudges:
+            return None
+        if self._ledger is None or not self._policy.required_seeds:
+            return None
+        missing = self._ledger.uncovered(self._policy.required_seeds)
+        if not missing:
+            return None
+        self._nudges_used += 1
+        logger.info("coverage nudge %d: agent tried to finish early", self._nudges_used)
+        return (
+            f"You're trying to finish, but {len(missing)} baseline hypotheses are still "
+            f"uncovered: {', '.join(sorted(missing))}. Do not conclude yet — test each "
+            f"remaining seed and tag its note_attempt with the matching seed_id, then derive "
+            f"and test your own before concluding."
+        )
 
 
 def run_agent(
@@ -152,17 +279,15 @@ def run_agent(
     registry: ToolRegistry,
     budget: Budget | None = None,
     ledger: Any = None,
-    min_attempts: int = 0,
-    max_nudges: int = 2,
+    findings: Any = None,
+    policy: StoppingPolicy | None = None,
 ) -> RunResult:
     budget = budget or Budget()
+    policy = policy or StoppingPolicy()
     messages: List[dict] = [{"role": "user", "content": initial_user}]
     tools = _cached_tools(registry.schemas())
+    stop = _StopController(budget, policy, ledger=ledger, findings=findings)
     tokens_used = 0
-    nudges_used = 0
-    wrapping_up = False
-    soft_limit = int(budget.soft_fraction * budget.max_total_tokens)
-    soft_step = int(budget.soft_fraction * budget.max_steps)
     transcript: List[StepLog] = []
 
     for step in range(1, budget.max_steps + 1):
@@ -182,38 +307,16 @@ def run_agent(
                 "(stopped: API error)", step, tokens_used, False, transcript, error=str(exc)
             )
 
-        usage = getattr(resp, "usage", None)
-        if usage is not None:
-            tokens_used += getattr(usage, "input_tokens", 0) + getattr(usage, "output_tokens", 0)
-
+        tokens_used += _usage_tokens(resp)
         messages.append({"role": "assistant", "content": _blocks_to_dicts(resp.content)})
 
         step_calls: List[dict] = []
         if resp.stop_reason == "tool_use":
-            tool_results = []
-            for block in resp.content:
-                if block.type == "tool_use":
-                    result = registry.dispatch(block.name, dict(block.input))
-                    step_calls.append(
-                        {"name": block.name, "input": _clip(block.input), "result": _clip(result)}
-                    )
-                    tool_results.append(
-                        {"type": "tool_result", "tool_use_id": block.id, "content": result}
-                    )
-            if not wrapping_up and (tokens_used >= soft_limit or step >= soft_step):
-                # Graceful landing: ride a wrap-up instruction in with the tool results (can't
-                # send two consecutive user messages) so the agent concludes before the hard cap.
-                # Triggered by WHICHEVER budget runs out first — a cheap-but-chatty run (many
-                # small steps) is step-bound and would otherwise hit the step cap without ever
-                # crossing the token soft-limit, dying on a partial instead of a clean end_turn.
-                wrapping_up = True
-                tool_results.append({"type": "text", "text": _WRAP_UP})
-                trigger = "step" if step >= soft_step else "token"
-                logger.info(
-                    "soft budget reached (%s: step %d/%d, tokens %d/%d) — asking the agent "
-                    "to wrap up", trigger, step, budget.max_steps, tokens_used,
-                    budget.max_total_tokens,
-                )
+            step_calls, tool_results = _dispatch_tools(registry, resp.content)
+            wrap_up = stop.wrap_up(step, tokens_used)
+            if wrap_up:
+                # Ride the wrap-up in with the tool results — can't send two user messages.
+                tool_results.append({"type": "text", "text": wrap_up})
             messages.append({"role": "user", "content": tool_results})
 
         transcript.append(StepLog(step, step_calls, tokens_used, resp.stop_reason))
@@ -226,33 +329,10 @@ def run_agent(
         )
 
         if resp.stop_reason == "max_tokens":
-            # Response was truncated by the per-call output cap, NOT finished. Drop any partial
-            # tool_use (it would dangle without a tool_result) and ask the agent to continue.
-            messages[-1]["content"] = [
-                b for b in messages[-1]["content"] if b.get("type") == "text"
-            ] or [{"type": "text", "text": "(continuing)"}]
-            messages.append(
-                {
-                    "role": "user",
-                    "content": "Your previous response was cut off before you finished. "
-                    "Continue from where you left off.",
-                }
-            )
-            logger.info("response truncated (max_tokens) — asking the agent to continue")
+            _queue_continuation(messages)
         elif resp.stop_reason != "tool_use":
-            # Once we've asked the agent to wrap up (soft budget hit), accept its end_turn as
-            # final — don't let the coverage gate nudge it back into testing. The two otherwise
-            # fight: wrap-up says "conclude", the gate says "keep going", and the run thrashes
-            # to the hard cap instead of landing cleanly. The gate guards against PREMATURE
-            # exit; once we're deliberately landing the run, that concern no longer applies.
-            nudge = (
-                _coverage_nudge(ledger, min_attempts)
-                if not wrapping_up and nudges_used < max_nudges
-                else None
-            )
+            nudge = stop.nudge()  # floor guards premature exit; stands down once landing
             if nudge is not None:
-                nudges_used += 1
-                logger.info("coverage nudge %d: agent tried to finish early", nudges_used)
                 messages.append({"role": "user", "content": nudge})
                 continue
             final_text = "".join(b.text for b in resp.content if b.type == "text")

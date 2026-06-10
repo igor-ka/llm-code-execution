@@ -1,7 +1,7 @@
 """Anti-premature-exit: coverage-gated termination + retry/partial-report on API errors."""
 from types import SimpleNamespace
 
-from secagent.agent_core.loop import Budget, run_agent
+from secagent.agent_core.loop import Budget, StoppingPolicy, run_agent
 from secagent.agent_core.report import AttemptLedger
 from secagent.agent_core.tools import Tool, ToolRegistry
 
@@ -50,6 +50,19 @@ class _Capturing:
         self.messages = _Messages()
 
 
+def _injected_user_text(client) -> list:
+    """All text blocks the loop rode in on USER messages (wrap-ups), across every create call.
+    Restricted to user messages so the model's own assistant text blocks aren't counted."""
+    return [
+        b["text"]
+        for call in client.calls
+        for m in call["messages"]
+        if m["role"] == "user" and isinstance(m["content"], list)
+        for b in m["content"]
+        if isinstance(b, dict) and b.get("type") == "text"
+    ]
+
+
 def _run(client, **kw):
     return run_agent(
         client=client, model="m", system="s", initial_user="go",
@@ -58,21 +71,41 @@ def _run(client, **kw):
 
 
 def test_coverage_gate_nudges_then_accepts():
-    # Ledger stays empty (the fake never calls note_attempt); min 2 attempts, up to 2 nudges.
-    result = _run(_AlwaysEnd(), ledger=AttemptLedger(), min_attempts=2, max_nudges=2)
+    # Ledger stays empty (the fake never tags a seed); two seeds required, up to 2 nudges.
+    result = _run(_AlwaysEnd(), ledger=AttemptLedger(),
+                  policy=StoppingPolicy(required_seeds={"a", "b"}, max_nudges=2))
     assert result.steps == 3  # nudged at steps 1 and 2, accepted the finish at step 3
 
 
-def test_coverage_gate_accepts_when_enough_attempts():
+def test_coverage_gate_accepts_when_seeds_covered():
     ledger = AttemptLedger()
-    ledger.add("h1", "401")
-    ledger.add("h2", "403")
-    result = _run(_AlwaysEnd(), ledger=ledger, min_attempts=2)
-    assert result.steps == 1  # baseline covered → finishes immediately, no nudge
+    ledger.add("h1", "401", seed_id="a")
+    ledger.add("h2", "403", seed_id="b")
+    result = _run(_AlwaysEnd(), ledger=ledger, policy=StoppingPolicy(required_seeds={"a", "b"}))
+    assert result.steps == 1  # every required seed covered → finishes immediately, no nudge
 
 
-def test_no_gate_without_min_attempts():
-    # Backward-compatible: min_attempts defaults to 0, so the model finishes when it says so.
+def test_coverage_gate_names_the_uncovered_seeds():
+    # Identity gate, not a count gate: covering "alg_none" twice does not satisfy the
+    # requirement for "expired" — and the nudge names the specific seed still missing.
+    ledger = AttemptLedger()
+    ledger.add("first", "401", seed_id="alg_none")
+    ledger.add("dup", "401", seed_id="alg_none")  # a dup inflates COUNT but covers nothing new
+    client = _Capturing([_end(), _end()])  # tries to finish; nudged once, then accepted
+    result = run_agent(
+        client=client, model="m", system="s", initial_user="go", registry=ToolRegistry([]),
+        ledger=ledger, policy=StoppingPolicy(required_seeds={"alg_none", "expired"}, max_nudges=1),
+    )
+    assert result.steps == 2
+    nudge_text = next(
+        m["content"] for m in client.calls[-1]["messages"]
+        if m["role"] == "user" and isinstance(m["content"], str) and "uncovered" in m["content"]
+    )
+    assert "expired" in nudge_text and "alg_none" not in nudge_text  # names the missing one only
+
+
+def test_no_gate_without_required_seeds():
+    # Backward-compatible: required_seeds defaults to None, so the model finishes when it says so.
     result = _run(_AlwaysEnd())
     assert result.steps == 1
 
@@ -182,15 +215,50 @@ def test_soft_budget_step_bound_injects_wrapup():
 
 def test_wrapup_overrides_coverage_gate():
     # The conflict: soft budget triggers wrap-up, the agent concludes (end_turn), but the
-    # ledger is short of min_attempts. The coverage gate must NOT nudge it back — wrap-up wins,
-    # so the run lands cleanly instead of thrashing to the hard cap.
+    # ledger is short of the required seeds. The coverage gate must NOT nudge it back — wrap-up
+    # wins, so the run lands cleanly instead of thrashing to the hard cap.
     reg = ToolRegistry([Tool("noop", "", {"type": "object", "properties": {}}, lambda: "ok")])
     client = _Capturing([_tool_use(usage=1), _end("summary")])  # step 1 tool, step 2 concludes
     result = run_agent(
         client=client, model="m", system="s", initial_user="go", registry=reg,
         budget=Budget(max_steps=2, soft_fraction=0.5, max_total_tokens=10_000_000),
-        ledger=AttemptLedger(), min_attempts=5, max_nudges=2,  # ledger stays empty (0 < 5)
+        ledger=AttemptLedger(),  # none covered
+        policy=StoppingPolicy(required_seeds={"a", "b", "c"}, max_nudges=2),
     )
     assert result.final_text == "summary"  # accepted the conclusion despite short coverage
     assert result.steps == 2
     assert result.stopped_on_budget is False  # landed cleanly, not nudged into the step cap
+
+
+def test_novelty_stop_wraps_up_once_floor_met_and_progress_stalls():
+    # Diminishing returns: the baseline floor is already met (seed "a" covered), and the model
+    # keeps making tool calls that surface nothing new. After novelty_patience unproductive
+    # steps the loop rides in a wrap-up, and the run lands cleanly — NOT on the budget cap.
+    reg = ToolRegistry([Tool("noop", "", {"type": "object", "properties": {}}, lambda: "ok")])
+    ledger = AttemptLedger()
+    ledger.add("baseline", "401", seed_id="a")  # floor for required_seeds={"a"} already met
+    client = _Capturing([_tool_use(usage=1), _tool_use(usage=1), _end("summary")])
+    result = run_agent(
+        client=client, model="m", system="s", initial_user="go", registry=reg,
+        budget=Budget(max_steps=10, max_total_tokens=10_000_000),  # budget nowhere near binding
+        ledger=ledger, policy=StoppingPolicy(required_seeds={"a"}, novelty_patience=2),
+    )
+    assert result.final_text == "summary"
+    assert result.stopped_on_budget is False  # productive early stop, not a budget landing
+    # a wrap-up instruction must have ridden in on some user message (patience exhausted).
+    assert any("new" in t.lower() for t in _injected_user_text(client))
+
+
+def test_novelty_stop_never_fires_before_the_floor_is_met():
+    # Guard: diminishing returns must NEVER short-circuit the baseline. With an uncovered seed,
+    # no amount of unproductive steps should trigger the novelty wrap-up.
+    reg = ToolRegistry([Tool("noop", "", {"type": "object", "properties": {}}, lambda: "ok")])
+    client = _Capturing([_tool_use(usage=1), _tool_use(usage=1), _tool_use(usage=1), _end("x")])
+    run_agent(
+        client=client, model="m", system="s", initial_user="go", registry=reg,
+        budget=Budget(max_steps=10, max_total_tokens=10_000_000),
+        ledger=AttemptLedger(),  # "a" never covered
+        # max_nudges=0: don't nudge on the final end_turn — keep the scripted run finite
+        policy=StoppingPolicy(required_seeds={"a"}, novelty_patience=1, max_nudges=0),
+    )
+    assert _injected_user_text(client) == []  # floor never met → no wrap-up ever injected
