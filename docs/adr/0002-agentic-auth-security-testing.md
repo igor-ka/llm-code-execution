@@ -16,9 +16,12 @@ doesn't), which suits both a hand-built agent and an honest eval.
 
 ## Decision
 
-1. **Build a custom auth-bypass agent** with the **Claude Agent SDK** as the primary
-   deliverable. Building the loop once is the lesson; it also avoids sending a private repo to a
-   third-party SaaS agent. Architecture in the linked design doc.
+1. **Build a custom auth-bypass agent** as the primary deliverable, with the ReAct loop written
+   **by hand on the Anthropic Messages tool-use API** (not `claude_agent_sdk`): making the loop
+   visible — turn accounting, tool dispatch, budget caps, sliding-window history — *is* the
+   lesson, and a framework loop would hide it. `claude_agent_sdk` is noted as a future swap-in,
+   localized to `agent_core/loop.py`. Building the loop once also avoids sending a private repo
+   to a third-party SaaS agent. Architecture in the linked design doc.
 2. **Adopt Strix as the OSS benchmark baseline** — the most directly competitive autonomous
    agent (it validates findings with PoCs and explicitly targets auth bypass) — and run it
    against the same target to diff findings against the custom agent. CAI is kept as a secondary
@@ -85,8 +88,10 @@ $40M Series C Mar 2026), **Pentera** (~€46k/yr), **Terra Security** (€15k+/y
 - New top-level `security/` tree (agent, mock OIDC, eval) with its own `verify.sh` mirroring CI,
   per CLAUDE.md. If a CI job is added, the job-name contract applies.
 - Runs need an `ANTHROPIC_API_KEY` and spend tokens per run; budgets are capped (design §4, §8).
-- The eval's "real `auth.py` → zero findings" target doubles as a **regression guard** on the
-  auth code from ADR 0001.
+- The eval scores against ground truth in three buckets — mutants (must-find), `real_auth`
+  (credits the auth code's *known* findings, e.g. empty-`sub` accepted), and non-issues
+  (spec-compliant behavior to ignore). This doubles as a **regression guard** on the auth code
+  from ADR 0001: new false positives or missed known findings fail the eval.
 - Decision is revisitable: if this app ever heads toward production multi-tenant use, revisit
   **Escape** (free single-API tier first) for a production-grade posture.
 - The agent core is built domain-agnostic, so future capability modules (BOLA, injection, SSRF,
