@@ -34,7 +34,8 @@ Two deliberately separate scopes, mirroring how internal SDL testing works:
 
 ```
                     ┌──────────────────────────────────────────────┐
-                    │  auth-bypass agent (Claude Agent SDK)          │
+                    │  auth-bypass agent (hand-rolled on the         │
+                    │  Anthropic Messages tool-use API)              │
                     │  - red-team system prompt + methodology        │
                     │  - ReAct loop w/ step & token budget caps      │
                     │  - reads auth.py for hypotheses (read scope)   │
@@ -81,7 +82,7 @@ key the backend should not trust and see if it's accepted).
 All network tools **refuse any non-loopback host**. The agent has no repo write access except
 the report output path.
 
-### 4. The agent (Claude Agent SDK)
+### 4. The agent (hand-rolled on the Anthropic Messages tool-use API)
 - **System prompt:** red-team auth tester persona; explicit scope/guardrails (loopback TUT
   only); required output schema.
 - **Two-phase methodology — baseline, then derive.** This is the core of the design:
@@ -98,8 +99,22 @@ the report output path.
   call → observe → **reflect: what did that response reveal, and what new hypothesis does it
   suggest?** → record → next*. Observations feed forward into fresh hypotheses rather than the
   agent merely walking a fixed list.
-- **Budget:** hard caps on steps and tokens with graceful termination + a partial report on
-  overrun. (Building this cap by hand is one of the lessons — it's the "20%" a framework hides.)
+- **Termination — a budget-driven graceful landing, not autonomous self-termination.** This is
+  open-ended red-teaming ("find *any* bypass"), so there is no internal "done" the model can
+  evaluate; empirically neither Haiku nor Sonnet ever ends a run on its own. The correct model
+  is therefore an **external stopping rule**: hard caps on steps/tokens, and *before* the hard
+  cap a soft-budget **wrap-up** that asks the agent to conclude so the run lands on a clean
+  summary rather than a truncated partial. Three stopping rules fire whichever comes first —
+  token soft-limit, step soft-limit, and **diminishing returns** (once the baseline floor is
+  covered, N steps with nothing new). A partial report is still emitted on a hard overrun.
+- **Coverage by identity, not count.** The baseline floor is gated on the *set of seed ids*
+  actually tested (each `note_attempt` tags a `seed_id`), so duplicate attempts can't satisfy
+  the gate while real seeds slip through; the floor-nudge names the specific missing seeds. The
+  floor (don't quit early) and the diminishing-returns ceiling (don't wander) are the two sides
+  of one `_StopController`. (Building these by hand is one of the lessons — the "20%" a
+  framework hides.)
+- **Report:** each run emits a descriptively-named, non-clobbering bundle — an at-a-glance HTML
+  report (findings, seed coverage, attempt ledger, transcript) plus markdown + JSON artifacts.
 
 ### 5. Attack checklist (seed — the floor, not the ceiling)
 This is the **baseline coverage** for phase 1 (§4), *not* the full test plan — the agent derives

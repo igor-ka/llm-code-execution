@@ -129,10 +129,12 @@ def make_generic_tools(
     findings: FindingStore,
     ledger: Optional[AttemptLedger] = None,
     logs: Optional[LogTail] = None,
+    seed_ids: Optional[set] = None,
 ) -> List[Tool]:
     """Tools reusable by any capability module: probe an endpoint, record a finding,
     optionally note a tested hypothesis to durable memory (ledger), and read the target's
-    server logs (logs)."""
+    server logs (logs). When `seed_ids` is given, note_attempt gains a validated `seed_id`
+    parameter so baseline coverage can be tracked by identity (see the coverage gate)."""
 
     def call_endpoint(
         method: str, path: str, token: Optional[str] = None, body: Optional[dict] = None
@@ -213,9 +215,28 @@ def make_generic_tools(
     ]
 
     if ledger is not None:
+        known = sorted(seed_ids) if seed_ids else []
 
-        def note_attempt(hypothesis: str, outcome: str) -> str:
-            return ledger.add(hypothesis, outcome)
+        def note_attempt(
+            hypothesis: str, outcome: str, seed_id: Optional[str] = None
+        ) -> str:
+            if seed_id and known and seed_id not in known:
+                return f"ERROR: unknown seed_id {seed_id!r}; known ids: {known}"
+            return ledger.add(hypothesis, outcome, seed_id=seed_id)
+
+        properties: Dict[str, Any] = {
+            "hypothesis": {"type": "string"},
+            "outcome": {"type": "string"},
+        }
+        if known:
+            properties["seed_id"] = {
+                "type": "string",
+                "enum": known,
+                "description": (
+                    "If this attempt addresses one of the seeded baseline hypotheses, its "
+                    "id (so coverage is tracked by identity). Omit for derived hypotheses."
+                ),
+            }
 
         tools.append(
             Tool(
@@ -223,14 +244,12 @@ def make_generic_tools(
                 description=(
                     "Record that you tested a hypothesis and what happened (e.g. 'rejected "
                     "with 401'). Call this after each test so you don't repeat work — the "
-                    "ledger is kept even when older conversation is trimmed."
+                    "ledger is kept even when older conversation is trimmed. Pass seed_id "
+                    "when the attempt covers a seeded baseline hypothesis."
                 ),
                 input_schema={
                     "type": "object",
-                    "properties": {
-                        "hypothesis": {"type": "string"},
-                        "outcome": {"type": "string"},
-                    },
+                    "properties": properties,
                     "required": ["hypothesis", "outcome"],
                 },
                 handler=note_attempt,

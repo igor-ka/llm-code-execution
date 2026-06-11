@@ -1,22 +1,21 @@
 """Live entrypoint: wire the core + auth module and run the agent against a local target.
 
-Spends Anthropic credits. Reads config from env (see security/README.md). Writes a
-markdown + JSON findings report.
+Spends Anthropic credits. Reads config from env (see security/README.md). Writes a per-run,
+descriptively-named report set: an at-a-glance HTML report plus markdown + JSON artifacts.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
-import pathlib
 
 from anthropic import Anthropic
 
+from secagent.agent_core.html_report import write_report_set
 from secagent.agent_core.keys import generate_keypair, load_keypair
-from secagent.agent_core.loop import Budget, run_agent
+from secagent.agent_core.loop import Budget, StoppingPolicy, run_agent
 from secagent.agent_core.report import AttemptLedger, FindingStore
 from secagent.agent_core.tools import LogTail, LoopbackHTTP, ToolRegistry, make_generic_tools
-from secagent.modules.auth.checklist import SEED_HYPOTHESES
+from secagent.modules.auth.checklist import SEED_HYPOTHESES, SEED_IDS
 from secagent.modules.auth.prompt import SYSTEM_PROMPT, initial_goal
 from secagent.modules.auth.tools import make_auth_tools
 
@@ -36,6 +35,9 @@ def main() -> None:
         max_steps=int(os.environ.get("AGENT_MAX_STEPS", Budget.max_steps)),
         max_total_tokens=int(os.environ.get("AGENT_MAX_TOKENS", Budget.max_total_tokens)),
     )
+    # Diminishing-returns stop: land the run once the baseline is covered and this many
+    # consecutive steps surface nothing new. 0 disables it (budget-only landing).
+    novelty_patience = int(os.environ.get("AGENT_NOVELTY_PATIENCE", 4))
 
     signing = load_keypair(key_dir, "signing")  # must match the mock OIDC's JWKS
     rogue = generate_keypair("rogue-key")  # ephemeral; NOT in the JWKS
@@ -45,7 +47,7 @@ def main() -> None:
     ledger = AttemptLedger()  # durable memory of what's been tried (survives context trimming)
     logs = LogTail(os.environ.get("BACKEND_LOG_FILE", "/logs/backend.log"))  # read-only tail
     registry = ToolRegistry(
-        make_generic_tools(http, findings, ledger, logs=logs)
+        make_generic_tools(http, findings, ledger, logs=logs, seed_ids=SEED_IDS)
         + make_auth_tools(
             http=http, signing=signing, rogue=rogue, issuer=issuer, audience=audience
         )
@@ -59,22 +61,35 @@ def main() -> None:
         registry=registry,
         budget=budget,
         ledger=ledger,
+        findings=findings,  # feeds the diminishing-returns stop (a new finding is "progress")
+        policy=StoppingPolicy(
+            required_seeds=SEED_IDS,  # don't accept "done" before every baseline seed is covered
+            novelty_patience=novelty_patience,
+        ),
     )
 
-    report_dir = pathlib.Path(os.environ.get("REPORT_DIR", "reports"))
-    report_dir.mkdir(parents=True, exist_ok=True)
-    md = findings.to_markdown(target=target, partial=result.stopped_on_budget)
-    (report_dir / "findings.md").write_text(md)
-    (report_dir / "findings.json").write_text(findings.to_json())
-    # The transcript is the audit trail: which hypotheses the agent actually fired.
-    (report_dir / "transcript.json").write_text(json.dumps(result.transcript_dicts(), indent=2))
-    (report_dir / "attempts.json").write_text(json.dumps(ledger.attempts, indent=2))
-    print(md)
+    tool_calls = sum(len(s.tool_calls) for s in result.transcript)
+    paths = write_report_set(
+        report_dir=os.environ.get("REPORT_DIR", "reports"), model=model, target=target,
+        findings=findings, ledger=ledger, seeds=[(s.id, s.text) for s in SEED_HYPOTHESES],
+        steps=result.steps, tokens_used=result.tokens_used, tool_calls=tool_calls,
+        stopped_on_budget=result.stopped_on_budget, error=result.error,
+        transcript=result.transcript_dicts(),
+    )
+
+    print(findings.to_markdown(target=target, partial=result.partial))
+    if result.error:
+        print(f"\n[!] run ended on error: {result.error}")
+    uncovered = ledger.uncovered(SEED_IDS)
     print(
         f"\n[steps={result.steps} tokens≈{result.tokens_used} "
-        f"budget_stop={result.stopped_on_budget} tool_calls="
-        f"{sum(len(s.tool_calls) for s in result.transcript)}]"
+        f"budget_stop={result.stopped_on_budget} attempts={len(ledger.attempts)} "
+        f"tool_calls={tool_calls} "
+        f"seeds_covered={len(SEED_IDS) - len(uncovered)}/{len(SEED_IDS)}"
+        + (f" uncovered={sorted(uncovered)}" if uncovered else "")
+        + "]"
     )
+    print(f"\n[report] {paths['html']}")
 
 
 if __name__ == "__main__":
