@@ -89,13 +89,21 @@ def _first(d: dict, *keys: str, default: str = "") -> str:
 
 
 def normalize_strix(raw) -> List[dict]:
-    """Best-effort map of Strix output to our finding-dict shape (text fields only).
+    """Map Strix output to our finding-dict shape (text fields only, for keyword matching).
 
-    PROVISIONAL: accepts a list, or a dict wrapping the list under findings/results/
-    vulnerabilities, and aliases common field names. Revisit once Strix's real schema is seen.
+    SCHEMA (observed, Strix 1.0.4): a run that finds vulnerabilities writes a top-level
+    ``vulnerabilities.json`` in ``strix_runs/<run>/`` — a LIST of objects with fields
+    ``title, severity, description, impact, technical_analysis, poc_description,
+    poc_script_code, remediation_steps, cvss, cwe, endpoint, method`` (see the per-vuln
+    markdown under ``vulnerabilities/`` too). Feed THAT file to compare.py, not ``run.json``
+    (which is narrative-only: ``scan_results`` summaries, no findings list — a clean run has
+    no ``vulnerabilities.json`` at all, so this yields []). Do NOT mine the narrative for
+    findings: it describes attacks as *tested-and-safe*, which would manufacture false positives.
+
+    Tolerant of a bare list or a dict wrapping it under findings/results/vulnerabilities/issues.
     """
     if isinstance(raw, dict):
-        for key in ("findings", "results", "vulnerabilities", "issues"):
+        for key in ("vulnerabilities", "findings", "results", "issues"):
             if isinstance(raw.get(key), list):
                 raw = raw[key]
                 break
@@ -108,9 +116,16 @@ def normalize_strix(raw) -> List[dict]:
         out.append(
             {
                 "title": _first(item, "title", "name", "summary", "vulnerability", "type"),
-                "hypothesis": _first(item, "description", "details", "explanation"),
-                "evidence": _first(item, "evidence", "proof", "poc", "reproduction", "details"),
-                "recommendation": _first(item, "recommendation", "remediation", "fix", "mitigation"),
+                "hypothesis": _first(
+                    item, "description", "impact", "technical_analysis", "details", "explanation"
+                ),
+                "evidence": _first(
+                    item, "poc_description", "poc_script_code", "technical_analysis",
+                    "evidence", "proof", "poc", "reproduction", "details",
+                ),
+                "recommendation": _first(
+                    item, "remediation_steps", "recommendation", "remediation", "fix", "mitigation"
+                ),
             }
         )
     return out

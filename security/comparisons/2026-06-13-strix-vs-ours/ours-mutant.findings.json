@@ -1,0 +1,18 @@
+[
+  {
+    "severity": "high",
+    "title": "Expired tokens are accepted \u2014 JWT exp claim is not validated",
+    "hypothesis": "The server does not validate the JWT `exp` (expiration time) claim, allowing tokens that expired years ago to be accepted.",
+    "repro": "1. Mint a token with `exp: 1000000000` (September 9, 2001) and scope 'execute:code', signed with the trusted key.\n2. POST /api/execute with Bearer token and body {\"prompt\": \"hi\"}.\n3. The request succeeds (200 OK) instead of being rejected (401).",
+    "evidence": "Token with exp=1000000000 (far in the past) was accepted and returned 200 with full response, proving expiry validation is missing.",
+    "recommendation": "Implement proper JWT expiry validation: the server must reject any token where `exp` \u2264 current_time_in_seconds. This is a standard JWT validation step per RFC 7519."
+  },
+  {
+    "severity": "critical",
+    "title": "Expired Token Accepted - Token Expiration Validation Broken",
+    "hypothesis": "An expired token (with exp claim set to the past) should be rejected with 401, but the server accepts it with 200 OK.",
+    "repro": "Mint a valid token with exp=1000000000 (far in the past, e.g., 2001-09-09). All other claims valid: iss='http://mock-oidc:9000/', aud='https://api.local', sub set, scope='execute:code', properly signed with the trusted signing key. POST /api/execute with this token and body {\"prompt\": \"hi\"}. The endpoint returns 200 OK and executes the request, instead of rejecting with 401.",
+    "evidence": "Baseline test [expired] noted: \"Token with exp=1000000000 (far in the past) was ACCEPTED with 200, suggesting expiry validation is broken or missing\"",
+    "recommendation": "Implement or verify proper JWT expiration validation. The server must check that the current time is before the exp claim and reject any token with exp in the past (or present, if equal to current time) with a 401 Unauthorized response. This should occur before or during token validation, not after authorization succeeds."
+  }
+]

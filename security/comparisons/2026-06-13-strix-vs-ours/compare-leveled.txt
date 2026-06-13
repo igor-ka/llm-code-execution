@@ -1,0 +1,43 @@
+# Baseline comparison
+
+|                | our agent | Strix |
+|----------------|:----:|:----:|
+| recall         | 1.00 | 1.00 |
+| precision      | 1.00 | 1.00 |
+| unmatched (investigate) | 0 | 0 |
+
+- **Found by both:** expiry-bypass
+- **Only our agent:** —
+- **Only Strix:** —
+- **Missed by both:** —
+
+{
+  "ours": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "true_positives": [
+      "expiry-bypass"
+    ],
+    "false_negatives": [],
+    "false_positives": 0,
+    "ignored_non_issues": []
+  },
+  "theirs": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "true_positives": [
+      "expiry-bypass"
+    ],
+    "false_negatives": [],
+    "false_positives": 0,
+    "ignored_non_issues": []
+  },
+  "shared": [
+    "expiry-bypass"
+  ],
+  "ours_only": [],
+  "theirs_only": [],
+  "missed_by_both": [],
+  "ours_unmatched": 0,
+  "theirs_unmatched": 0
+}

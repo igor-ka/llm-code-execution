@@ -1,0 +1,43 @@
+# Baseline comparison
+
+|                | our agent | Strix |
+|----------------|:----:|:----:|
+| recall         | 0.00 | 0.00 |
+| precision      | 1.00 | 1.00 |
+| unmatched (investigate) | 0 | 0 |
+
+- **Found by both:** —
+- **Only our agent:** —
+- **Only Strix:** —
+- **Missed by both:** empty-sub
+
+{
+  "ours": {
+    "precision": 1.0,
+    "recall": 0.0,
+    "true_positives": [],
+    "false_negatives": [
+      "empty-sub"
+    ],
+    "false_positives": 0,
+    "ignored_non_issues": []
+  },
+  "theirs": {
+    "precision": 1.0,
+    "recall": 0.0,
+    "true_positives": [],
+    "false_negatives": [
+      "empty-sub"
+    ],
+    "false_positives": 0,
+    "ignored_non_issues": []
+  },
+  "shared": [],
+  "ours_only": [],
+  "theirs_only": [],
+  "missed_by_both": [
+    "empty-sub"
+  ],
+  "ours_unmatched": 0,
+  "theirs_unmatched": 0
+}

@@ -95,20 +95,33 @@ leaves your machine). It runs locally; this harness doesn't run it for you.
 #    the runner prints the exact path; <run> = auth-<model>-<timestamp>)
 # 2. run Strix against the running stack (uses YOUR LLM key; or a local model for $0):
 curl -sSL https://strix.ai/install | bash
-export STRIX_LLM=anthropic/claude-sonnet-4-6 LLM_API_KEY=sk-ant-...   # or a local model
-strix --target http://localhost:8000          # backend stack must be up
-# 3. diff the two against ground truth (`real_auth`, or a mutant name):
+export STRIX_LLM=anthropic/claude-haiku-4-5 LLM_API_KEY=sk-ant-...   # or a local model
+# Strix probes from its Docker sandbox, so target host.docker.internal, not localhost:
+strix -n --target http://host.docker.internal:8000   # backend stack must be up
+# 3. diff the two against ground truth (`real_auth`, or a mutant name) — feed Strix's
+#    vulnerabilities.json (the findings LIST), NOT run.json (which is narrative-only):
 python -m secagent.agent_core.compare \
-    reports/<run>.findings.json strix_runs/<run>/<results>.json real_auth
+    reports/<run>.findings.json strix_runs/<run>/vulnerabilities.json real_auth
 ```
 
 The report shows recall/precision for each tool and, per ground-truth id, who found it (shared /
 ours-only / theirs-only / missed-by-both), plus each tool's **unmatched** findings — candidates
 to either promote into ground truth or dismiss as false positives.
 
-> Strix's on-disk result schema isn't documented, so `normalize_strix` in `compare.py` is a
-> tolerant, **provisional** adapter over common field names — adjust it to the real schema after
-> the first Strix run.
+> **Strix result schema (observed, 1.0.4):** a run that finds vulnerabilities writes
+> `strix_runs/<run>/vulnerabilities.json` — a list of objects (`title, severity, description,
+> impact, technical_analysis, poc_description, remediation_steps, cvss, cwe, …`). `run.json` is
+> narrative-only (no findings list); a clean run has no `vulnerabilities.json`. `normalize_strix`
+> maps the list's text fields; it deliberately does **not** mine the narrative (which describes
+> attacks as *tested-and-safe* → would manufacture false positives).
+>
+> **Apples-to-apples caveat (see `comparisons/2026-06-13-strix-vs-ours/`):** our agent is handed
+> the mock IdP signing key + `mint_token` — a privileged test fixture, **not** "white-box" — so
+> it can reach validation logic *behind* the signature gate (e.g. expiry/audience bugs). A
+> black-box tool without that key cannot, and will miss such bugs regardless of skill. To compare
+> fairly on key-gated bugs, hand Strix the same credential (a pre-minted validly-signed token).
+> Doing so flipped Strix from miss→catch on the expiry mutant, and a narrow credentialed scope
+> also cut its cost from ~$3 to ~$0.17 per run.
 
 ## Safety
 

@@ -1,0 +1,31 @@
+[
+  {
+    "id": "vuln-0001",
+    "title": "JWT Expiration Not Validated in POST /api/execute",
+    "severity": "critical",
+    "timestamp": "2026-06-13 17:08:29 UTC",
+    "description": "The /api/execute endpoint accepts an expired JWT token in the Authorization Bearer header without validating the token's expiration time. A token with exp claim in the past (1781366833 = expired) was accepted and processed successfully, indicating the server does not check token expiration during validation.",
+    "impact": "An attacker who obtains a valid JWT token (even if expired) can use it indefinitely to authenticate to the /api/execute endpoint. This bypasses token expiration as a security control. Combined with token theft or leaked credentials, attackers gain persistent unauthorized access without needing to re-authenticate.",
+    "target": "http://host.docker.internal:8000",
+    "technical_analysis": "The application validates JWT signatures but fails to check the `exp` (expiration) claim. An expired token with a valid RSA256 signature is accepted, allowing an attacker to replay old tokens indefinitely. The standard JWT validation flow should:\n1. Verify the signature (app does this correctly)\n2. Check token expiration against current time (app does NOT do this)\n3. Validate other claims (issuer, audience, scope)\n\nWithout expiration validation, compromised tokens remain valid forever.",
+    "poc_description": "1. Obtain an expired JWT token with valid signature but exp claim in the past\n2. Send POST request to http://host.docker.internal:8000/api/execute with body {\"prompt\":\"hi\"}\n3. Set Authorization header to \"Bearer {expired_token}\"\n4. Server returns HTTP 200 and processes the request\n5. Expected behavior: Server should return HTTP 401 Unauthorized",
+    "poc_script_code": "import requests\n\nurl = \"http://host.docker.internal:8000/api/execute\"\nbody = {\"prompt\": \"hi\"}\n\n# Expired token (exp: 1781366833 is in the past)\nexpired_token = \"<REDACTED-JWT>\"\n\nresp = requests.post(\n    url,\n    json=body,\n    headers={\"Authorization\": f\"Bearer {expired_token}\"},\n    timeout=10\n)\n\nprint(f\"Status: {resp.status_code}\")\nprint(f\"Expected: 401, Got: {resp.status_code}\")\nif resp.status_code == 200:\n    print(\"VULNERABILITY: Expired token was accepted\")",
+    "remediation_steps": "1. Update JWT validation logic to explicitly check the `exp` claim\n2. Compare current time (in seconds since epoch) against the token's exp value\n3. Reject any token where current_time >= exp with HTTP 401 Unauthorized\n4. Use a standard JWT library (e.g., PyJWT, jsonwebtoken) which validates expiration by default when verify() is called with the correct parameters\n5. Test token expiration enforcement with expired tokens before deploying",
+    "cvss": 10.0,
+    "cvss_breakdown": {
+      "attack_vector": "N",
+      "attack_complexity": "L",
+      "privileges_required": "N",
+      "user_interaction": "N",
+      "scope": "C",
+      "confidentiality": "H",
+      "integrity": "H",
+      "availability": "N"
+    },
+    "endpoint": "/api/execute",
+    "method": "POST",
+    "cwe": "CWE-613",
+    "agent_id": "253e6788",
+    "agent_name": "strix"
+  }
+]

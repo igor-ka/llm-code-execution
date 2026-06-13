@@ -51,6 +51,34 @@ def test_normalize_strix_aliases_and_wrappers():
     assert normalize_strix("not a list") == []
 
 
+def test_normalize_strix_real_schema():
+    # Real Strix 1.0.4 vulnerabilities.json shape (one finding object, fields per observed schema).
+    # The mapped text must carry the keywords ground truth matches on (here: expiry).
+    raw = [
+        {
+            "id": "vuln-0001",
+            "title": "JWT Expiration Not Validated in POST /api/execute",
+            "severity": "critical",
+            "description": "The endpoint accepts an expired JWT without validating exp.",
+            "impact": "A leaked token works indefinitely.",
+            "technical_analysis": "Signature is verified but the exp claim is not checked.",
+            "poc_description": "Replay an expired but validly-signed token; 200 is returned.",
+            "poc_script_code": "requests.post(url, headers={'Authorization': 'Bearer <jwt>'})",
+            "remediation_steps": "Validate the exp claim against current time.",
+            "cwe": "CWE-613",
+        }
+    ]
+    out = normalize_strix(raw)
+    assert len(out) == 1
+    f = out[0]
+    assert f["title"].startswith("JWT Expiration")
+    assert "exp" in f["hypothesis"]  # description carried over
+    assert "expired" in f["evidence"]  # poc_description carried over (not blank)
+    assert "exp claim" in f["recommendation"]  # remediation_steps carried over
+    blob = " ".join(f.values()).lower()
+    assert "expir" in blob  # matches ground-truth expiry-bypass keywords
+
+
 def test_markdown_renders_rows():
     result = compare([_finding("alpha-bug")], normalize_strix([]), EXPECTED, non_issues=[])
     md = result.to_markdown(theirs_name="Strix")
