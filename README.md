@@ -159,7 +159,9 @@ it just enough for HMR.
   restricted socket proxy, or the planned `CloudRunBackend` (which removes the socket entirely).
 - Internal exception detail is surfaced in some error responses; HTTP only (no TLS).
 
-These map directly to the Roadmap below. See the in-repo security review notes for detail.
+These map directly to the Roadmap below. The auth gate is regression-tested in
+`backend/tests/` (battery + mutation coverage); see the auth-bypass-agent retrospective
+(`docs/design/auth-bypass-agent.md`) for how that testing was arrived at.
 
 ## Verification
 

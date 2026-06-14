@@ -1,8 +1,0 @@
-# Generated signing keys (never commit private keys)
-keys/
-*.pem
-
-# Agent run output
-reports/
-__pycache__/
-.pytest_cache/
