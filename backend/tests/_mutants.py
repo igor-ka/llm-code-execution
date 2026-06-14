@@ -1,22 +1,23 @@
-"""Deliberately-broken variants of the auth check — the eval's ground truth.
+"""Deliberately-broken variants of the auth check — mutation-testing fixtures.
 
-Each mutant mirrors the real `app.auth` logic but plants exactly one hole. The eval runs the
-agent against each and checks it reports the planted weakness (true positive); the agent must
-report nothing against the real `auth.py` (the regression guard, covered in test_auth_endpoint).
+Each mutant mirrors `app.auth.require_principal`'s verification but plants exactly one hole, and
+returns an HTTP status (200 accepted / 401 unauthenticated / 403 forbidden) as a pure function —
+no server, no network. `test_auth_mutation.py` asserts each planted hole is ACCEPTED by its
+mutant yet REJECTED by the real gate, proving the regression battery has the sensitivity to catch
+that class of bug.
 
-Mutants are pure functions returning an HTTP status (200 accepted / 401 unauthenticated /
-403 forbidden) so they can be checked offline without a server or token spend.
+Note: an "HS256 allowed" mutant is not a valid ground truth — modern PyJWT refuses an asymmetric
+public key as an HMAC secret (InvalidKeyError) on both encode and decode, so the RS256/HS256
+key-confusion attack is mitigated regardless of the algorithms list. We use PyJWT-exploitable
+flaws instead.
 """
 from __future__ import annotations
 
-from typing import Callable, Dict, Optional
+from typing import Optional
 
 import jwt
 
 REQUIRED_SCOPE = "execute:code"
-
-# A mutant verifies a presented bearer token against the trusted public key.
-Mutant = Callable[..., int]
 
 
 def _has_scope(claims: dict) -> bool:
@@ -28,23 +29,13 @@ def _has_scope(claims: dict) -> bool:
     return isinstance(perms, list) and REQUIRED_SCOPE in perms
 
 
-# Note: an "HS256 allowed" mutant would NOT be a valid ground truth here — modern PyJWT refuses
-# to use an asymmetric/public key as an HMAC secret (InvalidKeyError) on both encode and decode,
-# so the classic RS256/HS256 key-confusion attack is mitigated regardless of the algorithms list.
-# We use exploitable-under-PyJWT flaws instead.
-
-
-def expiry_not_checked(token: Optional[str], *, public_pem: str, issuer: str, audience: str) -> int:
+def expiry_not_checked(token: Optional[str], *, public_key, issuer: str, audience: str) -> int:
     """FLAW: token expiry is not verified, so an expired token is still accepted."""
     if not token:
         return 401
     try:
         claims = jwt.decode(
-            token,
-            public_pem,
-            algorithms=["RS256"],
-            audience=audience,
-            issuer=issuer,
+            token, public_key, algorithms=["RS256"], audience=audience, issuer=issuer,
             options={"require": ["iss", "aud"], "verify_exp": False},  # <-- planted hole
         )
     except jwt.PyJWTError:
@@ -52,13 +43,13 @@ def expiry_not_checked(token: Optional[str], *, public_pem: str, issuer: str, au
     return 200 if _has_scope(claims) else 403
 
 
-def substring_scope(token: Optional[str], *, public_pem: str, issuer: str, audience: str) -> int:
+def substring_scope(token: Optional[str], *, public_key, issuer: str, audience: str) -> int:
     """FLAW: scope checked by substring, so 'execute:codex' satisfies 'execute:code'."""
     if not token:
         return 401
     try:
         claims = jwt.decode(
-            token, public_pem, algorithms=["RS256"], audience=audience, issuer=issuer,
+            token, public_key, algorithms=["RS256"], audience=audience, issuer=issuer,
             options={"require": ["exp", "iss", "aud"]},
         )
     except jwt.PyJWTError:
@@ -67,15 +58,13 @@ def substring_scope(token: Optional[str], *, public_pem: str, issuer: str, audie
     return 200 if REQUIRED_SCOPE in scope else 403  # <-- substring, not split
 
 
-def audience_not_checked(
-    token: Optional[str], *, public_pem: str, issuer: str, audience: str
-) -> int:
+def audience_not_checked(token: Optional[str], *, public_key, issuer: str, audience: str) -> int:
     """FLAW: audience is not verified, so a token minted for any audience is accepted."""
     if not token:
         return 401
     try:
         claims = jwt.decode(
-            token, public_pem, algorithms=["RS256"], issuer=issuer,
+            token, public_key, algorithms=["RS256"], issuer=issuer,
             options={"require": ["exp", "iss"], "verify_aud": False},  # <-- planted hole
         )
     except jwt.PyJWTError:
@@ -83,12 +72,12 @@ def audience_not_checked(
     return 200 if _has_scope(claims) else 403
 
 
-def auth_disabled(token: Optional[str], *, public_pem: str, issuer: str, audience: str) -> int:
+def auth_disabled(token: Optional[str], *, public_key, issuer: str, audience: str) -> int:
     """FLAW: the gate is effectively off (e.g. AUTH_REQUIRED defaulting False)."""
     return 200  # <-- accepts everything, even with no token
 
 
-MUTANTS: Dict[str, Mutant] = {
+MUTANTS = {
     "expiry_not_checked": expiry_not_checked,
     "substring_scope": substring_scope,
     "audience_not_checked": audience_not_checked,

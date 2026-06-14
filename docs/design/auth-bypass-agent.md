@@ -1,216 +1,67 @@
-# Design: custom auth-bypass agent
+# Auth-bypass agent — retrospective & retirement
 
-- **Status:** Draft
-- **Date:** 2026-06-05
-- **Related:** ADR [0002](../adr/0002-agentic-auth-security-testing.md), auth ADR [0001](../adr/0001-authentication-approach.md)
-- **Tracking:** epic (see ADR 0002)
+- **Status:** Retired (2026-06-14). Superseded by deterministic, mutation-covered auth tests in
+  `backend/tests/` (`test_auth.py` + `test_auth_mutation.py`), which run in CI under *Backend
+  checks*. This doc preserves the learning; the agent code under `security/` has been deleted.
+- **Epic:** #19. Prior decision record: ADR 0002 (now marked Superseded).
 
-## Purpose
+## What it was
+A learning project: a custom OIDC/JWT auth red-team agent for our own app's `POST /api/execute`
+gate. The whole point was to *build the loop by hand* on the Anthropic Messages tool-use API
+(not a framework) and see what an agentic security tester does. It worked: across many runs it
+found **0 false findings** against the real `auth.py` and caught planted mutants.
 
-A small, self-built red-team agent that tries to **break or bypass the auth gate on
-`POST /api/execute`**. The point is *learning agentic engineering* — building the reasoning
-loop, tool surface, guardrails, and eval once, by hand, so we understand exactly what a
-framework would do for us (see ADR 0002 for the build-vs-buy reasoning).
+## What was built (and the engineering learnings)
+- **Hand-rolled ReAct loop** with tool dispatch, a sliding-window history, prompt caching, and
+  tools: `mint_token` (forge valid/adversarial JWTs with the mock IdP key), `call_endpoint`,
+  `read_backend_logs`, `note_attempt`, `record_finding`.
+- **Termination is an *external* problem for open-ended tasks.** "Find any bypass" has no
+  internal "done"; empirically neither Haiku nor Sonnet ever self-terminated. The right model is
+  a **budget-driven graceful landing** (a soft-budget wrap-up before the hard cap), with three
+  stopping rules — token soft-limit, step soft-limit, and a **diminishing-returns/novelty stop**.
+- **Coverage must be by identity, not count.** A count gate is satisfied by duplicate attempts
+  while real seeds slip; an **identity coverage gate** (each attempt tags a `seed_id`) is honest.
+- **The hand-rolled context machinery is redundant** vs. the Agent SDK / Claude Code, which give
+  caching, compaction, and subagents for free. Kept only for the learning.
 
-Mental model: **the agent is the tester's brain.** It reads the source + docs to form
-hypotheses, then *proves or disproves* each one against the running app using deterministic
-tools. The LLM never asserts a finding from source alone — every finding must reproduce over
-the network against the live endpoint.
+## The decisive finding — access asymmetry (not white-box vs black-box)
+Against an *expiry-not-checked* mutant, our agent caught the bug and black-box **Strix missed
+it** — but the cause was **a granted credential, not source visibility**. Our agent holds the
+mock IdP **signing key** (a privileged *test fixture*, not "white-box"), so it mints a
+validly-signed expired token and reaches the validation logic *behind* the signature gate. Strix
+had no key, so its expired tokens died at the signature check and it concluded "expiry enforced."
+The axes that actually matter: **credential/key access** (decisive here), **task scope**
+(specialist vs generalist), and **source visibility** (irrelevant for this bug).
 
-**Non-goals:** the sandbox/code-execution isolation (a separate concern, already hardened),
-reliability/SRE testing (a later, deploy-gated effort), and deep multi-tenant isolation
-(noted as future — the app is single-tenant today).
+## Build-vs-buy verdict (the Strix + ad-hoc Claude comparison)
+Scored via the eval ground truth, on the expiry mutant, **at equal (credentialed) footing**:
 
-## Scope of access (white-box to find, black-box to prove)
+| Tester | recall | precision | cost |
+|---|:--:|:--:|---|
+| Our agent (Haiku) | 1.00 | 1.00 | ~$0.30 |
+| Strix, leveled (given a pre-minted expired token, narrow scope) | 1.00 | 1.00 | ~$0.17 |
+| **Ad-hoc Claude** (a `mint` helper + `curl`, no bespoke agent) | **1.00** | **1.00** | ~5 calls |
 
-Two deliberately separate scopes, mirroring how internal SDL testing works:
+Uncredentialed, Strix scored 0 (the access asymmetry); leveling the credential flipped it to
+1.00 and cut a run from ~$3.05 to $0.17. Broad Strix runs cost ~$2.79–3.05 (≈10× our agent).
+**Conclusion: given the one privileged ingredient (a mint helper), an off-the-shelf agent — even
+just Claude ad hoc — matches the bespoke agent.** The custom loop bought no unique capability;
+its only non-capability justifications (CI automation, fixed report format, cost ceilings) are
+better served by headless Claude Code / the Agent SDK. So the agent was retired.
 
-- **Read scope (white-box):** the repo (esp. `backend/app/auth.py`) + README, for *generating*
-  hypotheses. Generous.
-- **Exploit scope (black-box-ish):** only the running endpoint over loopback. A finding counts
-  only if it reproduces against the live app.
+## What we kept (the final solution)
+- **`backend/tests/test_auth.py`** — the deterministic regression battery over the real
+  `require_principal`: every attack class (no/garbage/expired/wrong-aud/wrong-iss/bad-sig/
+  alg=none/missing-scope/look-alike-scope) rejected with the right status; valid + permissions-
+  array accepted. In CI, no LLM, no Docker, no API key.
+- **`backend/tests/_mutants.py` + `test_auth_mutation.py`** — mutation coverage: each planted
+  hole is accepted by its mutant yet rejected by the real gate, proving the battery would catch a
+  regression. (This is the one genuinely novel asset the agent exercise produced.)
 
-## Architecture
-
-```
-                    ┌──────────────────────────────────────────────┐
-                    │  auth-bypass agent (hand-rolled on the         │
-                    │  Anthropic Messages tool-use API)              │
-                    │  - red-team system prompt + methodology        │
-                    │  - ReAct loop w/ step & token budget caps      │
-                    │  - reads auth.py for hypotheses (read scope)   │
-                    └───────────────┬──────────────────────────────┘
-                                    │ tool calls
-        ┌───────────────┬──────────┼───────────────┬──────────────────┐
-        ▼               ▼          ▼               ▼                  ▼
-   mint_token     call_execute  call_endpoint  read_backend_logs  record_finding
-   (forge JWTs)   (the target)  (other routes) (white-box observe) (structured out)
-        │               │          │               │
-        │   ┌───────────▼──────────▼───────────────▼───────────┐
-        │   │  Target under test — docker-compose.test.yml      │
-        │   │   backend (AUTH_REQUIRED=true) ──▶ /api/execute    │
-        │   └───────────▲───────────────────────────────────────┘
-        │               │ OIDC_JWKS_URL / OIDC_ISSUER / OIDC_AUDIENCE
-        └───────────────┴──── mock OIDC server (we hold the signing key)
-                              /.well-known/jwks.json  + rogue-key support
-```
-
-### 1. Target under test (TUT)
-The app via a dedicated `docker-compose.test.yml`: backend with `AUTH_REQUIRED=true`, pointed at
-a **local mock OIDC** instead of Auth0. Loopback only; never exposed.
-
-### 2. Mock OIDC server (the key move)
-A tiny service that serves `/.well-known/jwks.json` with an RSA public key **whose private key
-we control**. Pointing the backend's `OIDC_JWKS_URL`/`OIDC_ISSUER`/`OIDC_AUDIENCE` at it lets the
-agent **mint arbitrary valid and deliberately-broken tokens** — so signature, `kid`, `alg`, and
-claim attacks become deterministic and offline, with no Auth0 dependency. This is a white-box
-test of the *verification logic* in `auth.py`. (A later, optional pass against a real Auth0 dev
-tenant validates the integration end-to-end.)
-
-It also exposes a **rogue second key** so the agent can attempt JWKS/`kid` confusion (sign with a
-key the backend should not trust and see if it's accepted).
-
-### 3. Agent tool surface (narrow, guarded)
-| Tool | Purpose | Guardrail |
-|------|---------|-----------|
-| `mint_token(claims, alg, kid, key)` | Forge a JWT (valid or adversarial) via mock or rogue key | — |
-| `call_execute(token, body)` | Hit `POST /api/execute` | base URL hardcoded to loopback |
-| `call_endpoint(method, path, token, body)` | Probe other routes (`/api/health`, enumeration) | loopback only; non-destructive |
-| `read_backend_logs(n)` | Tail the backend container to observe behavior | read-only |
-| `record_finding(severity, title, hypothesis, repro, evidence, recommendation)` | Emit a structured finding | append-only to report |
-
-All network tools **refuse any non-loopback host**. The agent has no repo write access except
-the report output path.
-
-### 4. The agent (hand-rolled on the Anthropic Messages tool-use API)
-- **System prompt:** red-team auth tester persona; explicit scope/guardrails (loopback TUT
-  only); required output schema.
-- **Two-phase methodology — baseline, then derive.** This is the core of the design:
-  1. **Baseline (the floor).** Cover the seeded checklist (§5), anchored on **OWASP API
-     Security Top 10** (esp. API2 broken authentication, API1 BOLA), so nothing obvious slips.
-     This is coverage insurance, *not* the goal — a scanner or a `pytest` matrix could do it.
-  2. **Derive (the point).** Read `auth.py` and the live responses and **generate novel,
-     app-specific hypotheses the checklist doesn't enumerate** — e.g. the dual `scope`-string
-     vs `permissions[]` code paths, the `org_id → tenant_id` derivation and whether tenant
-     isolation is actually enforced downstream, the `lru_cache`d JWKS client's behavior on
-     `kid` rotation, internal error-detail leakage, response-timing differences. Only an agent
-     does phase 2 — it is the entire reason to build one instead of a scanner.
-- **Reflection loop:** ReAct *with a feedback step* — *hypothesize → craft token/request →
-  call → observe → **reflect: what did that response reveal, and what new hypothesis does it
-  suggest?** → record → next*. Observations feed forward into fresh hypotheses rather than the
-  agent merely walking a fixed list.
-- **Termination — a budget-driven graceful landing, not autonomous self-termination.** This is
-  open-ended red-teaming ("find *any* bypass"), so there is no internal "done" the model can
-  evaluate; empirically neither Haiku nor Sonnet ever ends a run on its own. The correct model
-  is therefore an **external stopping rule**: hard caps on steps/tokens, and *before* the hard
-  cap a soft-budget **wrap-up** that asks the agent to conclude so the run lands on a clean
-  summary rather than a truncated partial. Three stopping rules fire whichever comes first —
-  token soft-limit, step soft-limit, and **diminishing returns** (once the baseline floor is
-  covered, N steps with nothing new). A partial report is still emitted on a hard overrun.
-- **Coverage by identity, not count.** The baseline floor is gated on the *set of seed ids*
-  actually tested (each `note_attempt` tags a `seed_id`), so duplicate attempts can't satisfy
-  the gate while real seeds slip through; the floor-nudge names the specific missing seeds. The
-  floor (don't quit early) and the diminishing-returns ceiling (don't wander) are the two sides
-  of one `_StopController`. (Building these by hand is one of the lessons — the "20%" a
-  framework hides.)
-- **Report:** each run emits a descriptively-named, non-clobbering bundle — an at-a-glance HTML
-  report (findings, seed coverage, attempt ledger, transcript) plus markdown + JSON artifacts.
-
-### 5. Attack checklist (seed — the floor, not the ceiling)
-This is the **baseline coverage** for phase 1 (§4), *not* the full test plan — the agent derives
-further app-specific hypotheses in phase 2. Seeding it keeps runs comparable across changes:
-
-| # | Hypothesis | Expected against real `auth.py` |
-|---|------------|--------------------------------|
-| 1 | No token / malformed `Authorization` header | 401 |
-| 2 | Expired token (`exp` in past) | 401 |
-| 3 | Wrong `aud` / wrong `iss` | 401 |
-| 4 | Tampered payload / bad signature | 401 |
-| 5 | `alg=none` | rejected (algorithms pinned to RS256) |
-| 6 | HS256 key-confusion (sign with the public key as HMAC secret) | rejected |
-| 7 | Unknown / forged `kid`, rogue JWKS key | rejected |
-| 8 | Valid token missing `execute:code` scope | 403 |
-| 9 | Scope look-alike (`execute:codex`, `xexecute:code`) | rejected (split, not substring) |
-| 10 | Scope delivered via `permissions[]` array | **accepted** (intended) |
-| 11 | `user_id`/`tenant_id` injected in request **body** | ignored (identity from claims) |
-| 12 | Posture: `AUTH_REQUIRED=false` | endpoint open (config finding) |
-| 13 | Endpoint enumeration (`/api/health`, anything unguarded) | only intended routes |
-| 14 | `nbf`/`iat` not in `require` list | minor / informational |
-
-### 6. Eval harness (ground truth)
-To know the agent *works*, run it against deliberately-broken **mutant** auth modules with known
-holes and check it finds them. Examples:
-
-- **Mutant A:** `algorithms=["RS256","HS256"]` → key-confusion (hyp. 6) becomes exploitable.
-- **Mutant B:** scope check uses substring `in` → look-alike (hyp. 9) passes.
-- **Mutant C:** identity falls back to request body → spoofable (hyp. 11).
-- **Mutant D:** `auth_required` defaults `False` → open endpoint (hyp. 12).
-
-`eval/ground_truth.yaml` maps each mutant to the findings that *should* surface. A scorer
-computes **precision/recall**: the agent should score N/N on mutants and **report zero on the
-real `auth.py`** (which doubles as a regression guard on the real auth code).
-
-### 7. Reporting
-Markdown findings report (severity, title, repro, evidence, fix) **+** machine-readable JSON for
-the scorer. Severity via a simple CVSS-ish rubric.
-
-### 8. Baseline comparison (direct competitor)
-Run the chosen baseline (**Strix** — see ADR 0002) against the same TUT and diff its findings
-against the custom agent's. Strix is the closest head-to-head competitor: an autonomous agent
-that validates findings with PoCs and targets auth bypass. The learning artifact: *what did a
-purpose-built agent catch that my hand-built loop missed, and why?*
-
-## Proposed layout
-
-The layout separates the **domain-agnostic core** (reused by every future capability module)
-from the **auth module** (this milestone) — see "Extensibility" below.
-
-```
-security/
-  agent_core/            # domain-agnostic — reused by every future module
-    loop.py              # SDK ReAct loop: planning, reflection, budget caps
-    tools.py             # generic tools: call_endpoint, read_backend_logs, record_finding; loopback guard
-    report.py            # markdown + JSON output
-    eval.py              # precision/recall scorer (mutant-vs-ground-truth runner)
-  modules/
-    auth/                # capability module #1 (this milestone)
-      prompt.py          # red-team auth-tester system prompt
-      checklist.py       # seed hypotheses (the phase-1 floor)
-      tools.py           # auth-specific tools: mint_token, call_execute
-      mutants/           # deliberately-broken auth variants
-      ground_truth.yaml  # expected findings per mutant
-  mock_oidc/
-    server.py            # JWKS endpoint + signing-key control + rogue key
-    Dockerfile
-  docker-compose.test.yml  # backend (mock OIDC) wired for testing
-  verify.sh              # lint + unit tests + eval (mirrors CI, per CLAUDE.md)
-  README.md
-```
-
-## Extensibility — auth is module one
-
-The scope is narrow (auth) but the **agent is not**. The reusable machinery — the ReAct loop,
-reflection, budget caps, the generic tools, reporting, and the eval scorer — lives in
-`agent_core/` and knows nothing about auth. A **capability module** contributes three things:
-its system prompt, its seed checklist, and any domain-specific tools (plus eval mutants +
-ground truth). `auth` is the first such module.
-
-Consequences of this split:
-
-- Broadening later (BOLA, injection, SSRF, sandbox-escape) is **adding a `modules/<name>/`,
-  not rewriting** — the core and the harness are untouched.
-- The decision recorded here is "**auth is milestone one**," not "auth forever."
-- Keeping reusable agent infra cleanly separate from domain checklists is itself one of the
-  engineering lessons this project is for.
-
-This is a deliberate design seam, **not** a commitment to build further modules now — only the
-auth module ships in this epic.
-
-## Safety & cost
-
-- **Loopback only**, against the throwaway test stack; tools reject non-loopback targets.
-- Step/token **budget caps**; no repo writes beyond the report.
-- Needs an **Anthropic API key** (same `ANTHROPIC_API_KEY`); each run spends tokens — keep
-  budgets small. The mock OIDC removes any Auth0 dependency for the core runs.
-- A new `security/verify.sh` follows the repo's one-script-mirrors-CI rule (see CLAUDE.md). If a
-  CI job is added for it, keep the job-name contract in mind.
+## Ad-hoc exploratory runbook (when you want LLM-driven derivation)
+Regression is deterministic (above); *exploration* is on-demand, no bespoke code:
+1. Mint tokens with a small helper that signs with the mock IdP key (valid + adversarial).
+2. Bring up the target (or test the dependency in-process as the tests do).
+3. Ask Claude (Claude Code) — with the mint helper + `curl` + the OWASP-style checklist — to
+   probe the gate and derive new hypotheses. For credential-gated classes, hand it a pre-minted
+   token so it reaches validation logic (the access-asymmetry lesson).
