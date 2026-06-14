@@ -1,6 +1,14 @@
 # 2. Agentic auth security testing
 
-- **Status:** Proposed
+> **Status: Superseded (2026-06-14).** The custom agent was explored for its learning value, then
+> retired: a head-to-head showed that, given the one privileged ingredient (a token-minting
+> helper), an off-the-shelf agent — even Claude run ad hoc — matches it, so the bespoke loop
+> bought no unique capability. The retained CI artifact is deterministic, mutation-covered auth
+> tests in `backend/tests/` (run under *Backend checks*). Full retrospective + the build-vs-buy
+> evidence: [design/auth-bypass-agent.md](../design/auth-bypass-agent.md). The original proposal
+> is preserved below for the record.
+
+- **Status:** Superseded (was Proposed)
 - **Date:** 2026-06-05
 - **Tracking:** epic [#19](https://github.com/igor-ka/llm-code-execution/issues/19) (work items [#20](https://github.com/igor-ka/llm-code-execution/issues/20)–[#25](https://github.com/igor-ka/llm-code-execution/issues/25))
 - **Related:** auth ADR [0001](0001-authentication-approach.md); design [auth-bypass-agent](../design/auth-bypass-agent.md)
