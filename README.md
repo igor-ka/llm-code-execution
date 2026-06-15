@@ -160,8 +160,10 @@ it just enough for HMR.
 - Internal exception detail is surfaced in some error responses; HTTP only (no TLS).
 
 These map directly to the Roadmap below. The auth gate is regression-tested in
-`backend/tests/` (battery + mutation coverage); see the auth-bypass-agent retrospective
-(`docs/design/auth-bypass-agent.md`) for how that testing was arrived at.
+`backend/tests/` (battery + mutation coverage); the
+[retrospective](docs/design/auth-bypass-agent.md) explains how that testing was arrived at, and
+the [ad-hoc security-testing runbook](docs/runbooks/adhoc-auth-security-testing.md) shows how to
+drive Claude Code for on-demand discovery testing of the auth gate.
 
 ## Verification
 
