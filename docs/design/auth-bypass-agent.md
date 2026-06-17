@@ -59,9 +59,8 @@ better served by headless Claude Code / the Agent SDK. So the agent was retired.
   regression. (This is the one genuinely novel asset the agent exercise produced.)
 
 ## Ad-hoc exploratory runbook (when you want LLM-driven derivation)
-Regression is deterministic (above); *exploration* is on-demand, no bespoke code:
-1. Mint tokens with a small helper that signs with the mock IdP key (valid + adversarial).
-2. Bring up the target (or test the dependency in-process as the tests do).
-3. Ask Claude (Claude Code) — with the mint helper + `curl` + the OWASP-style checklist — to
-   probe the gate and derive new hypotheses. For credential-gated classes, hand it a pre-minted
-   token so it reaches validation logic (the access-asymmetry lesson).
+Regression is deterministic (above); *exploration* is on-demand, no bespoke code — ask Claude
+Code to derive and try new attacks using the surviving `backend/tests/conftest.py` harness
+(in-process), or against a live instance for the outsider view. Full step-by-step (with the
+access-asymmetry caveat baked in): **[Runbook: ad-hoc auth security testing with Claude
+Code](../runbooks/adhoc-auth-security-testing.md)**.
