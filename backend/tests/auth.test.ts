@@ -23,7 +23,9 @@ const app = () => makeProtectedApp(authSettings(), kp.publicKey);
 
 describe("require_principal", () => {
   it("valid token passes and yields claims", async () => {
-    const resp = await request(app()).get("/protected").set(bearer(await makeToken(kp.privateKey)));
+    const resp = await request(app())
+      .get("/protected")
+      .set(bearer(await makeToken(kp.privateKey)));
     expect(resp.status).toBe(200);
     expect(resp.body).toEqual({ user_id: "auth0|abc123", tenant_id: "org_xyz" });
   });

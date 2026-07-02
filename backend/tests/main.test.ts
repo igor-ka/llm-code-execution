@@ -35,9 +35,9 @@ describe("public endpoints", () => {
   });
 
   it("GET /api/config reflects auth_required=true", async () => {
-    const resp = await request(createApp({ settings: loadSettings({ AUTH_REQUIRED: "true" }) })).get(
-      "/api/config",
-    );
+    const resp = await request(
+      createApp({ settings: loadSettings({ AUTH_REQUIRED: "true" }) }),
+    ).get("/api/config");
     expect(resp.status).toBe(200);
     expect(resp.body).toEqual({ auth_required: true });
   });
@@ -48,9 +48,9 @@ describe("public endpoints", () => {
   });
 
   it("GET /api/config is public even when auth is required (no token)", async () => {
-    const resp = await request(createApp({ settings: loadSettings({ AUTH_REQUIRED: "true" }) })).get(
-      "/api/config",
-    );
+    const resp = await request(
+      createApp({ settings: loadSettings({ AUTH_REQUIRED: "true" }) }),
+    ).get("/api/config");
     expect(resp.status).toBe(200);
   });
 });
@@ -137,7 +137,13 @@ describe("POST /api/execute", () => {
     // No injected requirePrincipal -> the REAL makeRequirePrincipal(settings) runs, proving it
     // is actually wired onto /api/execute. With auth required and no Authorization header,
     // bearerToken throws 401 before any JWKS lookup, LLM call, or sandbox run.
-    const sandbox = fakeSandbox({ stdout: "", stderr: "", exitCode: 0, durationMs: 0, timedOut: false });
+    const sandbox = fakeSandbox({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+      durationMs: 0,
+      timedOut: false,
+    });
     const app = createApp({
       settings: loadSettings({ AUTH_REQUIRED: "true" }),
       llm: fakeLlm(async () => {
