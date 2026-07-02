@@ -25,20 +25,24 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: backend/requirements-dev.txt
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
       # Named steps that each call a target of the shared verify.sh — the same script
       # developers run locally (`./verify.sh` runs them all). Splitting the targets here
       # gives per-step pass/fail and timing in the job log without a second definition.
       - name: Install
         run: ./verify.sh install
-      - name: Lint (ruff)
+      - name: Lint
         run: ./verify.sh lint
-      - name: Test (pytest)
+      - name: Format check
+        run: ./verify.sh format
+      - name: Test
         run: ./verify.sh test
+      - name: Build
+        run: ./verify.sh build
       # Build the images on PRs only — keeps pushes to main fast.
       - name: Docker build
         if: github.event_name == 'pull_request'
