@@ -9,7 +9,7 @@ behind a swappable `SandboxBackend` interface so the same OCI image can later ru
 **GCP Cloud Run Jobs** (microVM isolation) or **GKE + gVisor** with no app changes.
 
 ```
-Browser (React) ──POST /api/execute──▶ FastAPI
+Browser (React) ──POST /api/execute──▶ Express (TypeScript)
                                          │ 1. LLMService.generate(prompt)  ──▶ Claude (single structured call)
                                          │      → { should_execute, language, code?, message? }
                                          │ 2. not should_execute → return message (no sandbox)
@@ -22,17 +22,20 @@ Browser (React) ──POST /api/execute──▶ FastAPI
 
 ```
 backend/
-  app/
-    main.py                  FastAPI: POST /api/execute, GET /api/health
-    config.py                settings + sandbox limits (per-tenant override seam)
-    schemas.py               request/response + internal models
-    llm.py                   single structured Claude call (judge + generate) w/ prompt caching
+  src/
+    server.ts                Express: POST /api/execute, GET /api/health, GET /api/config
+    index.ts                 entrypoint (listens on :8000)
+    config.ts                settings + sandbox limits (per-tenant override seam)
+    schemas.ts               Zod request + response builders + internal types
+    errors.ts                HttpError
+    llm.ts                   single structured Claude call (judge + generate) w/ prompt caching
+    auth.ts                  OIDC bearer-token middleware (require_principal)
     sandbox/
-      base.py                SandboxBackend ABC (the GCP-ready seam)
-      docker_backend.py      hardened, ephemeral docker run per execution
-  sandbox-image/Dockerfile   the minimal, non-root EXECUTION image
-  tests/test_llm.py          LLMService parsing/branching (mocked client)
-  verify.sh                  one-command checks (ruff + pytest + docker), also run by CI
+      base.ts                SandboxBackend interface (the GCP-ready seam)
+      dockerBackend.ts       hardened, ephemeral docker run per execution (dockerode)
+  sandbox-image/Dockerfile   the minimal, non-root EXECUTION image (Python — unchanged)
+  tests/                     Vitest suites (config/schemas/auth/llm/main) + auth helpers
+  verify.sh                  one-command checks (eslint + prettier + vitest + tsc + docker), also run by CI
 frontend/                    React + Vite UI
   src/                       App.tsx, api.ts (+ *.test.tsx / *.test.ts unit & component tests)
   verify.sh                  one-command checks (lint + format + vitest + build + docker)
@@ -44,6 +47,7 @@ docker-compose.yml           backend + frontend + one-shot sandbox-image build
 - **Docker** (Desktop or Engine) — required to build/run the sandbox and the compose stack.
   Install from https://www.docker.com/products/docker-desktop/ and make sure the engine is
   running (`docker info` succeeds).
+- **Node.js 22+** — to build and run the backend (`node --version`).
 - An **Anthropic API key** from https://console.anthropic.com — this is a *developer* account,
   **separate from a Claude Pro/Max subscription**. Add a small amount of pay-as-you-go credit
   ($5–10 is plenty for this project) and create an API key.
@@ -79,9 +83,9 @@ docker build -t llm-sandbox:latest backend/sandbox-image
 
 # 2. Backend
 cd backend
-pip install -e ".[dev]"
+npm install
 export $(grep -v '^#' ../.env | xargs)   # load env
-uvicorn app.main:app --reload
+npm run dev            # or: npm run build && npm start
 
 # 3. Frontend (separate terminal)
 cd frontend
@@ -170,8 +174,8 @@ drive Claude Code for on-demand discovery testing of the auth gate.
 Each side has a single `verify.sh` that runs everything CI runs — so local and CI can't
 drift (CI invokes the same scripts).
 
-- **Backend:** `cd backend && ./verify.sh` — installs deps, runs `ruff` + `pytest`, and
-  builds the backend and sandbox Docker images.
+- **Backend:** `cd backend && ./verify.sh` — installs deps, runs ESLint + Prettier + Vitest,
+  type-checks/builds (`tsc`), and builds the backend and sandbox Docker images.
 - **Frontend:** `cd frontend && ./verify.sh` — installs deps, runs ESLint + Prettier +
   Vitest, type-checks/builds, and builds the frontend Docker image.
 
@@ -194,8 +198,8 @@ The behavioral checks below have been run and pass (✅). Re-run them anytime.
 
 - Auth: backend OIDC token gate and the Auth0 SPA login are both in and verified end-to-end
   (on by default via `AUTH_REQUIRED`); remaining work is multi-tenancy and per-user quotas /
-  rate limiting keyed on the verified `sub` (limits centralized in `config.py`).
+  rate limiting keyed on the verified `sub` (limits centralized in `config.ts`).
 - GCP deploy: a `CloudRunBackend` implementing `SandboxBackend`, or GKE + gVisor.
-- Vertex AI for Claude (swap the client in `llm.py`), more languages, session persistence,
+- Vertex AI for Claude (swap the client in `llm.ts`), more languages, session persistence,
   artifact/chart return.
 ```
