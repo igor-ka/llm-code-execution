@@ -1,8 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import request from "supertest";
 import {
-  AUDIENCE,
-  ISSUER,
   authSettings,
   makeAlgNoneToken,
   makeKeypair,
@@ -92,7 +90,3 @@ describe("require_principal", () => {
     expect(resp.body).toEqual({ user_id: null, tenant_id: null });
   });
 });
-
-// keep the imports honest for the typecheck
-void AUDIENCE;
-void ISSUER;
