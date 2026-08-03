@@ -105,10 +105,21 @@ export class DockerBackend implements SandboxBackend {
 
       const waitPromise = container.wait();
       const timeoutMs = limits.timeoutSeconds * 1000;
-      const outcome = await Promise.race([
-        waitPromise.then((r) => ({ kind: "done" as const, code: Number(r?.StatusCode ?? -1) })),
-        delay(timeoutMs).then(() => ({ kind: "timeout" as const })),
-      ]);
+      // Cancelable timer: clear it when wait wins so we don't leave a live ref'd
+      // setTimeout per execution (they'd accumulate for the full timeout under load).
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<{ kind: "timeout" }>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve({ kind: "timeout" as const }), timeoutMs);
+      });
+      let outcome: { kind: "done"; code: number } | { kind: "timeout" };
+      try {
+        outcome = await Promise.race([
+          waitPromise.then((r) => ({ kind: "done" as const, code: Number(r?.StatusCode ?? -1) })),
+          timeoutPromise,
+        ]);
+      } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+      }
 
       let exitCode: number;
       if (outcome.kind === "timeout") {
