@@ -11,10 +11,19 @@ export class MemoryHistoryStore implements HistoryStore {
   private seq = 0;
   private sessions = new Map<string, Session>();
   private runs = new Map<string, Run>();
+  // Monotonic recency rank per session — a deterministic tiebreaker so list ordering never
+  // depends on wall-clock updatedAt (which can tie within a millisecond in tests).
+  private touchRank = new Map<string, number>();
 
   private id(prefix: string): string {
     this.seq += 1;
     return `${prefix}_${this.seq}`;
+  }
+
+  /** Mark a session most-recently-active (on create, appendRun, and rename). */
+  private touch(id: string): void {
+    this.seq += 1;
+    this.touchRank.set(id, this.seq);
   }
 
   async listSessions(owner: Owner, opts: ListOptions): Promise<SessionPage> {
@@ -29,7 +38,7 @@ export class MemoryHistoryStore implements HistoryStore {
         return inTitle || inPrompt;
       });
     }
-    mine.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    mine.sort((a, b) => (this.touchRank.get(b.id) ?? 0) - (this.touchRank.get(a.id) ?? 0));
     const total = mine.length;
     const page = mine.slice(opts.offset, opts.offset + opts.limit).map((s) => ({
       ...s,
@@ -52,6 +61,7 @@ export class MemoryHistoryStore implements HistoryStore {
     if (!s || s.userId !== owner.userId) return null;
     const updated = { ...s, title, updatedAt: new Date() };
     this.sessions.set(id, updated);
+    this.touch(id);
     return updated;
   }
 
@@ -59,6 +69,7 @@ export class MemoryHistoryStore implements HistoryStore {
     const s = this.sessions.get(id);
     if (!s || s.userId !== owner.userId) return false;
     this.sessions.delete(id);
+    this.touchRank.delete(id);
     for (const [rid, r] of this.runs) if (r.sessionId === id) this.runs.delete(rid);
     return true;
   }
@@ -68,6 +79,7 @@ export class MemoryHistoryStore implements HistoryStore {
     for (const [sid, s] of this.sessions) {
       if (s.userId !== owner.userId) continue;
       this.sessions.delete(sid);
+      this.touchRank.delete(sid);
       count += 1;
       for (const [rid, r] of this.runs) if (r.sessionId === sid) this.runs.delete(rid);
     }
@@ -97,6 +109,7 @@ export class MemoryHistoryStore implements HistoryStore {
       session = { ...existing, updatedAt: new Date() };
       this.sessions.set(session.id, session);
     }
+    this.touch(session.id);
     const stored = {
       id: this.id("run"),
       sessionId: session.id,

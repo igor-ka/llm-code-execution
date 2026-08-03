@@ -14,7 +14,12 @@ export class SessionNotFound extends Error {
  * expose a row a different user owns.
  */
 export interface HistoryStore {
-  /** List the owner's sessions (most-recently-active first), optional ILIKE search + paging. */
+  /**
+   * List the owner's sessions, most-recently-active first, with optional paging and a
+   * case-insensitive **substring** search (`opts.q`) over the session title and its run
+   * prompts. Substring semantics are the contract: a Postgres impl must escape LIKE
+   * wildcards (`%` / `_`) in `q` so it cannot diverge from the in-memory oracle.
+   */
   listSessions(owner: Owner, opts: ListOptions): Promise<SessionPage>;
   /** The owner's session with its runs (ascending), or null if not owned / absent. */
   getSession(owner: Owner, id: string): Promise<(Session & { runs: Run[] }) | null>;
@@ -41,7 +46,9 @@ export interface HistoryStore {
 
 /** Derive a session title from the first prompt: first line, trimmed, ≤60 chars. */
 export function titleFromPrompt(prompt: string): string {
-  const firstLine = prompt.split("\n")[0]?.trim() ?? "";
+  const firstLine = prompt.split("\n")[0].trim();
   const base = firstLine.length > 0 ? firstLine : "New chat";
-  return base.length > 60 ? base.slice(0, 57).trimEnd() + "…" : base;
+  // Slice by code points (not UTF-16 units) so truncation never splits a surrogate pair.
+  const chars = [...base];
+  return chars.length > 60 ? chars.slice(0, 57).join("").trimEnd() + "…" : base;
 }

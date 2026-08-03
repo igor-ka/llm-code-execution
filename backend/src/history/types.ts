@@ -15,14 +15,11 @@ export interface Session {
   updatedAt: Date;
 }
 
-/** A persisted run mirrors the /api/execute response union plus provenance columns. */
-export type Run = {
-  id: string;
-  sessionId: string;
-  userId: string;
-  createdAt: Date;
-  prompt: string;
-} & (
+/**
+ * The content of a run: the prompt plus the /api/execute response union. Shared by NewRun
+ * (what a caller hands appendRun) and Run (that plus provenance) so the two cannot drift.
+ */
+export type RunPayload = { prompt: string } & (
   | { kind: "message"; message: string }
   | {
       kind: "result";
@@ -37,19 +34,10 @@ export type Run = {
 );
 
 /** What a caller hands appendRun — everything except server-assigned provenance. */
-export type NewRun = { prompt: string } & (
-  | { kind: "message"; message: string }
-  | {
-      kind: "result";
-      language: string;
-      code: string;
-      stdout: string;
-      stderr: string;
-      exitCode: number;
-      durationMs: number;
-      timedOut: boolean;
-    }
-);
+export type NewRun = RunPayload;
+
+/** A persisted run: the payload plus server-assigned provenance columns. */
+export type Run = { id: string; sessionId: string; userId: string; createdAt: Date } & RunPayload;
 
 export interface SessionPage {
   sessions: (Session & { runCount: number })[];
