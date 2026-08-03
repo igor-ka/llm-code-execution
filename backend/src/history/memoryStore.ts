@@ -5,25 +5,29 @@ import type { Owner, Session, Run, NewRun, SessionPage, ListOptions } from "./ty
 /**
  * In-memory HistoryStore: a real, ordered, owner-filtered store (not a stub), so it is a
  * faithful oracle for the contract suite and safe to inject as the double in other tests.
- * A monotonic counter (not Date.now/Math.random) keeps ids and ordering deterministic.
+ * Ids come from a monotonic counter; timestamps are strictly increasing. Recency lives on
+ * each entity's own createdAt/updatedAt — the same field Postgres sorts by — so ordering is
+ * deterministic with no separate bookkeeping to keep in sync.
  */
 export class MemoryHistoryStore implements HistoryStore {
   private seq = 0;
+  private lastTs = 0;
   private sessions = new Map<string, Session>();
   private runs = new Map<string, Run>();
-  // Monotonic recency rank per session — a deterministic tiebreaker so list ordering never
-  // depends on wall-clock updatedAt (which can tie within a millisecond in tests).
-  private touchRank = new Map<string, number>();
 
   private id(prefix: string): string {
     this.seq += 1;
     return `${prefix}_${this.seq}`;
   }
 
-  /** Mark a session most-recently-active (on create, appendRun, and rename). */
-  private touch(id: string): void {
-    this.seq += 1;
-    this.touchRank.set(id, this.seq);
+  /**
+   * A strictly-increasing timestamp: real wall-clock, nudged forward by 1ms when calls land
+   * within the same millisecond. Sorting by updatedAt is then deterministic (no same-ms ties)
+   * and models Postgres's `ORDER BY updated_at`.
+   */
+  private now(): Date {
+    this.lastTs = Math.max(this.lastTs + 1, Date.now());
+    return new Date(this.lastTs);
   }
 
   async listSessions(owner: Owner, opts: ListOptions): Promise<SessionPage> {
@@ -38,7 +42,7 @@ export class MemoryHistoryStore implements HistoryStore {
         return inTitle || inPrompt;
       });
     }
-    mine.sort((a, b) => (this.touchRank.get(b.id) ?? 0) - (this.touchRank.get(a.id) ?? 0));
+    mine.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
     const total = mine.length;
     const page = mine.slice(opts.offset, opts.offset + opts.limit).map((s) => ({
       ...s,
@@ -59,9 +63,8 @@ export class MemoryHistoryStore implements HistoryStore {
   async renameSession(owner: Owner, id: string, title: string): Promise<Session | null> {
     const s = this.sessions.get(id);
     if (!s || s.userId !== owner.userId) return null;
-    const updated = { ...s, title, updatedAt: new Date() };
+    const updated = { ...s, title, updatedAt: this.now() };
     this.sessions.set(id, updated);
-    this.touch(id);
     return updated;
   }
 
@@ -69,7 +72,6 @@ export class MemoryHistoryStore implements HistoryStore {
     const s = this.sessions.get(id);
     if (!s || s.userId !== owner.userId) return false;
     this.sessions.delete(id);
-    this.touchRank.delete(id);
     for (const [rid, r] of this.runs) if (r.sessionId === id) this.runs.delete(rid);
     return true;
   }
@@ -79,7 +81,6 @@ export class MemoryHistoryStore implements HistoryStore {
     for (const [sid, s] of this.sessions) {
       if (s.userId !== owner.userId) continue;
       this.sessions.delete(sid);
-      this.touchRank.delete(sid);
       count += 1;
       for (const [rid, r] of this.runs) if (r.sessionId === sid) this.runs.delete(rid);
     }
@@ -93,28 +94,27 @@ export class MemoryHistoryStore implements HistoryStore {
   ): Promise<{ session: Session; run: Run }> {
     let session: Session;
     if (sessionId === null) {
-      const now = new Date();
+      const created = this.now();
       session = {
         id: this.id("sess"),
         userId: owner.userId,
         tenantId: owner.tenantId,
         title: titleFromPrompt(run.prompt),
-        createdAt: now,
-        updatedAt: now,
+        createdAt: created,
+        updatedAt: created,
       };
       this.sessions.set(session.id, session);
     } else {
       const existing = this.sessions.get(sessionId);
       if (!existing || existing.userId !== owner.userId) throw new SessionNotFound(sessionId);
-      session = { ...existing, updatedAt: new Date() };
+      session = { ...existing, updatedAt: this.now() };
       this.sessions.set(session.id, session);
     }
-    this.touch(session.id);
     const stored = {
       id: this.id("run"),
       sessionId: session.id,
       userId: owner.userId,
-      createdAt: new Date(),
+      createdAt: this.now(),
       ...run,
     } as Run;
     this.runs.set(stored.id, stored);
