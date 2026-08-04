@@ -8,12 +8,27 @@ import type { ExecuteResponse } from "./api";
 vi.mock("./api", () => ({ execute: vi.fn(), fetchAuthConfig: vi.fn() }));
 import { execute, fetchAuthConfig } from "./api";
 
+// Mock the history client. Most tests run with history disabled and never touch it; the
+// history-mode tests below drive these mocks.
+vi.mock("./history", () => ({
+  listSessions: vi.fn(),
+  getSession: vi.fn(),
+  renameSession: vi.fn(),
+  deleteSession: vi.fn(),
+  clearHistory: vi.fn(),
+  deleteRun: vi.fn(),
+}));
+import { getSession, listSessions } from "./history";
+import type { SessionDetail } from "./history";
+
 // Mock Auth0 so we can drive the auth state without a provider.
 vi.mock("@auth0/auth0-react", () => ({ useAuth0: vi.fn() }));
 import { useAuth0 } from "@auth0/auth0-react";
 
 const mockedExecute = vi.mocked(execute);
 const mockedFetchAuthConfig = vi.mocked(fetchAuthConfig);
+const mockedListSessions = vi.mocked(listSessions);
+const mockedGetSession = vi.mocked(getSession);
 const mockedUseAuth0 = vi.mocked(useAuth0);
 
 const loginWithRedirect = vi.fn();
@@ -51,7 +66,10 @@ describe("App", () => {
   beforeEach(() => {
     mockedExecute.mockReset();
     mockedFetchAuthConfig.mockReset();
-    mockedFetchAuthConfig.mockResolvedValue({ authRequired: true });
+    mockedFetchAuthConfig.mockResolvedValue({ authRequired: true, historyEnabled: false });
+    mockedListSessions.mockReset();
+    mockedListSessions.mockResolvedValue({ sessions: [], total: 0 });
+    mockedGetSession.mockReset();
     getAccessTokenSilently.mockReset();
     getAccessTokenSilently.mockResolvedValue("test-token");
     setAuth(); // authenticated by default
@@ -85,7 +103,7 @@ describe("App", () => {
 
   it("allows anonymous use (no login wall, no token) when the backend doesn't require auth", async () => {
     const user = userEvent.setup();
-    mockedFetchAuthConfig.mockResolvedValue({ authRequired: false });
+    mockedFetchAuthConfig.mockResolvedValue({ authRequired: false, historyEnabled: false });
     mockedExecute.mockResolvedValue({ type: "message", message: "ran anon" });
     setAuth({ isAuthenticated: false, user: undefined });
     render(<App />);
@@ -185,5 +203,79 @@ describe("App", () => {
     await user.keyboard("{Control>}{Enter}{/Control}");
 
     expect(mockedExecute).not.toHaveBeenCalled();
+  });
+
+  it("renders the history sidebar and session list when history is enabled and authed", async () => {
+    mockedFetchAuthConfig.mockResolvedValue({ authRequired: true, historyEnabled: true });
+    mockedListSessions.mockResolvedValue({
+      sessions: [{ id: "s1", title: "Fibonacci", created_at: "t", updated_at: "t", run_count: 2 }],
+      total: 1,
+    });
+    render(<App />);
+
+    expect(await screen.findByText("Fibonacci")).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: /Search history/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /New chat/ })).toBeInTheDocument();
+    await waitFor(() => expect(mockedListSessions).toHaveBeenCalledWith("test-token", ""));
+  });
+
+  it("keeps the plain layout (no sidebar) when history is disabled", async () => {
+    render(<App />); // default config: history disabled
+    expect(await screen.findByRole("textbox")).toBeInTheDocument();
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /New chat/ })).not.toBeInTheDocument();
+    expect(mockedListSessions).not.toHaveBeenCalled();
+  });
+
+  it("does not show the sidebar when history is enabled but the user is not signed in", async () => {
+    mockedFetchAuthConfig.mockResolvedValue({ authRequired: true, historyEnabled: true });
+    setAuth({ isAuthenticated: false, user: undefined });
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: /Log in/ })).toBeInTheDocument();
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+    expect(mockedListSessions).not.toHaveBeenCalled();
+  });
+
+  it("loads and renders a session's runs when a session is selected", async () => {
+    mockedFetchAuthConfig.mockResolvedValue({ authRequired: true, historyEnabled: true });
+    mockedListSessions.mockResolvedValue({
+      sessions: [{ id: "s1", title: "Fibonacci", created_at: "t", updated_at: "t", run_count: 1 }],
+      total: 1,
+    });
+    const detail: SessionDetail = {
+      id: "s1",
+      title: "Fibonacci",
+      created_at: "t",
+      updated_at: "t",
+      runs: [
+        {
+          type: "result",
+          language: "python",
+          code: "print(1)",
+          stdout: "1\n",
+          stderr: "",
+          exit_code: 0,
+          duration_ms: 3,
+          timed_out: false,
+          id: "r1",
+          session_id: "s1",
+          created_at: "t",
+          prompt: "fib please",
+        },
+      ],
+    };
+    mockedGetSession.mockResolvedValue(detail);
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    // The session's title is the clickable select target (rename/delete carry it only as an
+    // aria-label, so match the visible text to stay unambiguous).
+    await user.click(await screen.findByText("Fibonacci"));
+
+    await waitFor(() => expect(mockedGetSession).toHaveBeenCalledWith("test-token", "s1"));
+    expect(await screen.findByText("fib please")).toBeInTheDocument();
+    expect(screen.getByText("print(1)")).toBeInTheDocument();
   });
 });

@@ -1,6 +1,20 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useAuth0 } from "@auth0/auth0-react";
 import { execute, fetchAuthConfig, type ExecuteResponse } from "./api";
+import {
+  clearHistory,
+  deleteRun,
+  deleteSession,
+  getSession,
+  listSessions,
+  renameSession,
+  type RunView,
+  type SessionDetail,
+  type SessionSummary,
+} from "./history";
+import { HistorySidebar } from "./components/HistorySidebar";
+import { SessionView } from "./components/SessionView";
+import { RunResult } from "./components/RunResult";
 
 export default function App() {
   const { isLoading, isAuthenticated, user, loginWithRedirect, logout, getAccessTokenSilently } =
@@ -13,34 +27,162 @@ export default function App() {
   // Whether the backend enforces auth. Defaults to true (fail secure) until the backend
   // tells us otherwise, so the UI never shows an open mode the server doesn't actually allow.
   const [authRequired, setAuthRequired] = useState(true);
+  // Whether per-user history is available (auth on + a datastore configured). Defaults off.
+  const [historyEnabled, setHistoryEnabled] = useState(false);
+
+  // History state (only meaningful when the sidebar is shown).
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<SessionDetail | null>(null);
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     let active = true;
     fetchAuthConfig()
-      .then((cfg) => active && setAuthRequired(cfg.authRequired))
+      .then((cfg) => {
+        if (!active) return;
+        setAuthRequired(cfg.authRequired);
+        setHistoryEnabled(cfg.historyEnabled);
+      })
       .catch(() => {
-        /* keep the secure default */
+        /* keep the secure defaults */
       });
     return () => {
       active = false;
     };
   }, []);
 
+  const showHistory = historyEnabled && isAuthenticated;
+
+  // Fetch a fresh access token only when signed in; anonymous mode sends no token.
+  const getToken = useCallback(
+    (): Promise<string | undefined> =>
+      isAuthenticated ? getAccessTokenSilently() : Promise.resolve(undefined),
+    [isAuthenticated, getAccessTokenSilently],
+  );
+
+  const refreshSessions = useCallback(async () => {
+    const token = await getToken();
+    if (!token) return;
+    const page = await listSessions(token, query);
+    setSessions(page.sessions);
+  }, [getToken, query]);
+
+  // Load the session list once history is available, and whenever the search query changes.
+  useEffect(() => {
+    if (!showHistory) return;
+    let active = true;
+    void (async () => {
+      const token = await getToken();
+      if (!token) return;
+      try {
+        const page = await listSessions(token, query);
+        if (active) setSessions(page.sessions);
+      } catch {
+        /* transient list error — leave the current list in place */
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [showHistory, getToken, query]);
+
+  // Load the selected session's runs. The pane derives its runs from `detail` only when its id
+  // matches `selectedId`, so a still-loading (or stale) detail never shows another session.
+  useEffect(() => {
+    if (!showHistory || !selectedId) return;
+    let active = true;
+    void (async () => {
+      const token = await getToken();
+      if (!token) return;
+      try {
+        const d = await getSession(token, selectedId);
+        if (active) setDetail(d);
+      } catch {
+        if (active) setDetail(null);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [showHistory, selectedId, getToken]);
+
+  // Runs of the pane's currently-selected session: only when the loaded detail is that session.
+  const selectedRuns = detail && detail.id === selectedId ? detail.runs : [];
+
+  // The fallback (no-history) run path: one-shot execute with the result shown inline.
   async function onRun() {
     if (!prompt.trim() || loading) return;
     setLoading(true);
     setError(null);
     setResponse(null);
     try {
-      // Only attach a token when actually signed in; in the auth-disabled mode the backend
-      // accepts anonymous requests.
-      const token = isAuthenticated ? await getAccessTokenSilently() : undefined;
+      const token = await getToken();
       setResponse(await execute(prompt, token));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
+  }
+
+  // Append a just-executed run to the open session; if it created a new session, select it so
+  // the detail refetch loads it. Either way refresh the sidebar (ordering, run counts, titles).
+  function handleRun(run: RunView) {
+    const sid = run.session_id;
+    setDetail((prev) => {
+      if (prev && prev.id === sid) return { ...prev, runs: [...prev.runs, run] };
+      return {
+        id: sid || (selectedId ?? ""),
+        title: run.prompt,
+        created_at: run.created_at,
+        updated_at: run.created_at,
+        runs: [run],
+      };
+    });
+    if (sid && sid !== selectedId) setSelectedId(sid);
+    void refreshSessions().catch(() => {
+      /* non-fatal: the run already ran and is shown */
+    });
+  }
+
+  async function handleRename(id: string, title: string) {
+    const token = await getToken();
+    if (!token) return;
+    await renameSession(token, id, title);
+    await refreshSessions();
+  }
+
+  async function handleDelete(id: string) {
+    const token = await getToken();
+    if (!token) return;
+    await deleteSession(token, id);
+    if (selectedId === id) {
+      setSelectedId(null);
+      setDetail(null);
+    }
+    await refreshSessions();
+  }
+
+  async function handleClear() {
+    const token = await getToken();
+    if (!token) return;
+    await clearHistory(token);
+    setSessions([]);
+    setSelectedId(null);
+    setDetail(null);
+  }
+
+  async function handleDeleteRun(runId: string) {
+    const token = await getToken();
+    if (!token) return;
+    setDetail((prev) => (prev ? { ...prev, runs: prev.runs.filter((r) => r.id !== runId) } : prev));
+    try {
+      await deleteRun(token, runId);
+    } catch {
+      /* best-effort: the row is gone from view; a stale entry reappears on refetch */
+    }
+    await refreshSessions();
   }
 
   if (isLoading) {
@@ -52,7 +194,7 @@ export default function App() {
   }
 
   return (
-    <div style={styles.page}>
+    <div style={showHistory ? styles.pageWide : styles.page}>
       <div style={styles.header}>
         <h1 style={styles.h1}>LLM Code Execution</h1>
         {isAuthenticated && (
@@ -68,61 +210,63 @@ export default function App() {
         )}
       </div>
 
-      <p style={styles.sub}>
-        Describe a task. If it calls for code, it's generated and run in an isolated sandbox.
-      </p>
-
-      {authRequired && !isAuthenticated ? (
-        <button style={styles.button} onClick={() => void loginWithRedirect()}>
-          Log in to run code
-        </button>
+      {showHistory ? (
+        <div style={styles.layout}>
+          <HistorySidebar
+            sessions={sessions}
+            selectedId={selectedId}
+            onSelect={(id) => setSelectedId(id)}
+            onNew={() => {
+              setSelectedId(null);
+              setDetail(null);
+            }}
+            onRename={(id, title) => void handleRename(id, title)}
+            onDelete={(id) => void handleDelete(id)}
+            onClear={() => void handleClear()}
+            onSearch={(q) => setQuery(q)}
+          />
+          <SessionView
+            key={selectedId ?? "new"}
+            runs={selectedRuns}
+            selectedId={selectedId}
+            getToken={getToken}
+            onRun={handleRun}
+            onDeleteRun={(runId) => void handleDeleteRun(runId)}
+          />
+        </div>
       ) : (
         <>
-          <textarea
-            style={styles.textarea}
-            placeholder="e.g. compute the first 20 Fibonacci numbers"
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void onRun();
-            }}
-          />
-          <button
-            style={styles.button}
-            onClick={() => void onRun()}
-            disabled={loading || !prompt.trim()}
-          >
-            {loading ? "Running…" : "Run  (⌘/Ctrl + Enter)"}
-          </button>
+          <p style={styles.sub}>
+            Describe a task. If it calls for code, it's generated and run in an isolated sandbox.
+          </p>
 
-          {error && <div style={styles.error}>⚠️ {error}</div>}
+          {authRequired && !isAuthenticated ? (
+            <button style={styles.button} onClick={() => void loginWithRedirect()}>
+              Log in to run code
+            </button>
+          ) : (
+            <>
+              <textarea
+                style={styles.textarea}
+                placeholder="e.g. compute the first 20 Fibonacci numbers"
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void onRun();
+                }}
+              />
+              <button
+                style={styles.button}
+                onClick={() => void onRun()}
+                disabled={loading || !prompt.trim()}
+              >
+                {loading ? "Running…" : "Run  (⌘/Ctrl + Enter)"}
+              </button>
 
-          {response?.type === "message" && (
-            <div style={styles.messageBanner}>💬 {response.message}</div>
-          )}
+              {error && <div style={styles.error}>⚠️ {error}</div>}
 
-          {response?.type === "result" && (
-            <div>
-              <Section title={`Generated code (${response.language})`}>
-                <pre style={styles.code}>{response.code}</pre>
-              </Section>
-
-              <div style={styles.meta}>
-                exit code: <b>{response.exit_code}</b> · {response.duration_ms} ms
-                {response.timed_out && <span style={styles.timeout}> · timed out</span>}
-              </div>
-
-              {response.stdout && (
-                <Section title="Output (stdout)">
-                  <pre style={styles.output}>{response.stdout}</pre>
-                </Section>
-              )}
-              {response.stderr && (
-                <Section title="Errors (stderr)">
-                  <pre style={styles.stderr}>{response.stderr}</pre>
-                </Section>
-              )}
-            </div>
+              {response && <RunResult response={response} />}
+            </>
           )}
         </>
       )}
@@ -130,16 +274,6 @@ export default function App() {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div style={{ marginTop: 20 }}>
-      <div style={styles.sectionTitle}>{title}</div>
-      {children}
-    </div>
-  );
-}
-
-const mono = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const styles: Record<string, React.CSSProperties> = {
   page: {
     maxWidth: 760,
@@ -148,6 +282,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "system-ui, sans-serif",
     color: "#1a1a1a",
   },
+  pageWide: {
+    maxWidth: 1040,
+    margin: "40px auto",
+    padding: "0 20px",
+    fontFamily: "system-ui, sans-serif",
+    color: "#1a1a1a",
+  },
+  layout: { display: "flex", gap: 20, marginTop: 20, alignItems: "flex-start" },
   header: {
     display: "flex",
     alignItems: "baseline",
@@ -163,7 +305,7 @@ const styles: Record<string, React.CSSProperties> = {
     minHeight: 110,
     padding: 12,
     fontSize: 15,
-    fontFamily: mono,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
     borderRadius: 8,
     border: "1px solid #ccc",
     boxSizing: "border-box",
@@ -196,53 +338,4 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#991b1b",
     border: "1px solid #fecaca",
   },
-  messageBanner: {
-    marginTop: 20,
-    padding: 14,
-    borderRadius: 8,
-    background: "#eff6ff",
-    color: "#1e40af",
-    border: "1px solid #bfdbfe",
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: 600,
-    color: "#555",
-    marginBottom: 6,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-  code: {
-    background: "#0f172a",
-    color: "#e2e8f0",
-    padding: 14,
-    borderRadius: 8,
-    overflowX: "auto",
-    fontFamily: mono,
-    fontSize: 13,
-    margin: 0,
-  },
-  output: {
-    background: "#f8fafc",
-    padding: 14,
-    borderRadius: 8,
-    overflowX: "auto",
-    fontFamily: mono,
-    fontSize: 13,
-    margin: 0,
-    border: "1px solid #e2e8f0",
-  },
-  stderr: {
-    background: "#fff7ed",
-    color: "#9a3412",
-    padding: 14,
-    borderRadius: 8,
-    overflowX: "auto",
-    fontFamily: mono,
-    fontSize: 13,
-    margin: 0,
-    border: "1px solid #fed7aa",
-  },
-  meta: { marginTop: 12, fontSize: 13, color: "#666" },
-  timeout: { color: "#b91c1c", fontWeight: 600 },
 };
