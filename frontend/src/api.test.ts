@@ -60,6 +60,32 @@ describe("execute", () => {
     expect(JSON.parse((init?.body as string) ?? "")).toEqual({ prompt: "my prompt" });
   });
 
+  it("includes session_id in the body when a session id is provided", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      mockResponse({ ok: true, json: () => ({ type: "message", message: "ok" }) }),
+    );
+
+    await execute("my prompt", "tok-123", "sess-1");
+
+    const [, init] = vi.mocked(fetch).mock.calls[0]!;
+    expect(JSON.parse((init?.body as string) ?? "")).toEqual({
+      prompt: "my prompt",
+      session_id: "sess-1",
+    });
+  });
+
+  it("parses the persistence fields (session_id/run_id) on the response", async () => {
+    const payload: MessageResponse = {
+      type: "message",
+      message: "saved",
+      session_id: "sess-1",
+      run_id: "run-1",
+    };
+    vi.mocked(fetch).mockResolvedValue(mockResponse({ ok: true, json: () => payload }));
+
+    await expect(execute("hi", "tok")).resolves.toEqual(payload);
+  });
+
   it("attaches a Bearer Authorization header when a token is provided", async () => {
     vi.mocked(fetch).mockResolvedValue(
       mockResponse({ ok: true, json: () => ({ type: "message", message: "ok" }) }),
@@ -121,19 +147,27 @@ describe("fetchAuthConfig", () => {
     vi.restoreAllMocks();
   });
 
-  it("GETs /api/config and maps auth_required", async () => {
+  it("GETs /api/config and maps auth_required and history_enabled", async () => {
     vi.mocked(fetch).mockResolvedValue(
-      mockResponse({ ok: true, json: () => ({ auth_required: false }) }),
+      mockResponse({ ok: true, json: () => ({ auth_required: false, history_enabled: true }) }),
     );
 
-    await expect(fetchAuthConfig()).resolves.toEqual({ authRequired: false });
+    await expect(fetchAuthConfig()).resolves.toEqual({ authRequired: false, historyEnabled: true });
     expect(vi.mocked(fetch).mock.calls[0]![0]).toBe("http://localhost:8000/api/config");
   });
 
-  it("fails secure (authRequired true) when the field is missing", async () => {
+  it("fails secure (authRequired true, historyEnabled false) when the fields are missing", async () => {
     vi.mocked(fetch).mockResolvedValue(mockResponse({ ok: true, json: () => ({}) }));
 
-    await expect(fetchAuthConfig()).resolves.toEqual({ authRequired: true });
+    await expect(fetchAuthConfig()).resolves.toEqual({ authRequired: true, historyEnabled: false });
+  });
+
+  it("defaults historyEnabled to false when only auth_required is present", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      mockResponse({ ok: true, json: () => ({ auth_required: true }) }),
+    );
+
+    await expect(fetchAuthConfig()).resolves.toEqual({ authRequired: true, historyEnabled: false });
   });
 
   it("throws on a non-2xx response so the caller can fall back to the secure default", async () => {
