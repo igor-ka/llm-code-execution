@@ -15,9 +15,16 @@ export class MemoryHistoryStore implements HistoryStore {
   private sessions = new Map<string, Session>();
   private runs = new Map<string, Run>();
 
-  private id(prefix: string): string {
+  /**
+   * A deterministic, monotonic id shaped as a well-formed v4 UUID (…-4xxx-8xxx-…). The UUID
+   * shape matters because a session id is echoed to the client and handed back in the next
+   * `/api/execute` call, which validates `session_id` with `z.string().uuid()` — the same id
+   * space production Postgres (`gen_random_uuid()`) uses. The counter keeps ordering explicit
+   * and tests stable, just like real wall-clock ids never would.
+   */
+  private id(): string {
     this.seq += 1;
-    return `${prefix}_${this.seq}`;
+    return `00000000-0000-4000-8000-${this.seq.toString(16).padStart(12, "0")}`;
   }
 
   /**
@@ -96,7 +103,7 @@ export class MemoryHistoryStore implements HistoryStore {
     if (sessionId === null) {
       const created = this.now();
       session = {
-        id: this.id("sess"),
+        id: this.id(),
         userId: owner.userId,
         tenantId: owner.tenantId,
         title: titleFromPrompt(run.prompt),
@@ -111,7 +118,7 @@ export class MemoryHistoryStore implements HistoryStore {
       this.sessions.set(session.id, session);
     }
     const stored = {
-      id: this.id("run"),
+      id: this.id(),
       sessionId: session.id,
       userId: owner.userId,
       createdAt: this.now(),
