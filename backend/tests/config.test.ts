@@ -17,6 +17,21 @@ describe("loadSettings", () => {
     expect(s.oidcIssuer).toBe("");
     expect(s.oidcAudience).toBe("");
     expect(s.oidcJwksUrl).toBe("");
+    expect(s.databaseUrl).toBe("");
+    expect(s.historyEnabled).toBe(false);
+  });
+
+  it("enables history only when auth is required AND DATABASE_URL is set", () => {
+    // Both conditions -> enabled.
+    expect(loadSettings({ DATABASE_URL: "postgres://x" }).historyEnabled).toBe(true);
+    // Auth off -> no identity -> disabled even with a DB configured.
+    expect(
+      loadSettings({ DATABASE_URL: "postgres://x", AUTH_REQUIRED: "false" }).historyEnabled,
+    ).toBe(false);
+    // No DB configured -> disabled even with auth on.
+    expect(loadSettings({ AUTH_REQUIRED: "true" }).historyEnabled).toBe(false);
+    // databaseUrl is passed through verbatim.
+    expect(loadSettings({ DATABASE_URL: "postgres://x" }).databaseUrl).toBe("postgres://x");
   });
 
   it("parses AUTH_REQUIRED=false as boolean false", () => {

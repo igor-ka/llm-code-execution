@@ -55,6 +55,29 @@ describe("public endpoints", () => {
     expect(resp.body).toEqual({ auth_required: false, history_enabled: true });
   });
 
+  it("GET /api/config lazily builds the production store when history is enabled", async () => {
+    // settings.historyEnabled (auth on + DATABASE_URL set) but no injected store -> the getter
+    // constructs a PostgresHistoryStore. Pool construction is lazy (no connection), so this
+    // needs no live DB; history_enabled flips to true.
+    const resp = await request(
+      createApp({
+        settings: loadSettings({ AUTH_REQUIRED: "true", DATABASE_URL: "postgres://x" }),
+      }),
+    ).get("/api/config");
+    expect(resp.body).toEqual({ auth_required: true, history_enabled: true });
+  });
+
+  it("GET /api/config: an injected store beats production construction", async () => {
+    // Even with history enabled in settings, an injected store is used verbatim (tests win).
+    const resp = await request(
+      createApp({
+        settings: loadSettings({ AUTH_REQUIRED: "true", DATABASE_URL: "postgres://x" }),
+        history: new MemoryHistoryStore(),
+      }),
+    ).get("/api/config");
+    expect(resp.body).toEqual({ auth_required: true, history_enabled: true });
+  });
+
   it("GET /api/config is public even when auth is required (no token)", async () => {
     const resp = await request(
       createApp({ settings: loadSettings({ AUTH_REQUIRED: "true" }) }),

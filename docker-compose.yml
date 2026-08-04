@@ -9,6 +9,9 @@ services:
       # Inside the container the frontend is reached from the browser, so CORS uses the
       # host-facing origin defined in .env.
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+      # Reach Postgres over the compose network by service name (overrides any localhost
+      # DATABASE_URL from .env, which is only correct for host-run processes).
+      DATABASE_URL: postgres://app:app@postgres:5432/app
     ports:
       - "8000:8000"
     volumes:
@@ -16,7 +19,11 @@ services:
       # This is the local-dev seam that a CloudRunBackend would replace in GCP.
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
-      - sandbox-image-builder
+      sandbox-image-builder:
+        condition: service_started
+      # Wait until Postgres accepts connections so the boot migration doesn't race it.
+      postgres:
+        condition: service_healthy
 
   # One-shot service that builds the sandbox EXECUTION image into the host daemon so the
   # backend can run it. It exits 0 after building.
@@ -29,6 +36,25 @@ services:
     command: ["build", "-t", "${SANDBOX_IMAGE:-llm-sandbox:latest}", "."]
     entrypoint: ["docker"]
 
+  # Per-user chat history datastore. Data persists in the named `pgdata` volume across
+  # restarts. Credentials match the DATABASE_URL above (app/app/app).
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Exposed on the host so local integration tests can reach it at localhost:5432.
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   frontend:
     build:
       context: ./frontend
@@ -39,3 +65,6 @@ services:
       - "5173:5173"
     depends_on:
       - backend
+
+volumes:
+  pgdata:

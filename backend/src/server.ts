@@ -14,6 +14,8 @@ import type { SandboxBackend, ExecutionLimits } from "./sandbox/base.js";
 import { ExecuteRequest, messageResponse, resultResponse } from "./schemas.js";
 import { HttpError } from "./errors.js";
 import type { HistoryStore } from "./history/store.js";
+import { PostgresHistoryStore } from "./history/pgStore.js";
+import { makePool } from "./history/pool.js";
 
 export interface AppDeps {
   settings?: Settings;
@@ -58,10 +60,16 @@ export function createApp(deps: AppDeps = {}): Express {
     if (!sandbox) sandbox = new DockerBackend(settings.sandboxImage);
     return sandbox;
   };
-  // History store seam, owned here so H1–H4 extend it in disjoint regions. H0 exposes only
-  // an injected store; H1 replaces this with a lazy PostgresHistoryStore when history is
-  // enabled. H2 (persist) and H3 (router mount) read getHistory().
-  const getHistory = (): HistoryStore | undefined => deps.history;
+  // History store seam. Tests inject deps.history and win outright. In production, when
+  // history is enabled (auth on + DATABASE_URL set), lazily construct a single cached
+  // PostgresHistoryStore over one pool. H2 (persist) and H3 (router mount) only read
+  // getHistory(); this is the sole place the production store is built.
+  let history = deps.history;
+  const getHistory = (): HistoryStore | undefined => {
+    if (history) return history;
+    if (settings.historyEnabled) history = new PostgresHistoryStore(makePool(settings.databaseUrl));
+    return history;
+  };
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok" });

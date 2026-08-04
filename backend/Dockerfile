@@ -13,6 +13,9 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
+# Migrations are read at runtime (boot applies pending ones; migrate.ts resolves them at
+# ../../migrations relative to dist/history), so they must ship in the runtime image.
+COPY migrations ./migrations
 
 EXPOSE 8000
 CMD ["node", "dist/index.js"]
