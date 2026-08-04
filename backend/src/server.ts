@@ -17,6 +17,7 @@ import { SessionNotFound, type HistoryStore } from "./history/store.js";
 import { PostgresHistoryStore } from "./history/pgStore.js";
 import { makePool } from "./history/pool.js";
 import type { NewRun } from "./history/types.js";
+import { historyRouter } from "./history/router.js";
 
 export interface AppDeps {
   settings?: Settings;
@@ -168,6 +169,13 @@ export function createApp(deps: AppDeps = {}): Express {
       next(err);
     }
   });
+
+  // Per-user history routes, mounted AFTER the terminating /api/health, /api/config, and
+  // /api/execute chains (so those keep their own middleware and are untouched). Only mounted
+  // when a store exists. requirePrincipal populates res.locals.principal for /api/sessions* and
+  // /api/runs/:id; the router's own requireIdentity 404s when userId is null (anonymous, INV-6).
+  const store = getHistory();
+  if (store) app.use("/api", requirePrincipal, historyRouter(store));
 
   // Final error handler — converts HttpError (and JSON parse errors) to {detail}.
   app.use(
