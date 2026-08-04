@@ -3,7 +3,7 @@
  * mint our own RS256 JWTs with jose, and pass the local public key straight to the
  * verifier (jose accepts a key in place of a remote JWKS). Mirrors conftest.py.
  */
-import express, { type Express } from "express";
+import express, { type Express, type RequestHandler } from "express";
 import { SignJWT, generateKeyPair, type KeyLike } from "jose";
 import { makeRequirePrincipal } from "../../src/auth.js";
 import { HttpError } from "../../src/errors.js";
@@ -63,6 +63,20 @@ export function authSettings(overrides: Partial<Settings> = {}): Settings {
     oidcAudience: AUDIENCE,
     oidcJwksUrl: JWKS_URL,
     ...overrides,
+  };
+}
+
+/**
+ * A requirePrincipal stand-in for tests: sets res.locals.principal directly, no token needed.
+ * Pass userId=null to exercise anonymous mode (history persists nothing / routes 404).
+ */
+export function fakePrincipal(
+  userId: string | null,
+  tenantId: string | null = null,
+): RequestHandler {
+  return (_req, res, next) => {
+    res.locals.principal = { userId, tenantId };
+    next();
   };
 }
 

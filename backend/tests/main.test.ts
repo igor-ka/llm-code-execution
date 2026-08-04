@@ -5,6 +5,7 @@ import { loadSettings } from "../src/config.js";
 import type { LLMService } from "../src/llm.js";
 import type { SandboxBackend } from "../src/sandbox/base.js";
 import type { GenerationResult, SandboxResult } from "../src/schemas.js";
+import { MemoryHistoryStore } from "../src/history/memoryStore.js";
 
 const openSettings = (over = {}) => loadSettings({ AUTH_REQUIRED: "false", ...over });
 
@@ -39,12 +40,19 @@ describe("public endpoints", () => {
       createApp({ settings: loadSettings({ AUTH_REQUIRED: "true" }) }),
     ).get("/api/config");
     expect(resp.status).toBe(200);
-    expect(resp.body).toEqual({ auth_required: true });
+    expect(resp.body).toEqual({ auth_required: true, history_enabled: false });
   });
 
   it("GET /api/config reflects auth_required=false", async () => {
     const resp = await request(createApp({ settings: openSettings() })).get("/api/config");
-    expect(resp.body).toEqual({ auth_required: false });
+    expect(resp.body).toEqual({ auth_required: false, history_enabled: false });
+  });
+
+  it("GET /api/config reflects history_enabled=true when a history store is present", async () => {
+    const resp = await request(
+      createApp({ settings: openSettings(), history: new MemoryHistoryStore() }),
+    ).get("/api/config");
+    expect(resp.body).toEqual({ auth_required: false, history_enabled: true });
   });
 
   it("GET /api/config is public even when auth is required (no token)", async () => {

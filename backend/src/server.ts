@@ -13,11 +13,13 @@ import { DockerBackend } from "./sandbox/dockerBackend.js";
 import type { SandboxBackend, ExecutionLimits } from "./sandbox/base.js";
 import { ExecuteRequest, messageResponse, resultResponse } from "./schemas.js";
 import { HttpError } from "./errors.js";
+import type { HistoryStore } from "./history/store.js";
 
 export interface AppDeps {
   settings?: Settings;
   llm?: LLMService;
   sandbox?: SandboxBackend;
+  history?: HistoryStore; // per-user chat history store (H0 seam; H1 builds the real one)
   requirePrincipal?: RequestHandler; // test seam
 }
 
@@ -56,15 +58,20 @@ export function createApp(deps: AppDeps = {}): Express {
     if (!sandbox) sandbox = new DockerBackend(settings.sandboxImage);
     return sandbox;
   };
+  // History store seam, owned here so H1–H4 extend it in disjoint regions. H0 exposes only
+  // an injected store; H1 replaces this with a lazy PostgresHistoryStore when history is
+  // enabled. H2 (persist) and H3 (router mount) read getHistory().
+  const getHistory = (): HistoryStore | undefined => deps.history;
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok" });
   });
 
   // Public, unauthenticated: lets the SPA mirror the server's auth requirement so the
-  // two can't disagree. The backend remains the single source of truth.
+  // two can't disagree. The backend remains the single source of truth. `history_enabled`
+  // is additive — old clients ignore it; the SPA uses it to show/hide the history UI.
   app.get("/api/config", (_req, res) => {
-    res.json({ auth_required: settings.authRequired });
+    res.json({ auth_required: settings.authRequired, history_enabled: getHistory() !== undefined });
   });
 
   app.post("/api/execute", requirePrincipal, async (req, res, next) => {
