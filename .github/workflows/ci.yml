@@ -23,6 +23,22 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # Postgres for the DATABASE_URL-gated integration step below. Only the "Integration test"
+    # step sets DATABASE_URL, so the DB-free "Test" step still skips the Postgres suites.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -43,6 +59,11 @@ jobs:
         run: ./verify.sh test
       - name: Build
         run: ./verify.sh build
+      # Runs the HistoryStore contract + migration suites against the service Postgres above.
+      - name: Integration test
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: ./verify.sh test:integration
       # Build the images on PRs only — keeps pushes to main fast.
       - name: Docker build
         if: github.event_name == 'pull_request'

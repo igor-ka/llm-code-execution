@@ -26,6 +26,8 @@ export interface Settings {
   oidcIssuer: string;
   oidcAudience: string;
   oidcJwksUrl: string;
+  databaseUrl: string;
+  historyEnabled: boolean; // convenience: authRequired && databaseUrl set
 }
 
 type Env = Record<string, string | undefined>;
@@ -38,6 +40,8 @@ const bool = (v: string | undefined, dflt: boolean): boolean =>
   v === undefined ? dflt : !["", "false", "0", "no", "off"].includes(v.toLowerCase());
 
 export function loadSettings(env: Env = process.env): Settings {
+  const databaseUrl = str(env.DATABASE_URL, "");
+  const authRequired = bool(env.AUTH_REQUIRED, true);
   return {
     anthropicApiKey: str(env.ANTHROPIC_API_KEY, ""),
     llmModel: str(env.LLM_MODEL, "claude-sonnet-4-6"),
@@ -48,10 +52,14 @@ export function loadSettings(env: Env = process.env): Settings {
     sandboxPidsLimit: num(env.SANDBOX_PIDS_LIMIT, 64),
     sandboxMaxOutputChars: num(env.SANDBOX_MAX_OUTPUT_CHARS, 20000),
     frontendOrigin: str(env.FRONTEND_ORIGIN, "http://localhost:5173"),
-    authRequired: bool(env.AUTH_REQUIRED, true),
+    authRequired,
     oidcIssuer: str(env.OIDC_ISSUER, ""),
     oidcAudience: str(env.OIDC_AUDIENCE, ""),
     oidcJwksUrl: str(env.OIDC_JWKS_URL, ""),
+    databaseUrl,
+    // History is an authenticated feature: it exists only when auth is on AND a DB is
+    // configured. Anonymous/local mode (no DATABASE_URL) boots with history disabled.
+    historyEnabled: authRequired && databaseUrl !== "",
   };
 }
 
