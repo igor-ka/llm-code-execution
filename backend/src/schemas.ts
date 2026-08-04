@@ -6,6 +6,7 @@ import { z } from "zod";
 // server-side from the verified token (see auth.ts) so they cannot be spoofed.
 export const ExecuteRequest = z.object({
   prompt: z.string().min(1).max(8000),
+  session_id: z.string().uuid().optional(), // continue an existing session; omit to start one
 });
 export type ExecuteRequest = z.infer<typeof ExecuteRequest>;
 
@@ -27,11 +28,18 @@ export interface SandboxResult {
 }
 
 // --- API responses (discriminated by `type`, snake_case on the wire) ---
-export function messageResponse(message: string) {
-  return { type: "message" as const, message };
+// Optional persistence trailer: `session_id`/`run_id` appear only when the run was persisted
+// for an authenticated caller (both present, or neither). Anonymous / history-off omits them,
+// keeping the response byte-identical to the pre-history contract.
+type Persisted = { sessionId?: string; runId?: string };
+const persistedWire = (p?: Persisted) =>
+  p?.sessionId && p?.runId ? { session_id: p.sessionId, run_id: p.runId } : {};
+
+export function messageResponse(message: string, p?: Persisted) {
+  return { type: "message" as const, message, ...persistedWire(p) };
 }
 
-export function resultResponse(language: string, code: string, r: SandboxResult) {
+export function resultResponse(language: string, code: string, r: SandboxResult, p?: Persisted) {
   return {
     type: "result" as const,
     language,
@@ -41,5 +49,6 @@ export function resultResponse(language: string, code: string, r: SandboxResult)
     exit_code: r.exitCode,
     duration_ms: r.durationMs,
     timed_out: r.timedOut,
+    ...persistedWire(p),
   };
 }

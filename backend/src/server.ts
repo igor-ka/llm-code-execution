@@ -7,15 +7,16 @@
 import express, { type Express, type RequestHandler } from "express";
 import cors from "cors";
 import { getSettings, type Settings } from "./config.js";
-import { makeRequirePrincipal } from "./auth.js";
+import { makeRequirePrincipal, type Principal } from "./auth.js";
 import { LLMService } from "./llm.js";
 import { DockerBackend } from "./sandbox/dockerBackend.js";
 import type { SandboxBackend, ExecutionLimits } from "./sandbox/base.js";
 import { ExecuteRequest, messageResponse, resultResponse } from "./schemas.js";
 import { HttpError } from "./errors.js";
-import type { HistoryStore } from "./history/store.js";
+import { SessionNotFound, type HistoryStore } from "./history/store.js";
 import { PostgresHistoryStore } from "./history/pgStore.js";
 import { makePool } from "./history/pool.js";
+import type { NewRun } from "./history/types.js";
 
 export interface AppDeps {
   settings?: Settings;
@@ -90,6 +91,40 @@ export function createApp(deps: AppDeps = {}): Express {
       }
       const { prompt } = parsed.data;
 
+      // Identity is server-derived (auth.ts), never from the body. History persists only for
+      // an authenticated owner AND only when a store is present (H1 supplies it in prod).
+      // Anonymous (userId null) or history-off leaves the response byte-identical (INV-6).
+      const principal = res.locals.principal as Principal;
+      const owner = principal.userId
+        ? { userId: principal.userId, tenantId: principal.tenantId }
+        : null;
+      const store = getHistory();
+      const sessionId = parsed.data.session_id ?? null;
+
+      // Fast owner-scoped pre-check: reject an unowned/unknown session_id before running any
+      // code. appendRun re-checks ownership regardless (INV-4); this is a cheap 404 that also
+      // avoids burning a sandbox run on a request that can never persist.
+      if (owner && store && sessionId && (await store.getSession(owner, sessionId)) === null) {
+        throw new HttpError(404, "session_id not found");
+      }
+
+      // Persist a run best-effort (decision (e)): anonymous/history-off → skip; SessionNotFound
+      // → 404 (race safety net for the pre-check); every other write error is logged and
+      // swallowed so a datastore hiccup never breaks code execution.
+      const persist = async (
+        newRun: NewRun,
+      ): Promise<{ sessionId: string; runId: string } | undefined> => {
+        if (!owner || !store) return undefined;
+        try {
+          const { session, run } = await store.appendRun(owner, sessionId, newRun);
+          return { sessionId: session.id, runId: run.id };
+        } catch (err) {
+          if (err instanceof SessionNotFound) throw new HttpError(404, "session_id not found");
+          console.error("history persist failed (continuing):", err);
+          return undefined;
+        }
+      };
+
       let generation;
       try {
         generation = await getLlm().generate(prompt);
@@ -100,12 +135,11 @@ export function createApp(deps: AppDeps = {}): Express {
       }
 
       if (!generation.shouldExecute) {
-        res.json(
-          messageResponse(
-            generation.message ??
-              "This request doesn't look like something I should write and run code for.",
-          ),
-        );
+        const message =
+          generation.message ??
+          "This request doesn't look like something I should write and run code for.";
+        const persisted = await persist({ kind: "message", prompt, message });
+        res.json(messageResponse(message, persisted));
         return;
       }
 
@@ -118,7 +152,18 @@ export function createApp(deps: AppDeps = {}): Express {
         generation.language,
         limitsFrom(settings),
       );
-      res.json(resultResponse(generation.language, generation.code, result));
+      const persisted = await persist({
+        kind: "result",
+        prompt,
+        language: generation.language,
+        code: generation.code,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+        durationMs: result.durationMs,
+        timedOut: result.timedOut,
+      });
+      res.json(resultResponse(generation.language, generation.code, result, persisted));
     } catch (err) {
       next(err);
     }
