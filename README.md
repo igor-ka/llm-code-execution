@@ -23,8 +23,8 @@ Browser (React) ──POST /api/execute──▶ Express (TypeScript)
 ```
 backend/
   src/
-    server.ts                Express: POST /api/execute, GET /api/health, GET /api/config
-    index.ts                 entrypoint (listens on :8000)
+    server.ts                Express: /api/execute, /api/health, /api/config, /api/sessions*, /api/runs/:id
+    index.ts                 entrypoint (migrates the history DB, then listens on :8000)
     config.ts                settings + sandbox limits (per-tenant override seam)
     schemas.ts               Zod request + response builders + internal types
     errors.ts                HttpError
@@ -33,13 +33,20 @@ backend/
     sandbox/
       base.ts                SandboxBackend interface (the GCP-ready seam)
       dockerBackend.ts       hardened, ephemeral docker run per execution (dockerode)
+    history/                 per-user chat history — the second swappable seam
+      store.ts               HistoryStore interface (+ SessionNotFound, titleFromPrompt)
+      memoryStore.ts         in-memory store (contract oracle + injected test double)
+      pgStore.ts             PostgresHistoryStore — owner-scoped, parameterized SQL
+      router.ts              owner-scoped sessions CRUD + search + run delete
+      dto.ts / types.ts      Zod DTOs + domain types; pool.ts / migrate.ts (SQL runner)
+  migrations/                ordered SQL, applied on boot (001_history.sql)
   sandbox-image/Dockerfile   the minimal, non-root EXECUTION image (Python — unchanged)
-  tests/                     Vitest suites (config/schemas/auth/llm/main) + auth helpers
-  verify.sh                  one-command checks (eslint + prettier + vitest + tsc + docker), also run by CI
+  tests/                     Vitest suites; history/ = contract + router + persist + isolation battery
+  verify.sh                  checks (eslint + prettier + vitest + tsc + docker); +test:integration (Postgres)
 frontend/                    React + Vite UI
-  src/                       App.tsx, api.ts (+ *.test.tsx / *.test.ts unit & component tests)
+  src/                       App.tsx, api.ts, history.ts, components/ (HistorySidebar, SessionView, RunResult)
   verify.sh                  one-command checks (lint + format + vitest + build + docker)
-docker-compose.yml           backend + frontend + one-shot sandbox-image build
+docker-compose.yml           backend + frontend + postgres + one-shot sandbox-image build
 ```
 
 ## Prerequisites
@@ -64,16 +71,26 @@ and `OIDC_JWKS_URL` values for your provider (see `.env.example` and the Auth0 t
 below). To run the backend without an identity provider for local dev, set `AUTH_REQUIRED=false`
 — the endpoint then accepts anonymous requests.
 
+**Per-user chat history** persists each run in **Postgres**, keyed on the verified user, and is
+served under `/api/sessions` + `/api/runs`. It is **an authenticated feature**: it activates
+only when auth is on **and** `DATABASE_URL` is set. Leaving `DATABASE_URL` empty **disables
+persistence** — `/api/execute` then behaves exactly as before (nothing is saved) and the history
+UI is hidden. Under Docker Compose the backend reaches the bundled `postgres` service at
+`postgres://app:app@postgres:5432/app` (wired in `docker-compose.yml`); the backend applies the
+`migrations/` on boot. For a host-run backend, point `DATABASE_URL` at your own Postgres.
+
 ## Run (Docker Compose — recommended)
 
 ```bash
 docker compose up --build
 ```
 
-This builds the sandbox execution image, starts the backend on
+This builds the sandbox execution image, starts **postgres** (history datastore), the backend on
 **http://localhost:8000** and the frontend on **http://localhost:5173**. Open the frontend
 and try a prompt. Because auth is on by default, you'll need the Auth0 setup below (or set
-`AUTH_REQUIRED=false` in `.env` for an open local instance).
+`AUTH_REQUIRED=false` in `.env` for an open local instance — note that history is disabled in
+that anonymous mode). History data persists in the `pgdata` volume across restarts (`docker
+compose down -v` drops it).
 
 ## Run locally without Compose
 
@@ -134,6 +151,31 @@ CPU and PID limits, a read-only root filesystem + small tmpfs, **all** Linux cap
 dropped, `no-new-privileges`, a non-root user, a wall-clock timeout (container killed on
 overrun), and `--rm` so nothing persists. Output is truncated to a safe size.
 
+## Per-user chat history
+
+Signed-in users get a persistent, **strictly private** history of their runs, grouped into
+**sessions** (a session ⇒ many runs; the no-code "message" replies are saved too). The UI adds a
+sidebar to list, reopen, search, rename, delete, and clear *your own* history; each `/api/execute`
+appends to the current session (or starts one).
+
+**Isolation is the core guarantee — no user can see or touch another's history — and it is
+structural, not incidental:**
+
+- Identity comes from the **verified token** (`sub`), never the request body. Every `HistoryStore`
+  method takes that owner and filters on it (`WHERE user_id = …`); a session/run you don't own is
+  **indistinguishable from one that doesn't exist** — both return **404** (no enumeration leak).
+- `runs.user_id` is **denormalized** as defense-in-depth, and history routes **404 for anonymous
+  callers** (the feature doesn't exist without an identity). SQL is fully parameterized;
+  substring search escapes LIKE wildcards.
+- Storage sits behind a swappable **`HistoryStore`** interface (mirroring `SandboxBackend`): an
+  in-memory oracle backs tests, `PostgresHistoryStore` backs production; both satisfy one shared
+  contract suite.
+
+These invariants (**INV-1…8**) are proven by an **adversarial cross-user battery** run against
+*both* stores in `backend/tests/history/isolation.test.ts`, including a **planted-hole regression**
+(`historyMutants.ts`) that fails if any owner filter is ever dropped — the same mutation-testing
+approach used for the auth gate.
+
 ## Security posture
 
 > ⚠️ **This is a local learning build, not production-ready.** The sandbox itself is solid;
@@ -142,7 +184,9 @@ overrun), and `--rm` so nothing persists. Output is truncated to a safe size.
 
 **Hardened (verified):** the per-execution sandbox isolation listed above. Generated code is
 passed into the container without mounting any host path, and unsupported languages are
-rejected server-side. The frontend also sends a strict Content-Security-Policy (`script-src
+rejected server-side. **Per-user chat history is owner-scoped and proven isolated** by the
+INV-1…8 battery (see *Per-user chat history* above). The frontend also sends a strict
+Content-Security-Policy (`script-src
 'self'` — no inline/eval, framing denied, network egress limited to the backend API and the
 Auth0 tenant) to limit XSS, since the access token lives in JS memory; the dev server relaxes
 it just enough for HMR.
@@ -164,7 +208,8 @@ it just enough for HMR.
 - Internal exception detail is surfaced in some error responses; HTTP only (no TLS).
 
 These map directly to the Roadmap below. The auth gate is regression-tested in
-`backend/tests/` (battery + mutation coverage); the
+`backend/tests/` (battery + mutation coverage), and per-user history isolation is likewise
+regression-tested (the cross-user INV battery + planted-hole mutants, against both stores); the
 [retrospective](docs/design/auth-bypass-agent.md) explains how that testing was arrived at, and
 the [ad-hoc security-testing runbook](docs/runbooks/adhoc-auth-security-testing.md) shows how to
 drive Claude Code for on-demand discovery testing of the auth gate.
@@ -199,7 +244,9 @@ The behavioral checks below have been run and pass (✅). Re-run them anytime.
 - Auth: backend OIDC token gate and the Auth0 SPA login are both in and verified end-to-end
   (on by default via `AUTH_REQUIRED`); remaining work is multi-tenancy and per-user quotas /
   rate limiting keyed on the verified `sub` (limits centralized in `config.ts`).
+- **Chat history: shipped** — per-user, isolated, Postgres-backed (see *Per-user chat history*).
+  Follow-ups: a retention window / per-user row cap, richer full-text search (`pg_trgm` or a
+  `tsvector` column), and the per-user quotas above (keyed on the same verified `sub`).
 - GCP deploy: a `CloudRunBackend` implementing `SandboxBackend`, or GKE + gVisor.
-- Vertex AI for Claude (swap the client in `llm.ts`), more languages, session persistence,
-  artifact/chart return.
+- Vertex AI for Claude (swap the client in `llm.ts`), more languages, artifact/chart return.
 ```
