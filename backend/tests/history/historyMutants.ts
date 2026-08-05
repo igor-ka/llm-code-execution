@@ -96,3 +96,35 @@ export class LeakyAppendRun extends DelegatingStore {
     return super.appendRun(requester, sessionId, run);
   }
 }
+
+/** Distinct seeded owners (by userId) — the collection-op mutants below sweep across all of them. */
+function distinctOwners(m: Map<string, Owner>): Owner[] {
+  const seen = new Map<string, Owner>();
+  for (const o of m.values()) seen.set(o.userId, o);
+  return [...seen.values()];
+}
+
+/** FLAW: listSessions returns EVERY owner's sessions, not just the caller's (cross-user read). */
+export class LeakyListSessions extends DelegatingStore {
+  async listSessions(_requester: Owner, opts: ListOptions): Promise<SessionPage> {
+    const pages = await Promise.all(
+      distinctOwners(this.sessionOwner).map((o) =>
+        this.inner.listSessions(o, { limit: 1000, offset: 0 }),
+      ),
+    );
+    const all = pages.flatMap((p) => p.sessions);
+    return { sessions: all.slice(opts.offset, opts.offset + opts.limit), total: all.length };
+  }
+}
+
+/** FLAW: clearAll deletes EVERY owner's sessions, not just the caller's — the destructive
+ *  cross-user hole (one user's "clear my history" wipes everyone). */
+export class LeakyClearAll extends DelegatingStore {
+  async clearAll(_requester: Owner): Promise<number> {
+    let n = 0;
+    for (const o of distinctOwners(this.sessionOwner)) n += await this.inner.clearAll(o);
+    this.sessionOwner.clear();
+    this.runOwner.clear();
+    return n;
+  }
+}

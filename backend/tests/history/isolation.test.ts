@@ -25,6 +25,8 @@ import {
   LeakyDeleteRun,
   LeakyDeleteSession,
   LeakyAppendRun,
+  LeakyListSessions,
+  LeakyClearAll,
 } from "./historyMutants.js";
 
 const settings = loadSettings({ AUTH_REQUIRED: "false" });
@@ -250,6 +252,30 @@ describe("INV-7 planted-hole regression: mutant leaks, real store denies", () =>
     ).rejects.toThrow(); // real DENIES
     const leaked = await mutant.appendRun(B, ms.id, { kind: "message", prompt: "x", message: "y" });
     expect(leaked.session.id).toBe(ms.id); // mutant LEAKS: wrote into A's session
+    await real.close();
+    await mutant.close();
+  });
+
+  it("dropped user_id in listSessions lets B read A's sessions", async () => {
+    const real = new MemoryHistoryStore();
+    const mutant = new LeakyListSessions();
+    await real.appendRun(A, null, { kind: "message", prompt: "p", message: "m" });
+    await mutant.appendRun(A, null, { kind: "message", prompt: "p", message: "m" });
+    expect((await real.listSessions(B, { limit: 50, offset: 0 })).total).toBe(0); // real DENIES
+    expect((await mutant.listSessions(B, { limit: 50, offset: 0 })).total).toBe(1); // mutant LEAKS
+    await real.close();
+    await mutant.close();
+  });
+
+  it("dropped user_id in clearAll lets B wipe A's data (the destructive hole)", async () => {
+    const real = new MemoryHistoryStore();
+    const mutant = new LeakyClearAll();
+    await real.appendRun(A, null, { kind: "message", prompt: "p", message: "m" });
+    await mutant.appendRun(A, null, { kind: "message", prompt: "p", message: "m" });
+    await real.clearAll(B); // real: no-op for A
+    await mutant.clearAll(B); // mutant: wipes everyone
+    expect((await real.listSessions(A, { limit: 50, offset: 0 })).total).toBe(1); // real DENIES: A survives
+    expect((await mutant.listSessions(A, { limit: 50, offset: 0 })).total).toBe(0); // mutant LEAKS: A wiped
     await real.close();
     await mutant.close();
   });
