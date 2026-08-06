@@ -59,7 +59,7 @@ app ever gets open signup, this is the first thing to revisit.
 | `backend/src/history/migrate.ts` | Wrap the whole run in a session-level `pg_advisory_lock` on a single client. |
 | `backend/src/index.ts` | One pool for migrations *and* the store; inject the store; install the shutdown handler; log via `log.ts`. |
 | `backend/src/server.ts` | Mount the rate-limit middleware on `/api/execute`; gate sandbox execution on the semaphore; log via `log.ts`. |
-| `backend/src/config.ts` | Add `rateLimitPerMinute`, `maxConcurrentSandboxes`, `logFormat`. |
+| `backend/src/config.ts` | Add `rateLimitPerMinute`, `maxConcurrentSandboxes`. (`LOG_FORMAT` is deliberately *not* added — see Task 1.) |
 | `backend/tests/history/migrate.test.ts` | Add the concurrent-runner regression test. |
 | `backend/tests/config.test.ts` | Cover the three new settings. |
 | `backend/tests/main.test.ts` | App-level 429 and 503 coverage. |
@@ -97,12 +97,19 @@ Scope is deliberately tight: this task creates the logger and adopts it at the b
 and the two `console.error` sites in `server.ts`. `cli-migrate.ts` is a developer-facing one-shot
 CLI and intentionally keeps plain `console` — it never runs in a container.
 
+**A note on where `LOG_FORMAT` lives.** It is read from `process.env` inside `log.ts` and is
+deliberately **not** added to `Settings`. The tempting move is to put it in `config.ts` alongside
+everything else, but that produces config that is never read: the logger is a module-level
+singleton constructed at import time, long before anything can hand it a `Settings`. Wiring it
+properly would mean either a second logger built in `index.ts` (leaving `server.ts` importing the
+first one — two loggers, two formats) or a `configureLogger()` mutation step. Neither is worth it.
+`config.ts` documents itself as the seam for *per-tenant* overrides, and log format is not
+per-tenant. One env var, read in one place.
+
 **Files:**
 
 - Create: `backend/src/log.ts`
 - Create: `backend/tests/log.test.ts`
-- Modify: `backend/src/config.ts`
-- Modify: `backend/tests/config.test.ts`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -264,55 +271,24 @@ export const log: Logger = makeLogger(
 );
 ```
 
-Note the `log` singleton reads `process.env` directly rather than `getSettings()`. That is
-intentional and load-bearing: `config.ts` imports `dotenv`, and a logger that imported `config.ts`
-would create an import cycle the moment `config.ts` wanted to log. `logFormat` still appears in
-`Settings` (next step) because that is where the README documents configuration.
+The `log` singleton reads `process.env` directly rather than `getSettings()`, for two reasons.
+First, a logger that imported `config.ts` would create an import cycle the moment `config.ts`
+wanted to log. Second, per the note at the top of this task, routing it through `Settings` would
+create a value that nothing ever reads.
 
-- [ ] **Step 4: Add `logFormat` to settings**
+One consequence to be aware of: because the singleton is built at module-evaluation time, it picks
+up repo-root `.env` values only if something imported `config.ts` (which runs `dotenv`) first. In
+practice `index.ts` imports `./server.js` → `./config.js` before `./log.js` evaluates, so local dev
+works. Nothing in production depends on that ordering, because there `LOG_FORMAT` is a real
+environment variable and no `.env` file exists.
 
-In `backend/src/config.ts`, add to the `Settings` interface after `historyEnabled`:
+- [ ] **Step 4: Run the tests to verify they pass**
 
-```ts
-  logFormat: "json" | "text"; // "json" for Cloud Logging ingestion; "text" for humans
-```
+Run: `cd backend && npx vitest run tests/log.test.ts`
 
-And in `loadSettings`, add to the returned object after `historyEnabled`:
+Expected: PASS, all six tests green.
 
-```ts
-    logFormat: str(env.LOG_FORMAT, "text") === "json" ? "json" : "text",
-```
-
-- [ ] **Step 5: Add the config test**
-
-Append to `backend/tests/config.test.ts`:
-
-```ts
-describe("logFormat", () => {
-  it("defaults to text", () => {
-    expect(loadSettings({}).logFormat).toBe("text");
-  });
-
-  it("is json when LOG_FORMAT=json", () => {
-    expect(loadSettings({ LOG_FORMAT: "json" }).logFormat).toBe("json");
-  });
-
-  it("falls back to text for an unrecognized value", () => {
-    expect(loadSettings({ LOG_FORMAT: "logfmt" }).logFormat).toBe("text");
-  });
-});
-```
-
-If `config.test.ts` does not already import `describe`/`it`/`expect` and `loadSettings`, reuse the
-imports already at the top of that file rather than adding duplicates.
-
-- [ ] **Step 6: Run the tests to verify they pass**
-
-Run: `cd backend && npx vitest run tests/log.test.ts tests/config.test.ts`
-
-Expected: PASS, all tests green.
-
-- [ ] **Step 7: Adopt the logger in `server.ts`**
+- [ ] **Step 5: Adopt the logger in `server.ts`**
 
 In `backend/src/server.ts`, add to the imports:
 
@@ -344,18 +320,17 @@ with:
       log.error("unhandled request error", { err });
 ```
 
-- [ ] **Step 8: Run the full backend test suite**
+- [ ] **Step 6: Run the full backend test suite**
 
 Run: `cd backend && ./verify.sh test`
 
 Expected: PASS. (`main.test.ts` asserts response bodies, not log output, so this is a no-op for it.)
 
-- [ ] **Step 9: Format, lint and commit**
+- [ ] **Step 7: Format, lint and commit**
 
 ```bash
 cd backend && npm run format && npm run lint
-git add backend/src/log.ts backend/tests/log.test.ts backend/src/config.ts \
-        backend/tests/config.test.ts backend/src/server.ts
+git add backend/src/log.ts backend/tests/log.test.ts backend/src/server.ts
 git commit -m "feat(obs): structured JSON logging for container platforms"
 ```
 
@@ -482,16 +457,22 @@ async function applyPending(client: PoolClient): Promise<void> {
  */
 export async function migrate(pool: Pool): Promise<void> {
   const client = await pool.connect();
+  let held = false;
   try {
     await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_KEY]);
-    try {
-      await applyPending(client);
-    } finally {
-      await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY]);
-    }
-  } finally {
-    // Releasing to the pool also drops any session locks if the unlock above never ran.
+    held = true;
+    await applyPending(client);
+    await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY]);
+    held = false;
     client.release();
+  } catch (err) {
+    // Destroy rather than recycle. `client.release()` does NOT issue DISCARD ALL, so a
+    // session-level advisory lock survives a plain release and is only freed when the
+    // connection actually closes — which would leave every other instance blocked at the
+    // lock until an idle timeout. `release(err)` removes the connection from the pool.
+    if (held) client.release(err instanceof Error ? err : new Error(String(err)));
+    else client.release();
+    throw err;
   }
 }
 ```
@@ -792,21 +773,30 @@ its behaviour is unchanged.
 
 - [ ] **Step 7: Verify shutdown by hand**
 
-```bash
-docker compose up -d postgres
-cd backend
-DATABASE_URL=postgres://app:app@localhost:5432/app AUTH_REQUIRED=false LOG_FORMAT=json npm run dev
-```
-
-In a second terminal, confirm it is up and then signal it:
+Use Compose rather than `npm run dev`: `docker compose stop` sends SIGTERM to PID 1 of the
+container, which is the closest local analogue of what a container platform actually does. (Do not
+verify with `pkill -f "tsx watch"` — that signals the *watcher*, not the child process that
+installed the handler, so it proves nothing.)
 
 ```bash
-curl -s localhost:8000/api/health   # -> {"status":"ok"}
-pkill -TERM -f "tsx watch src/index.ts"
+docker compose up -d --build backend postgres
+curl -s localhost:8000/api/health          # -> {"status":"ok"}
+docker compose stop backend                # sends SIGTERM, then SIGKILL after its grace period
+docker compose logs backend | tail -5
 ```
 
-Expected in the first terminal: a `shutdown: draining` JSON line followed by `shutdown: complete`,
-and the process exits on its own without a stack trace.
+Expected in the log tail: a `shutdown: draining` line, then `shutdown: complete`, and an exit with
+no stack trace. Confirm the container stopped on its own rather than being killed:
+
+```bash
+docker inspect -f '{{.State.ExitCode}}' "$(docker compose ps -aq backend)"   # -> 0
+```
+
+An exit code of `137` means SIGKILL won the race — the handler either was not installed or never
+finished.
+
+To see the JSON log shape at the same time, add `LOG_FORMAT=json` to the `backend` service's
+`environment:` block in `docker-compose.yml` for the duration of this check, then revert it.
 
 - [ ] **Step 8: Commit**
 
@@ -984,6 +974,12 @@ export function makeRateLimiter({
 /**
  * Express middleware form. Mount AFTER requirePrincipal so the key is the verified `sub`;
  * anonymous mode has no identity to key on, so it falls back to the socket address.
+ *
+ * CAVEAT for the deployed case: behind a load balancer, `req.ip` is the balancer's address unless
+ * Express `trust proxy` is enabled, which collapses every anonymous caller onto one bucket — i.e.
+ * a global limit rather than a per-caller one. That is tolerable only because the deployed
+ * configuration runs with auth ON, where the key is always the verified `sub` and `req.ip` is
+ * never reached. If anonymous mode is ever exposed behind a proxy, set `trust proxy` first.
  */
 export function rateLimitMiddleware(limiter: RateLimiter): RequestHandler {
   return (req, res, next) => {
@@ -1008,13 +1004,14 @@ Expected: PASS — all six tests.
 
 - [ ] **Step 5: Add the setting**
 
-In `backend/src/config.ts`, add to the `Settings` interface after `logFormat`:
+In `backend/src/config.ts`, add to the `Settings` interface after `historyEnabled` (the last
+field):
 
 ```ts
   rateLimitPerMinute: number; // per verified principal, per instance; 0 disables
 ```
 
-And in `loadSettings`, after the `logFormat` line:
+And in `loadSettings`, after the `historyEnabled` line:
 
 ```ts
     rateLimitPerMinute: num(env.RATE_LIMIT_PER_MINUTE, 10),
@@ -1075,7 +1072,14 @@ Append to `backend/tests/main.test.ts`:
 
 ```ts
 describe("rate limiting", () => {
-  const gen: GenerationResult = { shouldExecute: false, message: "nope" };
+  // Every field of GenerationResult is required (schemas.ts:14-19) — omitting language/code
+  // fails `tsc -p tsconfig.test.json`, which runs before vitest and would break the whole suite.
+  const gen: GenerationResult = {
+    shouldExecute: false,
+    language: null,
+    code: null,
+    message: "nope",
+  };
 
   it("429s past the configured per-minute limit and sets Retry-After", async () => {
     const app = createApp({
@@ -1280,6 +1284,18 @@ Add to the imports:
 import { makeSemaphore } from "./semaphore.js";
 ```
 
+`SandboxResult` is also needed for the explicit annotation below. It lives in `schemas.ts`, so
+extend the existing import on line 14 rather than adding a new one:
+
+```ts
+import {
+  ExecuteRequest,
+  messageResponse,
+  resultResponse,
+  type SandboxResult,
+} from "./schemas.js";
+```
+
 Inside `createApp`, right after the `executeRateLimit` block from Task 4:
 
 ```ts
@@ -1304,7 +1320,8 @@ with:
       if (!sandboxSlots.tryAcquire()) {
         throw new HttpError(503, "Server is at sandbox capacity. Please retry shortly.");
       }
-      let result;
+      // Explicitly typed rather than relying on evolving-any across try/finally.
+      let result: SandboxResult;
       try {
         result = await getSandbox().execute(
           generation.code,
@@ -1323,10 +1340,12 @@ Append to `backend/tests/main.test.ts`:
 
 ```ts
 describe("sandbox concurrency cap", () => {
+  // All four fields are required — see the note in the rate-limiting suite above.
   const gen: GenerationResult = {
     shouldExecute: true,
     language: "python",
     code: "print(1)",
+    message: null,
   };
 
   /** A sandbox that parks until we let it finish, so we can hold a slot open. */
@@ -1356,7 +1375,13 @@ describe("sandbox concurrency cap", () => {
       sandbox: sandbox as unknown as SandboxBackend,
     });
 
-    const first = request(app).post("/api/execute").send({ prompt: "go" });
+    // `.then()` is what actually dispatches the request: supertest's Test extends a superagent
+    // Request, which is a LAZY thenable. Assigning it without .then()/.end() sends nothing, so
+    // sandbox.started would stay 0 and the vi.waitFor below would time out.
+    const first = request(app)
+      .post("/api/execute")
+      .send({ prompt: "go" })
+      .then((r) => r);
     await vi.waitFor(() => expect(sandbox.started).toBe(1));
 
     const overflow = await request(app).post("/api/execute").send({ prompt: "go" });
@@ -1367,7 +1392,10 @@ describe("sandbox concurrency cap", () => {
     expect((await first).status).toBe(200);
 
     // Slot released: a later request now gets in rather than 503ing.
-    const after = request(app).post("/api/execute").send({ prompt: "go" });
+    const after = request(app)
+      .post("/api/execute")
+      .send({ prompt: "go" })
+      .then((r) => r);
     await vi.waitFor(() => expect(sandbox.started).toBe(2));
     sandbox.finish();
     expect((await after).status).toBe(200);
@@ -1863,47 +1891,63 @@ MAX_CONCURRENT_SANDBOXES=4
 
 # --- Logging ---
 # `text` (default) for readable local output; `json` emits one Cloud Logging-shaped object per
-# line, which is what you want in any hosted environment.
+# line, which is what you want in any hosted environment. Read directly by src/log.ts, not via
+# config.ts — the logger is constructed at import time, before any Settings exist.
 LOG_FORMAT=text
 ```
 
-- [ ] **Step 2: Update the README layout block**
+- [ ] **Step 2: Update the README layout block — additively**
 
-In the `## Layout` section, update the backend tree to list the new modules:
+**Do not replace the layout block wholesale.** It already documents the history feature
+(`/api/sessions*`, `/api/runs/:id`, `history.ts`, `components/`), and a block replacement would
+silently delete accurate documentation. Make four surgical insertions instead.
+
+**(a)** Change only the `index.ts` description line (`README.md:27`), because it now does more:
 
 ```
-backend/
-  src/
-    server.ts                Express: POST /api/execute, GET /api/health, GET /api/config
-    index.ts                 entrypoint (listens on :8000, migrates, installs shutdown)
-    config.ts                settings + sandbox limits (per-tenant override seam)
-    schemas.ts               Zod request + response builders + internal types
-    errors.ts                HttpError
+    index.ts                 entrypoint (migrates the history DB, then listens on :8000)
+```
+
+becomes:
+
+```
+    index.ts                 entrypoint (migrates, serves :8000, drains on SIGTERM)
+```
+
+**(b)** Insert four lines immediately after the `errors.ts   HttpError` line, keeping the existing
+column alignment:
+
+```
     log.ts                   structured logger (text locally, JSON for log aggregators)
     shutdown.ts              SIGTERM/SIGINT draining + hard-deadline exit
     rateLimit.ts             per-principal fixed-window limiter + Express middleware
     semaphore.ts             concurrency cap for in-flight sandbox executions
-    llm.ts                   single structured Claude call (judge + generate) w/ prompt caching
-    auth.ts                  OIDC bearer-token middleware (require_principal)
 ```
 
-And update the frontend entry:
+**(c)** In the `frontend/` block, add `csp.ts` to the `src/` line — keep `history.ts` and
+`components/`:
 
 ```
-frontend/                    React + Vite UI
-  src/                       App.tsx, api.ts, csp.ts (+ *.test.tsx / *.test.ts)
+  src/                       App.tsx, api.ts, history.ts, csp.ts, components/ (HistorySidebar, SessionView, RunResult)
+```
+
+**(d)** Insert three lines after that `src/` line, before `verify.sh`:
+
+```
   nginx.conf                 production static server (port 8080, CSP header, SPA fallback)
   Dockerfile                 production image: vite build + unprivileged nginx
   Dockerfile.dev             dev-server image used by docker-compose (HMR)
-  verify.sh                  one-command checks (lint + format + vitest + build + docker)
 ```
 
 - [ ] **Step 3: Update the security-posture section**
 
-In **Hardened (verified)**, extend the CSP sentence so it is accurate for production. Replace:
+In **Hardened (verified)**, the CSP sentence currently begins mid-paragraph at `README.md:188`.
+Replace this exact text (note it starts with "The frontend also sends", and the line wrapping
+matters for an exact match):
 
 ```
-the frontend also sends a strict Content-Security-Policy (`script-src
+The frontend also sends a strict
+Content-Security-Policy (`script-src
 'self'` — no inline/eval, framing denied, network egress limited to the backend API and the
 Auth0 tenant) to limit XSS, since the access token lives in JS memory; the dev server relaxes
 it just enough for HMR.
@@ -1912,28 +1956,81 @@ it just enough for HMR.
 with:
 
 ```
-The frontend sends a strict Content-Security-Policy (`script-src 'self'` — no inline/eval,
-framing denied, network egress limited to the backend API and the Auth0 tenant) to limit XSS,
-since the access token lives in JS memory; the dev server relaxes it just enough for HMR. The
-policy is generated once in `src/csp.ts` and delivered three ways from that single source: as a
-dev-server header, a `vite preview` header, and an nginx `add_header` fragment emitted into the
-production build (`verify.sh` fails the build if that fragment is missing).
+The frontend also sends a strict
+Content-Security-Policy (`script-src 'self'` — no inline/eval, framing denied, network egress
+limited to the backend API and the Auth0 tenant) to limit XSS, since the access token lives in
+JS memory; the dev server relaxes it just enough for HMR. The policy is generated once in
+`src/csp.ts` and delivered from that single source three ways: a dev-server header, a
+`vite preview` header, and an nginx `add_header` fragment emitted into the production build
+(`verify.sh` fails if that fragment is missing).
 ```
 
-Then replace the **No rate limiting / concurrency cap** bullet in **Known limitations** with:
+If the exact-match fails because of wrapping, re-read `README.md:186-193` and edit in place —
+the substance to add is the final sentence about the three delivery paths.
+
+Then replace the **No rate limiting / concurrency cap** bullet (`README.md:203-204`):
+
+```
+- **No rate limiting / concurrency cap.** A burst of requests can exhaust host resources
+  (one container each) and API budget. Add per-user quotas + a sandbox concurrency limit.
+```
+
+with:
 
 ```
 - **Rate limiting is per-instance, not global.** `/api/execute` is capped per verified `sub`
   (`RATE_LIMIT_PER_MINUTE`, default 10/min) and in-flight sandbox executions are capped per
-  process (`MAX_CONCURRENT_SANDBOXES`, default 4, excess gets 503). Both counters live in memory,
-  so with N instances the real ceiling is N x the configured value — a deployment must therefore
-  cap its maximum instance count. A shared-store limiter is the fix if this ever takes untrusted
-  signups.
+  process (`MAX_CONCURRENT_SANDBOXES`, default 4; excess gets a 503 rather than queueing). Both
+  counters live in process memory, so with N instances the real ceiling is N x the configured
+  value — any deployment must therefore also cap its maximum instance count. A shared-store
+  limiter is the fix if this ever takes untrusted signups.
 ```
 
-- [ ] **Step 4: Update the roadmap**
+- [ ] **Step 4: Update the Verification section**
 
-Replace the GCP deploy bullet with:
+`README.md:224-225` says the frontend verify "builds the frontend Docker image" — it now builds
+two. Replace:
+
+```
+- **Frontend:** `cd frontend && ./verify.sh` — installs deps, runs ESLint + Prettier +
+  Vitest, type-checks/builds, and builds the frontend Docker image.
+```
+
+with:
+
+```
+- **Frontend:** `cd frontend && ./verify.sh` — installs deps, runs ESLint + Prettier +
+  Vitest, type-checks/builds (asserting the production CSP shipped with the bundle), and builds
+  both frontend images: the production nginx one and the dev-server one Compose uses.
+```
+
+- [ ] **Step 5: Update the roadmap**
+
+Two bullets move. First, the auth bullet (`README.md:244-246`) lists rate limiting as outstanding;
+it is now partly done. Replace:
+
+```
+- Auth: backend OIDC token gate and the Auth0 SPA login are both in and verified end-to-end
+  (on by default via `AUTH_REQUIRED`); remaining work is multi-tenancy and per-user quotas /
+  rate limiting keyed on the verified `sub` (limits centralized in `config.ts`).
+```
+
+with:
+
+```
+- Auth: backend OIDC token gate and the Auth0 SPA login are both in and verified end-to-end
+  (on by default via `AUTH_REQUIRED`). Per-`sub` rate limiting now ships (see *Security
+  posture*); remaining work is multi-tenancy and durable per-user quotas that survive a
+  restart and are shared across instances.
+```
+
+Then replace the GCP deploy bullet (`README.md:250`):
+
+```
+- GCP deploy: a `CloudRunBackend` implementing `SandboxBackend`, or GKE + gVisor.
+```
+
+with:
 
 ```
 - GCP deploy: Phase 0 (deployability hardening — migration locking, graceful shutdown, request
@@ -1941,18 +2038,22 @@ Replace the GCP deploy bullet with:
   GCP foundation, then a `CloudRunBackend` implementing `SandboxBackend`.
 ```
 
-- [ ] **Step 5: Verify the README is honest**
+- [ ] **Step 6: Verify the README is honest**
 
-Re-read the three edited sections against the code. Specifically confirm: the default values quoted
-(10/min, 4 concurrent) match `config.ts`; the file list matches `ls backend/src frontend`; and no
-remaining sentence claims something Phase 0 changed.
+Re-read every edited section against the code. Confirm: the quoted defaults (10/min, 4 concurrent)
+match `config.ts`; the layout list matches the real tree; the history routes and `components/` are
+still documented; and no remaining sentence claims something Phase 0 changed.
 
 ```bash
 ls backend/src frontend
 grep -n "rateLimitPerMinute\|maxConcurrentSandboxes" backend/src/config.ts
+grep -n "sessions\|history.ts\|components/" README.md | head
 ```
 
-- [ ] **Step 6: Commit**
+The third command must still return the history-feature references — if it does not, the layout
+edit was applied as a replacement rather than an insertion. Fix that before committing.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add README.md .env.example
