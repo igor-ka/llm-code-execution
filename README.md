@@ -227,6 +227,12 @@ drift (CI invokes the same scripts).
 Both accept `SKIP_INSTALL=1` (reuse the current environment) and `SKIP_DOCKER=1`
 (host checks only, skip the image build).
 
+CI runs one additional check that has no local equivalent: the **`SDLC docs`** job compares a
+pull request against its base ref and fails if the change touches the development process
+(`.claude/skills/**`, either `verify.sh`, or `.github/workflows/ci.yml`) without updating
+[`docs/sdlc.md`](docs/sdlc.md). That document describes how a change gets from an idea to
+`main` — phases, gates, and how they meet CI.
+
 The behavioral checks below have been run and pass (✅). Re-run them anytime.
 
 - **Health:** `curl localhost:8000/api/health` → `{"status":"ok"}`.

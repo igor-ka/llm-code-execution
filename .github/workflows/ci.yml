@@ -99,3 +99,28 @@ jobs:
       - name: Docker build
         if: github.event_name == 'pull_request'
         run: ./verify.sh docker
+
+  # docs/sdlc.md is a contract: a PR that changes the development process (the skills in
+  # .claude/skills/, either verify.sh, or this workflow) must update it in the same PR.
+  #
+  # This is the one deliberate exception to "never add a CI check without adding it to the
+  # matching verify.sh" — it is a diff-level check against the PR's base ref, so it has no
+  # meaningful single-working-tree equivalent. PRs only, for the same reason.
+  #
+  # NOTE: this is a NEW job name, so no existing required check is renamed and the ruleset
+  # keeps working untouched. It only *blocks* merges once "SDLC docs" is added to the
+  # "Protect main" ruleset's required status checks — until then it is advisory.
+  sdlc-docs:
+    name: SDLC docs
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      # Full history so the merge-base with the PR's base ref is resolvable.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check docs/sdlc.md is in sync
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: ./scripts/check-sdlc-sync.sh
