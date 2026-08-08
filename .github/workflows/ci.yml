@@ -99,3 +99,8 @@ jobs:
       - name: Docker build
         if: github.event_name == 'pull_request'
         run: ./verify.sh docker
+
+  # The "SDLC docs" check lives in its own workflow (.github/workflows/sdlc-docs.yml)
+  # because it must also trigger on `pull_request: edited` — the [skip-sdlc-sync] escape
+  # hatch is read from the PR title. Adding `edited` here would re-run the full backend and
+  # frontend suites, image builds included, every time someone fixes a typo in a PR title.
