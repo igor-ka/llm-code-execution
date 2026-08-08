@@ -224,27 +224,16 @@ git diff --staged
 # 2. Ensure no secrets
 git diff --staged | grep -i "password\|secret\|api_key\|token"
 
-# 3. Run tests
-npm test
-
-# 4. Run linting
-npm run lint
-
-# 5. Run type checking
-npx tsc --noEmit
+# 3. Run the side's full check script — lint, format, types, tests, build, docker
+cd backend  && ./verify.sh      # or: cd frontend && ./verify.sh
 ```
 
-Automate this with git hooks:
-
-```json
-// package.json (using lint-staged + husky)
-{
-  "lint-staged": {
-    "*.{ts,tsx}": ["eslint --fix", "prettier --write"],
-    "*.{json,md}": ["prettier --write"]
-  }
-}
-```
+**Do not substitute bare `npm test` / `npm run lint` / `npx tsc --noEmit` for `verify.sh`.**
+There is no root `package.json`, and that sequence runs a *different* check set than CI
+(no `prettier --check`, no build, no image build, no `test:integration`) — so a commit can
+pass it and still fail CI. `verify.sh` is the single source of truth precisely so local and
+CI cannot diverge; adding a second definition of "the checks" is the thing it exists to
+prevent. For the same reason this repo does not use husky/lint-staged.
 
 ## Handling Generated Files
 

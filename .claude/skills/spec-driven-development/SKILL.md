@@ -145,7 +145,7 @@ With the validated spec, generate a technical implementation plan:
 
 > Follow the `writing-plans` skill for the plan that turns this spec into ordered, bite-sized tasks; it is the canonical source in this repo and its staff-engineer review is mandatory. The bullets above are a lightweight summary; if they ever diverge, `writing-plans` takes precedence.
 >
-> **Output convention:** Save the plan to `tasks/plan.md` and the task list to `tasks/todo.md`, per the `/plan` command convention. Create `tasks/` if it does not exist. Downstream commands (`/build`, etc.) expect these paths.
+> **Output convention (this repo):** the plan is written by the `writing-plans` skill and saved to `docs/plans/YYYY-MM-DD-<name>.md`. There is no `tasks/` directory here, and no `/plan` or `/build` command — see `docs/sdlc.md`.
 
 The plan should be reviewable: the human should be able to read it and say "yes, that's the right approach" or "no, change X."
 
@@ -208,4 +208,4 @@ Before proceeding to implementation, confirm:
 - [ ] The human has reviewed and approved the spec
 - [ ] Success criteria are specific and testable
 - [ ] Boundaries (Always/Ask First/Never) are defined
-- [ ] The spec is saved to a file in the repository
+- [ ] The spec is saved to `docs/specs/YYYY-MM-DD-<name>.md` (see `docs/README.md`)

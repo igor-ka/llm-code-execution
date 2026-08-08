@@ -175,8 +175,9 @@ Rules that matter most here:
 - **Scope discipline.** Touch only what the task requires. Note adjacent problems; don't fix them.
 - **Simplicity first.** Three similar lines beat a premature abstraction.
 - **Keep it compilable.** Every slice leaves the tree building and tests passing.
-- **Security is a build-time concern, not a review-time one.** Anything touching `auth.ts`,
-  `history/**`, or `sandbox/**` gets the threat-model pass *before* implementation. In this repo
+- **Security is a build-time concern, not a review-time one.** Anything touching
+  `backend/src/{auth.ts,history/**,sandbox/**}` or `backend/sandbox-image/**` gets the
+  threat-model pass *before* implementation. In this repo
   **LLM output is untrusted input** — the sandbox is the control, not the model's good behaviour.
 
 When something breaks, `debugging-and-error-recovery` applies the **stop-the-line rule**: find the
@@ -262,8 +263,9 @@ Details that are easy to get wrong:
   update the ruleset in the same PR.
 - **Never add a CI check without adding it to the matching `verify.sh`, or vice versa.** That
   mirroring is what stops local and CI drifting apart. The one deliberate exception is the
-  `SDLC docs` job — it is a diff-level check that compares a PR against its base ref, which has
-  no meaningful local equivalent.
+  `SDLC docs` job — a diff-level check comparing a PR against its base, with no meaningful local
+  equivalent. It lives in its own workflow so it can listen for `pull_request: edited` without
+  re-running the full suites on every PR-title change.
 - **CI splits `verify.sh` into named steps** (Install / Lint / Format / Test / Build / …) purely
   so each gets its own pass/fail and timing in the log. That is presentation, not a second
   definition of the checks.
@@ -304,7 +306,7 @@ a user exceeding the cap gets `429`; a second user is unaffected. Open question 
 design. That open question is what earns the spec — without one, this step is skipped and the
 plan absorbs it.
 
-**2. Plan** — `writing-plans` writes `docs/plans/2026-08-07-per-user-rate-limiting.md` as ordered
+**2. Plan** — `writing-plans` writes `docs/plans/2026-08-08-per-user-rate-limiting.md` as ordered
 steps. A fresh subagent reviews it and reports, for example, that the plan never says what happens
 when `AUTH_REQUIRED=false` and there is no `sub` to key on. **That report goes to the human
 first.** The human decides whether to handle it now or scope it out. Only then is the plan revised.
@@ -313,10 +315,10 @@ first.** The human decides whether to handle it now or scope it out. Only then i
 independently deliverable unit, labelled `enhancement`:
 
 ```
-R1 — Limit configuration in config.ts
-R2 — Per-user limiter keyed on the verified sub
-R3 — Enforce on /api/execute (429 + Retry-After)
-R4 — Concurrency cap on sandbox launches
+#61  R1 — Limit configuration in config.ts
+#62  R2 — Per-user limiter keyed on the verified sub
+#63  R3 — Enforce on /api/execute (429 + Retry-After)
+#64  R4 — Concurrency cap on sandbox launches
 ```
 
 The reviewer's anonymous-`sub` finding could have collapsed R2 and R3 into one, or added a fifth
@@ -346,10 +348,10 @@ budget. There is no per-user cap and no sandbox concurrency limit.
   scoped out by the human at step 2.
 
 ## Children
-- [ ] R1 — Limit configuration in config.ts
-- [ ] R2 — Per-user limiter keyed on the verified sub
-- [ ] R3 — Enforce on /api/execute (429 + Retry-After)
-- [ ] R4 — Concurrency cap on sandbox launches
+- [ ] #61 R1 — Limit configuration in config.ts
+- [ ] #62 R2 — Per-user limiter keyed on the verified sub
+- [ ] #63 R3 — Enforce on /api/execute (429 + Retry-After)
+- [ ] #64 R4 — Concurrency cap on sandbox launches
 ```
 
 The Problem section is byte-identical to step 0 — the epic grew an *index*, not a body. No
@@ -379,7 +381,7 @@ flags that the limiter keys on a header when auth is off. `receiving-code-review
 first. It's real → fix it. Had it instead claimed the in-memory counter was a cross-user leak when
 the tests already prove otherwise, the right response is a pushback citing the test, not a change.
 
-**6. Merge** — PR body carries `Closes #R2` so the child closes itself; both CI jobs green;
+**6. Merge** — PR body carries `Closes #62` so the child closes itself; both CI jobs green;
 branch deleted. Four PRs land this way, and the epic closes when the last child does.
 
 **7. Document** — README's *Known limitations* and *Roadmap* both describe this gap, so both are
@@ -413,17 +415,27 @@ This file is the contract, and it is enforced deterministically rather than by g
 
 - `.claude/skills/**`
 - `backend/verify.sh` or `frontend/verify.sh`
-- `.github/workflows/ci.yml`
+- `.github/workflows/**`
+- `scripts/check-sdlc-sync.sh`
 
 must also touch `docs/sdlc.md`.
 
-**The enforcement:** the `SDLC docs` CI job runs `scripts/check-sdlc-sync.sh`, which diffs the PR
-against its base ref and fails with a specific message naming the files that changed. It runs on
-pull requests only, since it needs a base ref to compare against.
+That last entry is deliberate: this document describes the check's exact semantics, so a change
+to the check that skipped the doc would leave the two silently disagreeing.
+
+**The enforcement:** the `SDLC docs` job — in its own workflow, `.github/workflows/sdlc-docs.yml`
+— runs `scripts/check-sdlc-sync.sh`, which diffs the PR against its base and fails with a message
+naming the files that changed. Pull requests only, since it needs a base to compare against.
+
+It resolves that base from the **merge ref's first parent**, not the event payload's `base.sha`.
+Those differ once `main` advances mid-PR, and the payload version would drag in commits the PR
+author never touched — failing PRs over someone else's files, and passing PRs whose `docs/sdlc.md`
+was updated by a different change.
 
 **Escape hatch:** for a genuine no-op — a typo fix in a skill, a comment reflow — put
 `[skip-sdlc-sync]` in the PR title. That's deliberately visible in the PR list rather than a
-silent bypass.
+silent bypass. The workflow listens for `pull_request: edited` so that editing the title
+actually re-runs the check; without that type the hatch would be documented but unusable.
 
 To take an upstream skill update: re-vendor the file, update the pinned commit in
 `.claude/skills/NOTICE.md`, re-apply the local modifications listed there, and open a PR. The

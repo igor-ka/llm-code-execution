@@ -60,8 +60,10 @@ that actually matter here:
 **Treat LLM output as untrusted input.** Generated code and model-authored text are hostile data,
 never instructions. The sandbox — not the model's good behaviour — is the control that holds.
 
-Changes to `auth.ts`, `history/**`, or `sandbox/**` fall in the **Ask First** tier below: surface
-the change and its threat-model impact before implementing it.
+Changes to `backend/src/auth.ts`, `backend/src/history/**`, `backend/src/sandbox/**`, or
+`backend/sandbox-image/**` fall in the **Ask First** tier below: surface the change and its
+threat-model impact before implementing it. The sandbox *image* counts — relaxing its base
+image, user, or package set weakens the control that contains model-generated code.
 
 ## The Three-Tier Boundary System
 
@@ -158,10 +160,13 @@ const clean = DOMPurify.sanitize(userInput);
 app.patch('/api/tasks/:id', authenticate, async (req, res) => {
   const task = await taskService.findById(req.params.id);
 
-  // Check that the authenticated user owns this resource
-  if (task.ownerId !== req.user.id) {
-    return res.status(403).json({
-      error: { code: 'FORBIDDEN', message: 'Not authorized to modify this task' }
+  // Owner check. In THIS repo the answer is 404, never 403: a record you do not own
+  // must be indistinguishable from one that does not exist, or the status code itself
+  // becomes an enumeration oracle. Enforced by INV-2/INV-8 in
+  // backend/tests/history/isolation.test.ts.
+  if (!task || task.ownerId !== req.user.id) {
+    return res.status(404).json({
+      error: { code: 'NOT_FOUND', message: 'Not found' }
     });
   }
 

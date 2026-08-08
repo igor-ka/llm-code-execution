@@ -80,13 +80,13 @@ Cannot reproduce on demand:
 For test failures (npm shown — substitute the repository's own test command, per the test-driven-development skill's Discover the Stack First section):
 ```bash
 # Run the specific failing test
-npm test -- --grep "test name"
+npx vitest run -t "test name"
 
 # Run with verbose output
 npm test -- --verbose
 
 # Run in isolation (rules out test pollution)
-npm test -- --testPathPattern="specific-file" --runInBand
+npx vitest run tests/path/to/file.test.ts --no-file-parallelism
 ```
 
 ### Step 2: Localize
@@ -110,7 +110,7 @@ git bisect start
 git bisect bad                    # Current commit is broken
 git bisect good <known-good-sha> # This commit worked
 # Git will checkout midpoint commits; run your test at each
-git bisect run npm test -- --grep "failing test"  # substitute the repository's focused-test command
+git bisect run npx vitest run -t "failing test"
 ```
 
 ### Step 3: Reduce
@@ -162,7 +162,7 @@ After fixing, verify the complete scenario with the repository's own commands (n
 
 ```bash
 # Run the specific test
-npm test -- --grep "specific test"
+npx vitest run -t "specific test"
 
 # Run the full test suite (check for regressions)
 npm test

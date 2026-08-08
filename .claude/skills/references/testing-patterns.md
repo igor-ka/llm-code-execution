@@ -1,5 +1,12 @@
 # Testing Patterns Reference (JavaScript/TypeScript)
 
+> **This repo runs Vitest, not Jest.** Examples below have been converted: `vi.fn()`,
+> `vi.mock()`, and `await vi.importActual()` (async, unlike Jest's `requireActual`). Import
+> the helpers explicitly — `import { describe, it, expect, vi } from 'vitest'` — Vitest does
+> not inject globals here. The **Playwright** section is illustrative only: Playwright is not
+> a dependency of this repo and there is no E2E suite.
+
+
 Quick reference of JavaScript/TypeScript testing patterns — Jest, React Testing Library, Supertest, and Playwright — illustrating the universal principles from the `test-driven-development` skill. The principles (Arrange-Act-Assert, naming, mock discipline, anti-patterns) apply in any ecosystem; the syntax and tooling shown here are JS/TS-specific. In another stack, follow the same principles with the repository's own test framework and commands.
 
 ## Table of Contents
@@ -86,7 +93,7 @@ await expect(asyncFn()).rejects.toThrow(Error);
 ### Mock Functions
 
 ```typescript
-const mockFn = jest.fn();
+const mockFn = vi.fn();
 mockFn.mockReturnValue(42);
 mockFn.mockResolvedValue({ data: 'test' });
 mockFn.mockImplementation((x) => x * 2);
@@ -100,14 +107,14 @@ expect(mockFn).toHaveBeenCalledTimes(3);
 
 ```typescript
 // Mock an entire module
-jest.mock('./database', () => ({
-  query: jest.fn().mockResolvedValue([{ id: 1, title: 'Test' }]),
+vi.mock('./database', () => ({
+  query: vi.fn().mockResolvedValue([{ id: 1, title: 'Test' }]),
 }));
 
 // Mock specific exports
-jest.mock('./utils', () => ({
-  ...jest.requireActual('./utils'),
-  generateId: jest.fn().mockReturnValue('test-id'),
+vi.mock('./utils', async () => ({
+  ...(await vi.importActual('./utils')),
+  generateId: vi.fn().mockReturnValue('test-id'),
 }));
 ```
 
@@ -129,7 +136,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 describe('TaskForm', () => {
   it('submits the form with entered data', async () => {
-    const onSubmit = jest.fn();
+    const onSubmit = vi.fn();
     render(<TaskForm onSubmit={onSubmit} />);
 
     // Find elements by accessible role/label (not test IDs)
@@ -145,7 +152,7 @@ describe('TaskForm', () => {
   });
 
   it('shows validation error for empty title', async () => {
-    render(<TaskForm onSubmit={jest.fn()} />);
+    render(<TaskForm onSubmit={vi.fn()} />);
 
     fireEvent.click(screen.getByRole('button', { name: /create/i }));
 

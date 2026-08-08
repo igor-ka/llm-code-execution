@@ -13,10 +13,10 @@ and layout.
 ## Development lifecycle
 
 `docs/sdlc.md` is the full process — phases, gates, how it meets CI, and a worked example.
-**It is a contract:** if you change `.claude/skills/**`, either `verify.sh`, or
-`.github/workflows/ci.yml`, update `docs/sdlc.md` in the same PR. The `SDLC docs` CI job
-enforces this via `scripts/check-sdlc-sync.sh`; `[skip-sdlc-sync]` in the PR title is the
-escape hatch for a genuine no-op.
+**It is a contract:** if you change `.claude/skills/**`, either `verify.sh`,
+`.github/workflows/**`, or `scripts/check-sdlc-sync.sh`, update `docs/sdlc.md` in the same PR.
+The `SDLC docs` CI job enforces this; `[skip-sdlc-sync]` in the PR title is the escape hatch
+for a genuine no-op.
 
 Which skill when — all vendored in `.claude/skills/`, loaded on demand:
 
@@ -26,7 +26,7 @@ Which skill when — all vendored in `.claude/skills/`, loaded on demand:
 | Turning requirements into ordered tasks | `writing-plans` (plan review is mandatory — see below) |
 | Writing any logic, or fixing any bug | `test-driven-development` |
 | Any change touching more than one file | `incremental-implementation` |
-| Touching `auth.ts`, `history/**`, or `sandbox/**` | `security-and-hardening` (threat-model first) |
+| Touching `backend/src/{auth.ts,history/**,sandbox/**}` or `backend/sandbox-image/**` | `security-and-hardening` (threat-model first) |
 | Tests fail, builds break, behaviour surprises | `debugging-and-error-recovery` |
 | Committing, branching, versioning | `git-workflow-and-versioning` |
 | A decision worth preserving; README/ADR upkeep | `documentation-and-adrs` (ADRs → `docs/adr/`) |
@@ -96,5 +96,6 @@ The "Protect main" ruleset requires status checks by job name (`Backend checks`,
 checks are updated to match. Change what runs *inside* a job freely; keep its name stable, or
 update the ruleset in the same PR.
 
-`SDLC docs` (PRs only) is the one deliberate exception to the `verify.sh` mirroring rule
-above: it diffs a PR against its base ref, so it has no single-working-tree equivalent.
+`SDLC docs` (PRs only, in its own `sdlc-docs.yml`) is the one deliberate exception to the
+`verify.sh` mirroring rule above: it diffs a PR against its base, so it has no
+single-working-tree equivalent.

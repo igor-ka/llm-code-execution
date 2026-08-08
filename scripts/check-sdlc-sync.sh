@@ -3,20 +3,23 @@
 # contract: a change to the process must update the document in the same PR. This script
 # is the enforcement behind that contract (see "Changing this SDLC" in docs/sdlc.md).
 #
-# It is a *diff-level* check — it compares a PR against its base ref — which is why it
-# lives here rather than in backend/verify.sh or frontend/verify.sh. Those two scripts
-# mirror CI exactly for the checks that can run against a single working tree; this one
-# has no meaningful local equivalent because there is no base ref to compare against.
+# It is a *diff-level* check — it compares a PR against its base — which is why it lives
+# here rather than in backend/verify.sh or frontend/verify.sh. Those two scripts mirror CI
+# exactly for checks that run against a single working tree; this one has no meaningful
+# local equivalent because there is no base ref to compare against.
 #
 # Usage:  scripts/check-sdlc-sync.sh
-#   BASE_SHA   base commit to diff against (default: merge-base with origin/main)
+#   BASE_SHA   fallback base commit (default: merge-base with origin/main)
 #   PR_TITLE   pull request title; containing [skip-sdlc-sync] skips the check
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# Files whose change means the development process itself changed.
-WATCHED_RE='^(\.claude/skills/|backend/verify\.sh$|frontend/verify\.sh$|\.github/workflows/ci\.yml$)'
+# Files whose change means the development process itself changed. This deliberately
+# includes *this script*: docs/sdlc.md documents its exact semantics (watched paths, the
+# failure message, the escape hatch), so changing it without updating the doc would let
+# the documentation silently desync from the enforcement it describes.
+WATCHED_RE='^(\.claude/skills/|\.github/workflows/|scripts/check-sdlc-sync\.sh$|backend/verify\.sh$|frontend/verify\.sh$)'
 DOC='docs/sdlc.md'
 
 if [[ "${PR_TITLE:-}" == *"[skip-sdlc-sync]"* ]]; then
@@ -24,15 +27,27 @@ if [[ "${PR_TITLE:-}" == *"[skip-sdlc-sync]"* ]]; then
   exit 0
 fi
 
-base="${BASE_SHA:-}"
-if [[ -z "$base" ]]; then
-  if ! base="$(git merge-base HEAD origin/main 2>/dev/null)"; then
-    echo "==> cannot resolve a base ref (no BASE_SHA, no origin/main) — skipping." >&2
-    exit 0
+# Resolving the base is the subtle part. On `pull_request`, actions/checkout leaves the PR
+# *merge* ref at HEAD: a merge commit whose first parent is the base tip and whose second is
+# the PR head. Diffing that first parent is exact. Diffing the event payload's base.sha is
+# NOT — it is the base tip as of the last push, so once main advances (or the job is re-run)
+# the range swallows everything merged in between, which both fails PRs for files their
+# author never touched and passes PRs whose docs/sdlc.md was updated by someone else.
+if git rev-parse --verify --quiet HEAD^2 >/dev/null 2>&1; then
+  base="$(git rev-parse HEAD^1)"
+else
+  base="${BASE_SHA:-}"
+  if [[ -z "$base" ]]; then
+    if ! base="$(git merge-base HEAD origin/main 2>/dev/null)"; then
+      echo "==> cannot resolve a base ref (no merge ref, no BASE_SHA, no origin/main) — skipping." >&2
+      exit 0
+    fi
   fi
+  # Normalise to the fork point so the comparison ignores commits already on the base.
+  base="$(git merge-base "$base" HEAD)"
 fi
 
-changed="$(git diff --name-only "$base"...HEAD)"
+changed="$(git diff --name-only "$base" HEAD)"
 watched="$(printf '%s\n' "$changed" | grep -E "$WATCHED_RE" || true)"
 
 if [[ -z "$watched" ]]; then
@@ -40,7 +55,10 @@ if [[ -z "$watched" ]]; then
   exit 0
 fi
 
-if printf '%s\n' "$changed" | grep -qxF "$DOC"; then
+# Herestring rather than a pipe: `grep -q` exits on first match, and under `pipefail` the
+# SIGPIPE'd writer (exit 141) would become the pipeline's status on a large diff — reporting
+# the doc as missing when it was in fact updated.
+if grep -qxF "$DOC" <<<"$changed"; then
   echo "✓ SDLC-governed files changed and ${DOC} was updated in the same change:"
   printf '%s\n' "$watched" | sed 's/^/    /'
   exit 0

@@ -206,10 +206,8 @@ Be explicit about what's in scope and what's NOT in scope for each increment.
 After each increment, verify with the repository's own commands (see the test-driven-development skill's Discover the Stack First section):
 
 - [ ] The change does one thing and does it completely
-- [ ] All existing tests still pass (the repository's test command: `npm test`, `./gradlew test`, `pytest`, ...)
-- [ ] The build succeeds (the repository's build command)
-- [ ] Type checking passes, where the stack has one (`npx tsc --noEmit`, `mypy`, ...)
-- [ ] Linting passes (the repository's lint command)
+- [ ] `./verify.sh` passes for each side you touched (this runs lint, format, type check,
+      tests, build, and the image build — the same script CI runs)
 - [ ] The new functionality works as expected
 - [ ] The change is committed with a descriptive message
 

@@ -44,7 +44,7 @@ unskipped — CI does not skip.
 
 ### Security invariants
 
-- [ ] Changes touching `auth.ts`, `history/**`, or `sandbox/**` keep the isolation invariants
+- [ ] Changes touching `backend/src/{auth.ts,history/**,sandbox/**}` or `backend/sandbox-image/**` keep the isolation invariants
       intact: identity comes from the **verified token** (`sub`), never the request body; every
       store method filters on the owner; a record you don't own returns **404**, never 403.
 - [ ] The cross-user battery and planted-hole mutants still pass

@@ -1,0 +1,52 @@
+name: SDLC docs
+
+# docs/sdlc.md is a contract: a PR that changes the development process — the skills in
+# .claude/skills/, either verify.sh, the workflows, or the check script itself — must update
+# it in the same PR. See "Changing this SDLC" in docs/sdlc.md.
+#
+# Why this is a separate workflow from ci.yml:
+#   `edited` is required so that adding [skip-sdlc-sync] to a PR title actually re-runs the
+#   check. The default `pull_request` types are opened/synchronize/reopened, so a title edit
+#   fires nothing and the documented escape hatch would never work. Putting `edited` on
+#   ci.yml instead would re-run the full backend and frontend suites — Docker builds included
+#   — every time a PR title changed.
+#
+# This is also the one deliberate exception to "never add a CI check without adding it to the
+# matching verify.sh": it is a diff-level check against the PR's base, so it has no meaningful
+# single-working-tree equivalent.
+#
+# The job `name:` is a contract like the others (see ci.yml). It is a new name, so no existing
+# required check is affected; it only blocks merges once "SDLC docs" is added to the
+# "Protect main" ruleset's required status checks.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+
+concurrency:
+  group: sdlc-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only: this job only needs the diff. It runs a script from the PR branch, so it should
+# never hold a writable token.
+permissions:
+  contents: read
+
+jobs:
+  sdlc-docs:
+    name: SDLC docs
+    runs-on: ubuntu-latest
+    steps:
+      # Full history so the base can be resolved. persist-credentials: false keeps the token
+      # out of .git/config, since the step after this executes a script from the PR branch.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check docs/sdlc.md is in sync
+        env:
+          # Fallback only — the script prefers the merge ref's first parent, which is exact.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: ./scripts/check-sdlc-sync.sh
