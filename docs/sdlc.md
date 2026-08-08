@@ -90,6 +90,45 @@ Three rules that keep this honest:
 
 Close children from the PR body with `Closes #N` so the link is automatic rather than manual.
 
+#### Bugs are the exception
+
+The "no issue for work you're doing right now" rule does **not** apply to defects that reached a
+deployed environment. A feature issue tracks work that *will* happen; a bug issue records that a
+defect **existed**. Different jobs — and the second one outlives the fix.
+
+File the issue even when the fix is a ten-minute PR. The PR captures the fix; only the issue
+captures when it broke, who was affected, how it was found, and what the workaround was while it
+was open. That is the part you need six months later.
+
+- **Never block a production fix on filing a ticket.** For a Sev-1, fix first and file
+  immediately after or in parallel. The record matters; it does not matter more than the outage.
+- **File before fixing** for anything non-urgent — the issue is where duplicate reports converge.
+- **Bug issues want different fields**: symptom, blast radius, how it was detected, repro steps,
+  workaround. Not acceptance criteria.
+- **The reproduction test is the acceptance criterion.** `test-driven-development`'s Prove-It
+  pattern says reproduce the defect with a failing test before fixing it; the issue closes when
+  that test passes.
+
+A bug you catch in your own branch before merge is not this. Just fix it.
+
+*(This repo has no deployed environment yet — see the README's security posture. This rule
+arrives with the Cloud Run work.)*
+
+#### The epic is an index, not a design doc
+
+**A one-line epic is correct at creation.** Its only job is to record that a problem exists.
+*"A burst of requests can exhaust host resources and API budget"* is complete — findable,
+fileable, and committed to nothing.
+
+As artifacts appear, update the epic with **links, never copies**: a Problem section that barely
+changes, an Artifacts list pointing at the spec / plan / ADR, a short Resolved list of decisions
+whose rationale lives elsewhere, and the children checklist. Nothing else.
+
+Pasting spec or plan content into the epic creates a second copy that goes stale — and the stale
+copy is the one people read. Test: **an epic should be readable in 30 seconds and tell you where
+everything else is.** If it takes longer, content has leaked in that belongs in a document. See
+the worked example below for how one evolves.
+
 > **Why this repo carries the ceremony.** Solo, a tracker's coordination value is close to zero —
 > nobody is going to duplicate your work. It is kept here deliberately anyway: this is a learning
 > project, and **rehearsing the discipline is the point**. The habit is what transfers to a
@@ -105,6 +144,21 @@ is the main risk. Produces objective, boundaries, success criteria, and — most
 **open questions**, which get answered before planning starts.
 
 Skip for small, obvious changes. A one-line bug fix does not need a spec.
+
+**Specs are saved to `docs/specs/YYYY-MM-DD-<name>.md`** — in the repo, never in an issue. Same
+reasoning as ADRs and plans: versioned alongside the code they describe, reviewable in a PR, and
+they outlive any tracker. The epic *links* to the spec; it never contains it.
+
+**Only write a separate spec when there are real open questions.** The `writing-plans` header
+already carries Goal, Architecture, and Tech Stack. When requirements are clear, the plan absorbs
+the spec and a separate document is ceremony. A spec earns its existence by surfacing something
+you do not yet know — if it has no Open Questions section worth reading, you did not need it.
+
+**The skill's template is greenfield-shaped.** Its six areas include Tech Stack, Commands,
+Project Structure, Code Style, and Testing Strategy — all of which already live in `CLAUDE.md`
+and `README.md` here. For a *feature* spec in this repo the parts that earn their keep are
+**Objective, Boundaries, Success Criteria, and Open Questions**. Link out for the rest rather
+than restating it and letting the copy rot.
 
 ### 2. Plan — *what are the ordered, verifiable steps?*
 
@@ -245,16 +299,29 @@ A real roadmap item (README, *Known limitations*): no rate limiting or concurren
 burst of requests can exhaust host resources and API budget.
 
 **0. Track** — the gap is already public in the README's *Known limitations*, so it's information
-someone could act on: file **`Epic: per-user rate limiting and quotas`**. It records only the
-*problem* — "a burst of requests can exhaust host resources and API budget" — and deliberately
-names **no solution**. No children yet: nothing knows what the slices are. This epic can sit
-untouched for weeks, and that's fine; it exists so the gap isn't only living in a README bullet.
+someone could act on. File the epic. The entire body at this point:
 
-**1. Spec** — `spec-driven-development`. Objective: cap concurrent sandbox executions and requests
-per user. Boundaries: keyed on the verified `sub`, limits centralised in `config.ts`, no new
-external dependency. Success criteria: a user exceeding the cap gets `429`; a second user is
-unaffected. Open question surfaced: *in-process counter or Postgres-backed?* — answered before
-planning, because it changes the whole design.
+```markdown
+# Epic: per-user rate limiting and quotas
+
+## Problem
+A burst of requests can exhaust host resources (one container per execution) and API
+budget. There is no per-user cap and no sandbox concurrency limit.
+```
+
+That is a **complete epic**. No solution, no spec, no children — nothing knows what the slices
+are yet. It can sit untouched for weeks, and that is fine: it exists so the gap lives somewhere
+searchable instead of only in a README bullet.
+
+**1. Spec** — `spec-driven-development` writes `docs/specs/2026-08-08-per-user-rate-limiting.md`.
+Objective: cap concurrent sandbox executions and requests per user. Boundaries: keyed on the
+verified `sub`, limits centralised in `config.ts`, no new external dependency. Success criteria:
+a user exceeding the cap gets `429`; a second user is unaffected. Open question surfaced:
+*in-process counter or Postgres-backed?* — answered before planning, because it changes the whole
+design.
+
+A separate spec is warranted **here** precisely because of that open question. Had the answer
+been obvious, this step would have been skipped and the plan would have absorbed it.
 
 **2. Plan** — `writing-plans` writes `docs/plans/2026-08-07-per-user-rate-limiting.md` as ordered
 steps. A fresh subagent reviews it and reports, for example, that the plan never says what happens
@@ -278,6 +345,44 @@ already be wrong, and you'd be editing tickets instead of writing code.
 
 Note what did *not* get an issue: the README wording update in step 7. It's one edit in an
 existing PR, so the PR is its own record.
+
+**2c. The epic becomes an index** — the spec, plan, and children now exist, so the epic is
+updated to point at them:
+
+```markdown
+# Epic: per-user rate limiting and quotas
+
+## Problem
+A burst of requests can exhaust host resources (one container per execution) and API
+budget. There is no per-user cap and no sandbox concurrency limit.
+
+## Artifacts
+- Spec:     docs/specs/2026-08-08-per-user-rate-limiting.md
+- Plan:     docs/plans/2026-08-08-per-user-rate-limiting.md
+- Decision: docs/adr/0003-rate-limiting-approach.md   ← added at step 7
+
+## Resolved
+- In-process counter, not Postgres-backed — see ADR-0003.
+- Anonymous mode (AUTH_REQUIRED=false) is out of scope — raised by the plan review,
+  scoped out by the human at step 2.
+
+## Children
+- [ ] R1 — Limit configuration in config.ts
+- [ ] R2 — Per-user limiter keyed on the verified sub
+- [ ] R3 — Enforce on /api/execute (429 + Retry-After)
+- [ ] R4 — Concurrency cap on sandbox launches
+```
+
+Three things to notice:
+
+- **The Problem section is byte-identical to step 0.** The epic grew an *index*, not a body.
+- **No design, no task steps, no code.** Every one of those lives in a file under `docs/`, and
+  the epic holds a path to it. Copying any of it here would create a second version to keep in
+  sync, and the tracker copy is the one that goes stale.
+- **`Resolved` is the one section worth hand-writing.** It records that a question is *closed*
+  and where the reasoning lives, so a reader knows not to re-open it without reading the ADR.
+  The anonymous-mode line is doing real work — without it, the next person re-litigates a
+  decision the human already made at step 2.
 
 **3. Build** — `incremental-implementation` slices it, one child issue per branch:
 
@@ -304,9 +409,14 @@ the tests already prove otherwise, the right response is a pushback citing the t
 branch deleted. Four PRs land this way, and the epic closes when the last child does.
 
 **7. Document** — README's *Known limitations* and *Roadmap* both describe this gap, so both are
-updated **in the same PR**. If the in-process-vs-Postgres question was genuinely close, it earns
-`docs/adr/0003-rate-limiting-approach.md`. No `.claude/skills/`, `verify.sh`, or `ci.yml` change,
-so this file is untouched and the `SDLC docs` job stays green.
+updated **in the same PR**. The in-process-vs-Postgres question was close enough to earn
+`docs/adr/0003-rate-limiting-approach.md`, and the epic's **Artifacts** list gains that one line
+— the last edit the epic ever needs. No `.claude/skills/`, `verify.sh`, or `ci.yml` change, so
+this file is untouched and the `SDLC docs` job stays green.
+
+**End state.** Four PRs, four closed children, one closed epic that is still readable in thirty
+seconds and points at every artifact produced along the way. The spec, plan, and ADR are in the
+repo where they are versioned with the code they explain; the epic is the index that finds them.
 
 ---
 
