@@ -96,7 +96,5 @@ The "Protect main" ruleset requires status checks by job name (`Backend checks`,
 checks are updated to match. Change what runs *inside* a job freely; keep its name stable, or
 update the ruleset in the same PR.
 
-`SDLC docs` is a third job (PRs only). It is a **new** name, so it changes nothing about the
-existing required checks — it stays advisory until you add it to the ruleset's required status
-checks. It is also the one deliberate exception to the `verify.sh` mirroring rule above,
-because it diffs a PR against its base ref and has no single-working-tree equivalent.
+`SDLC docs` (PRs only) is the one deliberate exception to the `verify.sh` mirroring rule
+above: it diffs a PR against its base ref, so it has no single-working-tree equivalent.

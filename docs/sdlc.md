@@ -28,30 +28,73 @@ it is not itself a gate.
 ## The loop
 
 ```
-   ┌── idea ──────────────────────────────────────────────────────────┐
-   │                                                                  │
-   ▼                                                                  │
- SPEC ──▶ PLAN ──▶ BUILD ◀──┐ ──▶ VERIFY ──▶ REVIEW ──▶ MERGE ──▶ DOCUMENT
-   │        │        │      │        │          │          │
-   │        │        └─ debug ┘      │          │          │
-   │        │                        │          │          │
-spec-driven writing-plans       verify.sh   code-review  CI green
--development  + staff        (local, same   security-    Backend checks
-              review          script as CI)  review      Frontend checks
-                                             receiving-   SDLC docs
-              test-driven-development         code-review
-              incremental-implementation
-              security-and-hardening
-              debugging-and-error-recovery
-              git-workflow-and-versioning
+ TRACK ──▶ SPEC ──▶ PLAN ──▶ BUILD ◀──┐ ──▶ VERIFY ──▶ REVIEW ──▶ MERGE ──▶ DOCUMENT
+   │         │        │        │      │        │          │          │
+   │         │        │        └debug─┘        │          │          │
+   │         │        │                        │          │          │
+ epic     spec-    writing-plans          verify.sh   code-review  CI green
+ issue    driven-    + staff            (local, same  security-    Backend checks
+   │      develop-   review              script as    review       Frontend checks
+   ▼      ment                           CI)          receiving-   SDLC docs
+ child                                                code-review       │
+ issues        test-driven-development                                  ▼
+ (from         incremental-implementation                        "Closes #N"
+  the plan)    security-and-hardening
+               debugging-and-error-recovery
+               git-workflow-and-versioning
 ```
 
-The build box is a tight inner loop — implement one slice, test it, verify it, commit — not a
-single pass. Everything before `MERGE` is repeatable; only merge is one-way.
+Two things this shape encodes:
+
+- **The build box is a tight inner loop** — implement one slice, test it, verify it, commit —
+  not a single pass. Everything before `MERGE` is repeatable; only merge is one-way.
+- **The epic precedes the spec; the children follow the plan.** An epic records a *problem* and
+  can sit for weeks. Children are slices of a *solution*, so they cannot exist until the plan
+  says what the slices are.
 
 ---
 
 ## Phases
+
+### 0. Track — *does an issue need to exist?*
+
+**Not a skill — a judgment call, made before anything else.**
+
+An issue is a unit of **commitment**; a PR is a unit of **change**. They are not 1:1, and
+treating them as if they were is what turns a tracker into noise.
+
+**Create an issue when someone other than you needs to know the work exists** — a future reader
+wondering why the code looks this way, a decision parked until later, or work that will span
+more than one PR. The trigger is *informational, not size*: a one-line change to `auth.ts` earns
+a ticket; a large refactor of throwaway code may not.
+
+**Do not create an issue for work you are about to do right now in a single PR.** The PR is
+already the record. Ticket-per-commit fills the tracker until nothing in it can be found.
+
+| Artifact | Captures | Lives in |
+| --- | --- | --- |
+| **Epic issue** | the *problem*, and why it matters | GitHub, unlabelled |
+| **Plan** | the *solution* | `docs/plans/YYYY-MM-DD-<name>.md` |
+| **Child issue** | one independently deliverable slice | GitHub, `enhancement` |
+| **PR** | one change, closing a child | GitHub |
+
+Three rules that keep this honest:
+
+- **Order matters: problem before solution.** The epic must be fileable without knowing how —
+  "a burst of requests can exhaust host resources" is a complete issue. Writing the plan first
+  and back-filling issues inverts it: you committed to a solution before recording the problem.
+- **Children only when independently deliverable.** If a slice can't be worked, reviewed, and
+  merged on its own, it's a checklist item — put it in the epic body, not its own issue.
+- **Design does not live in the tracker.** ADRs and plans are versioned alongside the code they
+  explain; issues link to them. Design written into issue comments is design you will lose.
+
+Close children from the PR body with `Closes #N` so the link is automatic rather than manual.
+
+> **Why this repo carries the ceremony.** Solo, a tracker's coordination value is close to zero —
+> nobody is going to duplicate your work. It is kept here deliberately anyway: this is a learning
+> project, and **rehearsing the discipline is the point**. The habit is what transfers to a
+> setting where coordination isn't optional; the tracker here is practice, and practice only
+> works if you do it when it isn't strictly necessary.
 
 ### 1. Spec — *what are we building, and what's out of scope?*
 
@@ -201,6 +244,12 @@ vendored until there is something to deploy.
 A real roadmap item (README, *Known limitations*): no rate limiting or concurrency cap, so a
 burst of requests can exhaust host resources and API budget.
 
+**0. Track** — the gap is already public in the README's *Known limitations*, so it's information
+someone could act on: file **`Epic: per-user rate limiting and quotas`**. It records only the
+*problem* — "a burst of requests can exhaust host resources and API budget" — and deliberately
+names **no solution**. No children yet: nothing knows what the slices are. This epic can sit
+untouched for weeks, and that's fine; it exists so the gap isn't only living in a README bullet.
+
 **1. Spec** — `spec-driven-development`. Objective: cap concurrent sandbox executions and requests
 per user. Boundaries: keyed on the verified `sub`, limits centralised in `config.ts`, no new
 external dependency. Success criteria: a user exceeding the cap gets `429`; a second user is
@@ -212,7 +261,25 @@ steps. A fresh subagent reviews it and reports, for example, that the plan never
 when `AUTH_REQUIRED=false` and there is no `sub` to key on. **That report goes to the human
 first.** The human decides whether to handle it now or scope it out. Only then is the plan revised.
 
-**3. Build** — `incremental-implementation` slices it:
+**2b. Children** — *now* the slices are known, so batch-create them under the epic, one per
+independently deliverable unit, labelled `enhancement`:
+
+```
+R1 — Limit configuration in config.ts
+R2 — Per-user limiter keyed on the verified sub
+R3 — Enforce on /api/execute (429 + Retry-After)
+R4 — Concurrency cap on sandbox launches
+```
+
+This is the step that shows why ordering matters. The reviewer's anonymous-`sub` finding could
+**collapse R2 and R3 into one**, or **add a fifth child** for the `AUTH_REQUIRED=false` path —
+and that isn't knowable until after the plan review. Children created before the plan would
+already be wrong, and you'd be editing tickets instead of writing code.
+
+Note what did *not* get an issue: the README wording update in step 7. It's one edit in an
+existing PR, so the PR is its own record.
+
+**3. Build** — `incremental-implementation` slices it, one child issue per branch:
 
 - *Slice 1:* limit config in `config.ts` + unit tests. RED → GREEN → verify → commit.
 - *Slice 2:* the limiter itself, keyed on `sub`, with tests for the anonymous case decided above.
@@ -233,7 +300,8 @@ flags that the limiter keys on a header when auth is off. `receiving-code-review
 first. It's real → fix it. Had it instead claimed the in-memory counter was a cross-user leak when
 the tests already prove otherwise, the right response is a pushback citing the test, not a change.
 
-**6. Merge** — PR with both CI jobs green; branch deleted.
+**6. Merge** — PR body carries `Closes #R2` so the child closes itself; both CI jobs green;
+branch deleted. Four PRs land this way, and the epic closes when the last child does.
 
 **7. Document** — README's *Known limitations* and *Roadmap* both describe this gap, so both are
 updated **in the same PR**. If the in-process-vs-Postgres question was genuinely close, it earns
