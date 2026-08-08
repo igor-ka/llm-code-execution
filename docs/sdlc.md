@@ -28,29 +28,16 @@ it is not itself a gate.
 ## The loop
 
 ```
- TRACK ──▶ SPEC ──▶ PLAN ──▶ BUILD ◀──┐ ──▶ VERIFY ──▶ REVIEW ──▶ MERGE ──▶ DOCUMENT
-   │         │        │        │      │        │          │          │
-   │         │        │        └debug─┘        │          │          │
-   │         │        │                        │          │          │
- epic     spec-    writing-plans          verify.sh   code-review  CI green
- issue    driven-    + staff            (local, same  security-    Backend checks
-   │      develop-   review              script as    review       Frontend checks
-   ▼      ment                           CI)          receiving-   SDLC docs
- child                                                code-review       │
- issues        test-driven-development                                  ▼
- (from         incremental-implementation                        "Closes #N"
-  the plan)    security-and-hardening
-               debugging-and-error-recovery
-               git-workflow-and-versioning
+                        ┌──── debug ────┐
+                        ▼               │
+ TRACK ─▶ SPEC ─▶ PLAN ─▶ BUILD ─▶ VERIFY ─▶ REVIEW ─▶ MERGE ─▶ DOCUMENT
+   │                                                     │
+   └── epic issue                        "Closes #N" ────┘
+       child issues (after the plan)
 ```
 
-Two things this shape encodes:
-
-- **The build box is a tight inner loop** — implement one slice, test it, verify it, commit —
-  not a single pass. Everything before `MERGE` is repeatable; only merge is one-way.
-- **The epic precedes the spec; the children follow the plan.** An epic records a *problem* and
-  can sit for weeks. Children are slices of a *solution*, so they cannot exist until the plan
-  says what the slices are.
+`BUILD → VERIFY` is a tight inner loop run once per slice, not a single pass. Everything before
+`MERGE` is repeatable; only merge is one-way. Each phase below names the skill that governs it.
 
 ---
 
@@ -92,13 +79,10 @@ Close children from the PR body with `Closes #N` so the link is automatic rather
 
 #### Bugs are the exception
 
-The "no issue for work you're doing right now" rule does **not** apply to defects that reached a
-deployed environment. A feature issue tracks work that *will* happen; a bug issue records that a
-defect **existed**. Different jobs — and the second one outlives the fix.
-
-File the issue even when the fix is a ten-minute PR. The PR captures the fix; only the issue
-captures when it broke, who was affected, how it was found, and what the workaround was while it
-was open. That is the part you need six months later.
+The rule above does **not** apply to defects that reached a deployed environment. A feature issue
+tracks work that *will* happen; a bug issue records that a defect **existed** — so file it even
+when the fix is a ten-minute PR. The PR captures the fix; only the issue captures when it broke,
+who was affected, and what the workaround was while it was open.
 
 - **Never block a production fix on filing a ticket.** For a Sev-1, fix first and file
   immediately after or in parallel. The record matters; it does not matter more than the outage.
@@ -120,14 +104,13 @@ arrives with the Cloud Run work.)*
 *"A burst of requests can exhaust host resources and API budget"* is complete — findable,
 fileable, and committed to nothing.
 
-As artifacts appear, update the epic with **links, never copies**: a Problem section that barely
-changes, an Artifacts list pointing at the spec / plan / ADR, a short Resolved list of decisions
-whose rationale lives elsewhere, and the children checklist. Nothing else.
+As artifacts appear, update it with **links, never copies**: Problem, an Artifacts list pointing
+at the spec / plan / ADR, a short Resolved list of closed decisions, and the children checklist.
+Nothing else — pasted content becomes a second copy that goes stale, and the stale copy is the
+one people read.
 
-Pasting spec or plan content into the epic creates a second copy that goes stale — and the stale
-copy is the one people read. Test: **an epic should be readable in 30 seconds and tell you where
-everything else is.** If it takes longer, content has leaked in that belongs in a document. See
-the worked example below for how one evolves.
+Test: **an epic should be readable in 30 seconds and tell you where everything else is.** The
+[worked example](#worked-example-adding-per-user-rate-limiting) shows one evolving.
 
 > **Why this repo carries the ceremony.** Solo, a tracker's coordination value is close to zero —
 > nobody is going to duplicate your work. It is kept here deliberately anyway: this is a learning
@@ -162,18 +145,16 @@ than restating it and letting the copy rot.
 
 ### 2. Plan — *what are the ordered, verifiable steps?*
 
-**Skill:** `writing-plans` (kept from the staff-engineer upstream; **not** replaced)
+**Skill:** `writing-plans`
 
-Plans are saved to `docs/plans/YYYY-MM-DD-<feature-name>.md`. The plan is written as bite-sized
-steps with exact file paths, real code, and exact commands — no placeholders.
+Plans are saved to `docs/plans/YYYY-MM-DD-<feature-name>.md`, written as bite-sized steps with
+exact file paths, real code, and exact commands — no placeholders.
 
 **The mandatory gate:** every plan gets a **staff-engineer review by a fresh subagent** using
-`planning-reviewer-prompt.md`, and the reviewer's findings are **surfaced to the human before
-anything is folded into the plan**. A fresh reviewer has no authorship bias. The human decides
-what goes into the plan — not the author, and not the reviewer.
-
-This gate is the reason `writing-plans` was kept over the vendored alternative, which has no
-adversarial review step.
+`planning-reviewer-prompt.md`, and the findings are **surfaced to the human before anything is
+folded into the plan**. A fresh reviewer has no authorship bias — but it is another instance of
+the same model, so its blind spots correlate with the author's. The human is the only
+uncorrelated signal, which is why the gate exists and why it is not delegated.
 
 ### 3. Build — *implement in thin, working slices*
 
@@ -250,6 +231,9 @@ The "Protect main" ruleset requires the CI status checks by **job name** before 
   touch it.
 - **This file** → updated when the process itself changes (enforced; see below).
 
+[`docs/README.md`](README.md) indexes every subfolder here — what each holds, when to write one,
+and whether it's mutable.
+
 ---
 
 ## How this meets CI/CD
@@ -287,9 +271,8 @@ Details that are easy to get wrong:
   `DATABASE_URL` — which is exactly why the DB-free `Test` step still skips those suites.
 - **Docker builds run on pull requests only**, to keep pushes to `main` fast.
 
-There is no CD yet. Deployment is roadmap (GCP Cloud Run), and the two skills that would cover
-it — `shipping-and-launch` and `observability-and-instrumentation` — were deliberately **not**
-vendored until there is something to deploy.
+**There is no CD yet.** Deployment is roadmap (GCP Cloud Run); the release and observability
+phases arrive with it.
 
 ---
 
@@ -318,10 +301,8 @@ Objective: cap concurrent sandbox executions and requests per user. Boundaries: 
 verified `sub`, limits centralised in `config.ts`, no new external dependency. Success criteria:
 a user exceeding the cap gets `429`; a second user is unaffected. Open question surfaced:
 *in-process counter or Postgres-backed?* — answered before planning, because it changes the whole
-design.
-
-A separate spec is warranted **here** precisely because of that open question. Had the answer
-been obvious, this step would have been skipped and the plan would have absorbed it.
+design. That open question is what earns the spec — without one, this step is skipped and the
+plan absorbs it.
 
 **2. Plan** — `writing-plans` writes `docs/plans/2026-08-07-per-user-rate-limiting.md` as ordered
 steps. A fresh subagent reviews it and reports, for example, that the plan never says what happens
@@ -338,13 +319,11 @@ R3 — Enforce on /api/execute (429 + Retry-After)
 R4 — Concurrency cap on sandbox launches
 ```
 
-This is the step that shows why ordering matters. The reviewer's anonymous-`sub` finding could
-**collapse R2 and R3 into one**, or **add a fifth child** for the `AUTH_REQUIRED=false` path —
-and that isn't knowable until after the plan review. Children created before the plan would
-already be wrong, and you'd be editing tickets instead of writing code.
+The reviewer's anonymous-`sub` finding could have collapsed R2 and R3 into one, or added a fifth
+child — unknowable before the plan review. Children created earlier would already be wrong.
 
-Note what did *not* get an issue: the README wording update in step 7. It's one edit in an
-existing PR, so the PR is its own record.
+What did *not* get an issue: the README wording update in step 7. One edit in an existing PR, so
+the PR is its own record.
 
 **2c. The epic becomes an index** — the spec, plan, and children now exist, so the epic is
 updated to point at them:
@@ -373,16 +352,11 @@ budget. There is no per-user cap and no sandbox concurrency limit.
 - [ ] R4 — Concurrency cap on sandbox launches
 ```
 
-Three things to notice:
+The Problem section is byte-identical to step 0 — the epic grew an *index*, not a body. No
+design, no task steps, no code: those live under `docs/` and the epic holds paths to them.
 
-- **The Problem section is byte-identical to step 0.** The epic grew an *index*, not a body.
-- **No design, no task steps, no code.** Every one of those lives in a file under `docs/`, and
-  the epic holds a path to it. Copying any of it here would create a second version to keep in
-  sync, and the tracker copy is the one that goes stale.
-- **`Resolved` is the one section worth hand-writing.** It records that a question is *closed*
-  and where the reasoning lives, so a reader knows not to re-open it without reading the ADR.
-  The anonymous-mode line is doing real work — without it, the next person re-litigates a
-  decision the human already made at step 2.
+`Resolved` is the one section worth hand-writing. Without the anonymous-mode line, the next
+reader re-litigates a decision that was already made at step 2.
 
 **3. Build** — `incremental-implementation` slices it, one child issue per branch:
 
@@ -414,24 +388,20 @@ updated **in the same PR**. The in-process-vs-Postgres question was close enough
 — the last edit the epic ever needs. No `.claude/skills/`, `verify.sh`, or `ci.yml` change, so
 this file is untouched and the `SDLC docs` job stays green.
 
-**End state.** Four PRs, four closed children, one closed epic that is still readable in thirty
-seconds and points at every artifact produced along the way. The spec, plan, and ADR are in the
-repo where they are versioned with the code they explain; the epic is the index that finds them.
-
 ---
 
-## What is deliberately *not* here
+## Where the skills come from
 
-- **No plugin marketplace, and no runtime fetch.** Every skill is vendored, pinned, and reviewed
-  in-diff. See `.claude/skills/NOTICE.md` for both upstreams, their commits, and the full list of
-  what was left out and why.
-- **No `ci-cd-and-automation` skill.** Its generic advice contradicts this repo's CI design —
-  it recommends splitting checks into separate parallel jobs, which would break the ruleset's
-  required job names, and it doesn't know `verify.sh` is the single source of truth.
-- **No `SessionStart` hook.** Auto-executing shell from a third-party repo on every session start
-  is the exact supply-chain shape this setup avoids.
-- **17 of Addy's 24 skills were not vendored.** More skills is not better; each one competes for
-  attention. Vendor another when a real need appears.
+Every skill in `.claude/skills/` is **vendored** — copied in, adapted to this repo, pinned to an
+upstream commit, and reviewed in-diff. No plugin marketplace is wired into this repository,
+nothing is fetched at runtime, and there is no `SessionStart` hook.
+
+Skills are prompts, and prompts are behaviour, so a change to one is a code change: it goes
+through a PR and the gates above.
+
+`.claude/skills/NOTICE.md` is the record — both upstreams, their pinned commits, the local
+modifications, and **which upstream skills were rejected and why**. Read it before adding one
+back; some were excluded because they actively conflict with the CI design described above.
 
 ---
 
