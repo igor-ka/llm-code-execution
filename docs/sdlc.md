@@ -3,9 +3,10 @@
 How a change gets from an idea to `main` in this repository, and which skill governs each step.
 
 This document is a **contract**. If you change the development process — the skills in
-`.claude/skills/`, either `verify.sh`, or `.github/workflows/ci.yml` — update this file in the
-same change. The `SDLC docs` CI job enforces it, and `CLAUDE.md` points here as the source of
-truth. See [Changing this SDLC](#changing-this-sdlc).
+`.claude/skills/`, either `verify.sh`, anything in `scripts/`, or a workflow in
+`.github/workflows/` — update this file in the same change. The `SDLC docs` CI job enforces it,
+and `CLAUDE.md` points here as the source of truth.
+See [Changing this SDLC](#changing-this-sdlc).
 
 ---
 
@@ -63,7 +64,7 @@ already the record. Ticket-per-commit fills the tracker until nothing in it can 
 | **Epic issue** | the *problem*, and why it matters | GitHub, unlabelled |
 | **Plan** | the *solution* | `docs/plans/YYYY-MM-DD-<name>.md` |
 | **Child issue** | one independently deliverable slice | GitHub, `enhancement` |
-| **PR** | one change, closing a child | GitHub |
+| **PR** | one change, closing a child *(enforced — [One child per PR](#one-child-per-pr))* | GitHub |
 
 Three rules that keep this honest:
 
@@ -150,6 +151,13 @@ than restating it and letting the copy rot.
 Plans are saved to `docs/plans/YYYY-MM-DD-<feature-name>.md`, written as bite-sized steps with
 exact file paths, real code, and exact commands — no placeholders.
 
+**Every plan header names its PR boundaries** — the pull requests the plan will produce, one
+child issue each. This is where decomposition is decided, because it is the last point at which
+splitting is free: once a branch is finished, the choices are re-slicing completed work or
+reaching for an escape hatch. The staff-engineer review checks the boundaries against the task
+graph, so a human sees "seven PRs" before a line is written. The `PR shape` job enforces the same
+rule at merge time, but it is a backstop, not the decision point.
+
 **The mandatory gate:** every plan gets a **staff-engineer review by a fresh subagent** using
 `planning-reviewer-prompt.md`, and the findings are **surfaced to the human before anything is
 folded into the plan**. A fresh reviewer has no authorship bias — but it is another instance of
@@ -224,6 +232,10 @@ wrong, and fix what's real. Findings are suggestions to evaluate, not orders to 
 Trunk-based: short-lived branches off `main`, small and frequent PRs, branch deleted after merge.
 The "Protect main" ruleset requires the CI status checks by **job name** before a merge is allowed.
 
+A PR closes **one** child. The `PR shape` job counts the closing references in the PR body and
+fails above one; `[multi-child]` in the title is the visible exception. A PR that closes no issue
+— a docs fix, a dependency bump — passes untouched.
+
 ### 7. Document — *record the why*
 
 **Skill:** `documentation-and-adrs`
@@ -252,6 +264,7 @@ where it cannot be skipped.
                                                        integration→docker)
                                      Frontend checks  (install→lint→format→test→build→docker)
                                      SDLC docs        (process changes must update docs/sdlc.md)
+                                     PR shape         (a PR closes at most one child issue)
                                             │
                                             ▼
                                      "Protect main" ruleset
@@ -260,15 +273,17 @@ where it cannot be skipped.
 
 Details that are easy to get wrong:
 
-- **Job `name:` values are a contract.** The ruleset requires `Backend checks` and
-  `Frontend checks` by name. Renaming or removing a job silently blocks all merges until the
-  ruleset is updated to match. Change what runs *inside* a job freely; keep the name stable, or
-  update the ruleset in the same PR.
+- **Job `name:` values are a contract.** The ruleset requires `Backend checks`,
+  `Frontend checks`, `SDLC docs` and `PR shape` by name. Renaming or removing a job silently
+  blocks all merges until the ruleset is updated to match. Change what runs *inside* a job
+  freely; keep the name stable, or update the ruleset in the same PR.
 - **Never add a CI check without adding it to the matching `verify.sh`, or vice versa.** That
-  mirroring is what stops local and CI drifting apart. The one deliberate exception is the
-  `SDLC docs` job — a diff-level check comparing a PR against its base, with no meaningful local
-  equivalent. It lives in its own workflow so it can listen for `pull_request: edited` without
-  re-running the full suites on every PR-title change.
+  mirroring is what stops local and CI drifting apart. Two jobs are deliberate exceptions, both
+  metadata-level: `SDLC docs` diffs a PR against its base, and `PR shape` reads the PR body —
+  neither has a meaningful single-working-tree equivalent. Both live in their own workflows so
+  they can listen for `pull_request: edited` without re-running the full suites on every
+  PR-title change. `PR shape`'s *unit tests* do have a local equivalent, and it is the same file
+  CI runs: `./scripts/tests/check-pr-shape.test.sh`.
 - **CI splits `verify.sh` into named steps** (Install / Lint / Format / Test / Build / …) purely
   so each gets its own pass/fail and timing in the log. That is presentation, not a second
   definition of the checks.
@@ -314,9 +329,11 @@ plan absorbs it.
 steps. A fresh subagent reviews it and reports, for example, that the plan never says what happens
 when `AUTH_REQUIRED=false` and there is no `sub` to key on. **That report goes to the human
 first.** The human decides whether to handle it now or scope it out. Only then is the plan revised.
+The plan's header also names its **PR boundaries** — here, four PRs, one per child — and the
+reviewer checks that split against the task graph.
 
 **2b. Children** — *now* the slices are known, so batch-create them under the epic, one per
-independently deliverable unit, labelled `enhancement`:
+PR boundary the plan review approved, labelled `enhancement`:
 
 ```
 #61  R1 — Limit configuration in config.ts
@@ -386,7 +403,8 @@ first. It's real → fix it. Had it instead claimed the in-memory counter was a 
 the tests already prove otherwise, the right response is a pushback citing the test, not a change.
 
 **6. Merge** — PR body carries `Closes #62` so the child closes itself; both CI jobs green;
-branch deleted. Four PRs land this way, and the epic closes when the last child does.
+branch deleted. Four PRs land this way, one child each — the `PR shape` job would fail a PR that
+tried to close two — and the epic closes when the last child does.
 
 **7. Document** — README's *Known limitations* and *Roadmap* both describe this gap, so both are
 updated **in the same PR**. The in-process-vs-Postgres question was close enough to earn
@@ -420,12 +438,13 @@ This file is the contract, and it is enforced deterministically rather than by g
 - `.claude/skills/**`
 - `backend/verify.sh` or `frontend/verify.sh`
 - `.github/workflows/**`
-- `scripts/check-sdlc-sync.sh`
+- `scripts/**`
 
 must also touch `docs/sdlc.md`.
 
-That last entry is deliberate: this document describes the check's exact semantics, so a change
-to the check that skipped the doc would leave the two silently disagreeing.
+That last entry is deliberate: this document describes the exact semantics of the checks in
+`scripts/` — their watched paths, failure messages and escape hatches — so a change to one that
+skipped the doc would leave the two silently disagreeing.
 
 **The enforcement:** the `SDLC docs` job — in its own workflow, `.github/workflows/sdlc-docs.yml`
 — runs `scripts/check-sdlc-sync.sh`, which diffs the PR against its base and fails with a message
@@ -444,3 +463,39 @@ actually re-runs the check; without that type the hatch would be documented but 
 To take an upstream skill update: re-vendor the file, update the pinned commit in
 `.claude/skills/NOTICE.md`, re-apply the local modifications listed there, and open a PR. The
 prompt diff gets reviewed like code, because that is exactly what it is.
+
+---
+
+## One child per PR
+
+`docs/sdlc.md` has always said a PR is "one change, closing a child". It drifted on its first
+real test — #71 closed all seven children of epic #62 in one 1,362-line change — so the rule
+moved out of the instruction layer.
+
+**The rule:** a PR body may contain closing references (`Closes`, `Fixes`, `Resolves`, and their
+tenses) to **at most one** issue. Zero is fine — a docs fix or a dependency bump closes nothing.
+
+**The enforcement:** the `PR shape` job — in its own workflow, `.github/workflows/pr-shape.yml` —
+runs `scripts/check-pr-shape.sh`, which strips HTML comments and fenced blocks from the body,
+folds all three GitHub reference forms (`#N`, `owner/repo#N`, the issue URL) to one canonical
+form, deduplicates, and fails above one. Quoting another PR's body is therefore safe as long as
+the quotation sits in a fence. Its unit tests are `scripts/tests/check-pr-shape.test.sh`; the job
+runs that file as its first step, and it is also the local pre-push command.
+
+**Escape hatch:** put `[multi-child]` in the PR title. Visible in the PR list, exactly like
+`[skip-sdlc-sync]`.
+
+**Why *at most* one and not exactly one.** Exactly-one would also catch a PR that batches
+children while writing no `Closes` line at all — but it would need a second marker on every PR
+that legitimately closes nothing (~30% here) and an actor exemption for `dependabot[bot]`, whose
+titles are rewritten on every rebase. The concealment it guards against has no precedent here:
+#71 declared all seven closing references openly. A backstop should be dumb.
+
+**It is a discipline backstop, not a security control.** On `pull_request` the workflow and the
+script both come from the PR's head, so a fork PR can edit the gate to pass itself — the same
+posture as `SDLC docs`. Both jobs hold a read-only token and reach no secrets. Do not build
+anything on the assumption that either is tamper-proof.
+
+**Where the real decision is made:** the `PR boundaries` field in the plan header (see
+[Plan](#2-plan--what-are-the-ordered-verifiable-steps)). This check is what happens when that
+decision is not honoured.
