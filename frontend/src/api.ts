@@ -41,6 +41,32 @@ export async function fetchAuthConfig(): Promise<AuthConfig> {
   };
 }
 
+/**
+ * A non-2xx response, preserving what the UI needs to react rather than flattening it to a
+ * string. `retryAfterSeconds` comes from the Retry-After header, which the backend exposes via
+ * Access-Control-Expose-Headers — without that the browser could not read it cross-origin.
+ */
+export class ApiError extends Error {
+  // `override` is required: `name` is declared on Error and the app tsconfig sets
+  // noImplicitOverride.
+  override readonly name = "ApiError";
+  constructor(
+    readonly status: number,
+    detail: string,
+    readonly retryAfterSeconds?: number,
+  ) {
+    super(detail);
+  }
+}
+
+/** Parse Retry-After as delta-seconds; undefined when absent or not a number. */
+function retryAfterFrom(resp: Response): number | undefined {
+  const raw = resp.headers?.get("Retry-After");
+  if (raw === null || raw === undefined) return undefined;
+  const seconds = Number(raw);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
+}
+
 export async function execute(
   prompt: string,
   accessToken?: string,
@@ -66,7 +92,7 @@ export async function execute(
     } catch {
       /* keep default detail */
     }
-    throw new Error(detail);
+    throw new ApiError(resp.status, detail, retryAfterFrom(resp));
   }
 
   return (await resp.json()) as ExecuteResponse;

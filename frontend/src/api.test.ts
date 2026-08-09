@@ -1,12 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { execute, fetchAuthConfig, type MessageResponse, type ResultResponse } from "./api";
+import {
+  ApiError,
+  execute,
+  fetchAuthConfig,
+  type MessageResponse,
+  type ResultResponse,
+} from "./api";
 
 // A minimal stand-in for the parts of the fetch Response we rely on.
-function mockResponse(opts: { ok: boolean; status?: number; json: () => unknown }): Response {
+function mockResponse(opts: {
+  ok: boolean;
+  status?: number;
+  json: () => unknown;
+  headers?: Record<string, string>;
+}): Response {
   return {
     ok: opts.ok,
     status: opts.status ?? (opts.ok ? 200 : 500),
     json: () => Promise.resolve(opts.json()),
+    headers: new Headers(opts.headers ?? {}),
   } as unknown as Response;
 }
 
@@ -174,5 +186,65 @@ describe("fetchAuthConfig", () => {
     vi.mocked(fetch).mockResolvedValue(mockResponse({ ok: false, status: 503, json: () => ({}) }));
 
     await expect(fetchAuthConfig()).rejects.toThrow("Failed to load config (503)");
+  });
+});
+
+describe("throttling refusals", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("throws an ApiError carrying status and retry hint on 429 (D7)", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      mockResponse({
+        ok: false,
+        status: 429,
+        json: () => ({ detail: "Rate limit exceeded." }),
+        headers: { "Retry-After": "42" },
+      }),
+    );
+    await expect(execute("hi")).rejects.toMatchObject({
+      name: "ApiError",
+      status: 429,
+      retryAfterSeconds: 42,
+      message: "Rate limit exceeded.",
+    });
+  });
+
+  it("carries the 503 saturation refusal the same way", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      mockResponse({
+        ok: false,
+        status: 503,
+        json: () => ({ detail: "At capacity." }),
+        headers: { "Retry-After": "5" },
+      }),
+    );
+    await expect(execute("hi")).rejects.toMatchObject({ status: 503, retryAfterSeconds: 5 });
+  });
+
+  it("leaves retryAfterSeconds undefined when the header is absent", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      mockResponse({ ok: false, status: 500, json: () => ({ detail: "boom" }) }),
+    );
+    const err = await execute("hi").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).retryAfterSeconds).toBeUndefined();
+  });
+
+  it("ignores a non-numeric Retry-After rather than surfacing NaN", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      mockResponse({
+        ok: false,
+        status: 429,
+        json: () => ({ detail: "slow down" }),
+        headers: { "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" },
+      }),
+    );
+    const err = (await execute("hi").catch((e: unknown) => e)) as ApiError;
+    expect(err.retryAfterSeconds).toBeUndefined();
   });
 });

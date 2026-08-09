@@ -5,8 +5,14 @@ import App from "./App";
 import type { ExecuteResponse } from "./api";
 
 // Mock the API client so the component is tested in isolation from the network.
-vi.mock("./api", () => ({ execute: vi.fn(), fetchAuthConfig: vi.fn() }));
-import { execute, fetchAuthConfig } from "./api";
+// Keep the real module and stub only the two network functions: ApiError must stay a real
+// class, or App's `instanceof` check throws on a mock that has no such export.
+vi.mock("./api", async (importActual) => ({
+  ...(await importActual<typeof import("./api")>()),
+  execute: vi.fn(),
+  fetchAuthConfig: vi.fn(),
+}));
+import { ApiError, execute, fetchAuthConfig } from "./api";
 
 // Mock the history client. Most tests run with history disabled and never touch it; the
 // history-mode tests below drive these mocks.
@@ -175,6 +181,43 @@ describe("App", () => {
     await user.click(runButton());
 
     expect(await screen.findByText(/backend exploded/)).toBeInTheDocument();
+  });
+
+  it("explains a 429 as the user's own pace, with the retry hint (D7)", async () => {
+    const user = userEvent.setup();
+    mockedExecute.mockRejectedValue(new ApiError(429, "Rate limit exceeded.", 42));
+    render(<App />);
+
+    await user.type(screen.getByRole("textbox"), "too fast");
+    await user.click(runButton());
+
+    expect(await screen.findByText(/sending requests too quickly/i)).toBeInTheDocument();
+    expect(screen.getByText(/Try again in 42s/)).toBeInTheDocument();
+  });
+
+  it("explains a 503 as the service's load, not the user's doing (D4)", async () => {
+    const user = userEvent.setup();
+    mockedExecute.mockRejectedValue(new ApiError(503, "At capacity.", 5));
+    render(<App />);
+
+    await user.type(screen.getByRole("textbox"), "busy");
+    await user.click(runButton());
+
+    // Must NOT blame the caller — they are inside their own quota.
+    expect(await screen.findByText(/service is at capacity/i)).toBeInTheDocument();
+    expect(screen.queryByText(/too quickly/i)).not.toBeInTheDocument();
+  });
+
+  it("omits the retry sentence when the server sent no hint", async () => {
+    const user = userEvent.setup();
+    mockedExecute.mockRejectedValue(new ApiError(429, "Rate limit exceeded."));
+    render(<App />);
+
+    await user.type(screen.getByRole("textbox"), "no hint");
+    await user.click(runButton());
+
+    expect(await screen.findByText(/sending requests too quickly/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Try again in/)).not.toBeInTheDocument();
   });
 
   it("runs on Cmd/Ctrl+Enter but not on a plain Enter", async () => {
