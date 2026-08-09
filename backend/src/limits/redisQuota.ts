@@ -51,7 +51,9 @@ export class RedisQuotaStore implements QuotaStore {
   // ReturnType<> rather than RedisClientType: the latter's generic defaults do not line up
   // with what createClient() actually returns and produce a spurious assignability error.
   private readonly client: ReturnType<typeof createClient>;
-  private connecting: Promise<void> | undefined;
+  // node-redis resolves connect() with the client, not void — hold it as unknown so callers
+  // can only await it, never accidentally depend on what it resolves to.
+  private connecting: Promise<unknown> | undefined;
 
   constructor(url: string) {
     // Three settings, all load-bearing for D5. Get any of them wrong and fail-open becomes
