@@ -4,7 +4,7 @@
 | --- | --- | --- | --- |
 | [`sdlc.md`](sdlc.md) | The development process itself — phases, gates, how they meet CI | Process changes | Yes — and **required** by the `SDLC docs` CI job |
 | [`adr/`](adr) | **Decisions.** Why an approach was chosen and what was rejected | A choice would be expensive to reverse | **No** — supersede, never edit or delete |
-| `specs/` | **Problems.** Objective, boundaries, success criteria, open questions | Requirements are unclear enough that building the wrong thing is the risk | Rarely — it records what was agreed |
+| [`specs/`](specs) | **Problems.** Objective, boundaries, success criteria, open questions | Requirements are unclear enough that building the wrong thing is the risk | Rarely — it records what was agreed |
 | [`plans/`](plans) | **Solutions.** Ordered, bite-sized implementation steps | Before writing code for anything multi-step | Superseded by the next plan |
 | [`design/`](design) | Design notes and retrospectives for work already built or retired | After the fact, to preserve learning | Yes |
 | [`runbooks/`](runbooks) | Step-by-step procedures a human executes on demand | A task will be repeated and is easy to get wrong | Yes |
@@ -29,5 +29,3 @@ Changing how we work?                           → sdlc.md
   the work lands. A spec and its plan share a name.
 - **Everything here is versioned with the code it describes.** Issues link to these documents;
   they never contain them. Design pasted into an issue comment is design you will lose.
-
-`specs/` may not exist yet — it appears with the first spec.
