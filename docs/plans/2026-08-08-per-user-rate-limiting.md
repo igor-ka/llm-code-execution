@@ -8,8 +8,8 @@ sandbox executions.
 (in-memory + Redis, same shape as the existing `HistoryStore`) is consulted by an Express
 middleware mounted after `requirePrincipal` and before `llm.generate`; it fails **open** on any
 store error (D5). A `ConcurrencyLimiter` counts in-process slots; a `ConcurrencyLimitedBackend`
-decorator wraps any `SandboxBackend` to enforce them, and `/api/execute` peeks at saturation
-before spending on the LLM. Refusals travel through the existing `HttpError` → `{detail}` path.
+decorator wraps any `SandboxBackend` to enforce them at launch. Refusals travel through the
+existing `HttpError` → `{detail}` path.
 
 **Tech Stack:** TypeScript, Express 5, `redis` (node-redis v5) with one Lua script for atomicity,
 Vitest, Docker Compose.
@@ -28,14 +28,17 @@ same `sub` hitting two instances must share one allowance, so the counter lives 
 capacity is *local*: each instance protects the host it runs on, so an in-process count is the
 correct semantics under horizontal scaling, not a compromise.
 
-**2. Two enforcement points for one cap, and why.** S3 requires that a refused request cost zero
-Anthropic spend, but the authoritative slot acquisition can only happen at the moment of execution
-— which is *after* `llm.generate`. So `/api/execute` does a cheap `limiter.saturated` peek before
-the LLM call (fast-fail, saves the spend in the common saturated case) and the decorator does the
-real `tryAcquire()` at launch. **Residual, accepted:** a request that passes the peek can still be
-refused at acquire, having already paid for one LLM call. The alternative — holding a sandbox slot
-across the whole LLM call — would idle scarce slots for seconds and would make no-code-path
-requests consume sandbox capacity they never use.
+**2. One enforcement point for the cap: the sandbox launch, never before the LLM call (D9).** An
+earlier draft added a cheap `limiter.saturated` peek before `llm.generate` so a refusal under load
+would cost nothing. Rejected: the prompt's nature is unknowable until the model answers, so the
+peek would refuse **no-code prompts too** — *"tell me a joke"* never touches Docker, yet would get
+a 503 whenever the pool happened to be full. Refusing work the service could comfortably have done
+is the worse outcome. **Accepted cost:** each saturation refusal wastes exactly one Claude call.
+This narrows S3 to quota refusals only.
+
+*Consequence for the implementer:* `createApp` holds no limiter of its own and `AppDeps` needs no
+`sandboxLimiter` seam. The limiter lives entirely inside the decorator, which is the only thing
+that consults it.
 
 **3. The counter needs no lock.** Node is single-threaded and `tryAcquire()` contains no `await`
 between reading and incrementing `active`, so the check-and-increment is atomic within a tick. A
@@ -61,7 +64,7 @@ read-then-write atomic; doing it in two round trips would race.
 | `backend/src/sandbox/concurrencyLimited.ts` | `SandboxBackend` decorator enforcing the limiter |
 | `backend/src/config.ts` | *(modify)* new settings + `assertRedisConfigured` |
 | `backend/src/errors.ts` | *(modify)* `HttpError` carries `retryAfterSeconds` |
-| `backend/src/server.ts` | *(modify)* mount middleware, saturation peek, expose header, wire decorator |
+| `backend/src/server.ts` | *(modify)* mount quota middleware, expose `Retry-After`, wrap the sandbox |
 | `backend/src/index.ts` | *(modify)* D6 boot check — composition root only |
 | `frontend/src/api.ts` | *(modify)* typed `ApiError` carrying status + retry hint |
 
@@ -511,8 +514,16 @@ Create `backend/src/limits/redisQuota.ts`:
  * and only then consume both. Split across round trips that read-then-write would race, and
  * a bare INCR would charge callers for requests it refused.
  */
-import { createClient, type RedisClientType } from "redis";
+import { createClient } from "redis";
 import type { QuotaStore, QuotaLimits, QuotaDecision } from "./quota.js";
+
+/**
+ * Hard ceiling on how long a quota check may take. D5 fails OPEN on error, but only an
+ * error triggers that — a command that hangs forever hangs /api/execute forever, which is
+ * strictly worse than the fail-closed option the spec rejected. This timeout is what turns
+ * "Redis is unreachable" into a rejection the middleware can actually catch.
+ */
+const QUOTA_TIMEOUT_MS = 250;
 
 // KEYS[1] burst key, KEYS[2] sustained key
 // ARGV: burstLimit, burstWindow, sustainedLimit, sustainedWindow
@@ -542,15 +553,30 @@ return 0
 `;
 
 export class RedisQuotaStore implements QuotaStore {
-  private readonly client: RedisClientType;
+  // ReturnType<> rather than RedisClientType: the latter's generics do not line up with what
+  // createClient() returns and produce a spurious assignability error.
+  private readonly client: ReturnType<typeof createClient>;
   private connecting: Promise<void> | undefined;
 
   constructor(url: string) {
-    // Do not let node-redis retry forever: the middleware fails open (D5), so a request
-    // must find out quickly that Redis is gone rather than hanging on /api/execute.
+    // Three settings, all load-bearing for D5. Getting any of them wrong turns fail-open
+    // into hang-forever:
+    //   disableOfflineQueue  - without it, commands issued while the client is reconnecting
+    //                          sit in an offline queue indefinitely instead of rejecting.
+    //                          isOpen stays TRUE through a disconnect (isReady is the flag
+    //                          that flips), so nothing else would catch this.
+    //   reconnectStrategy    - must eventually return an Error, or the client retries
+    //                          forever and never surfaces a failure.
+    //   connectTimeout       - bounds the INITIAL connect only; commands are bounded by
+    //                          QUOTA_TIMEOUT_MS above.
     this.client = createClient({
       url,
-      socket: { connectTimeout: 1000, reconnectStrategy: (retries) => Math.min(retries * 200, 2000) },
+      disableOfflineQueue: true,
+      socket: {
+        connectTimeout: 1000,
+        reconnectStrategy: (retries) =>
+          retries > 5 ? new Error("redis unreachable") : Math.min(retries * 200, 2000),
+      },
     });
     // An 'error' listener is mandatory — without one, node-redis emits an unhandled
     // 'error' event and takes the process down, turning D5's fail-open into a crash.
@@ -559,7 +585,7 @@ export class RedisQuotaStore implements QuotaStore {
     });
   }
 
-  private async ready(): Promise<RedisClientType> {
+  private async ready(): Promise<ReturnType<typeof createClient>> {
     if (!this.client.isOpen) {
       this.connecting ??= this.client.connect().finally(() => {
         this.connecting = undefined;
@@ -569,17 +595,37 @@ export class RedisQuotaStore implements QuotaStore {
     return this.client;
   }
 
+  /** Reject rather than hang. See QUOTA_TIMEOUT_MS. */
+  private async bounded<T>(op: () => Promise<T>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`quota store timed out after ${QUOTA_TIMEOUT_MS}ms`)),
+        QUOTA_TIMEOUT_MS,
+      );
+    });
+    try {
+      return await Promise.race([op(), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async consume(key: string, limits: QuotaLimits): Promise<QuotaDecision> {
-    const client = await this.ready();
-    const retryAfter = (await client.eval(SCRIPT, {
-      keys: [`${key}:b`, `${key}:s`],
-      arguments: [
-        String(limits.burst),
-        String(limits.burstWindowSeconds),
-        String(limits.sustained),
-        String(limits.sustainedWindowSeconds),
-      ],
-    })) as number;
+    // The whole operation is bounded, connect included — an unreachable host makes ready()
+    // itself slow, not just the command.
+    const retryAfter = await this.bounded(async () => {
+      const client = await this.ready();
+      return (await client.eval(SCRIPT, {
+        keys: [`${key}:b`, `${key}:s`],
+        arguments: [
+          String(limits.burst),
+          String(limits.burstWindowSeconds),
+          String(limits.sustained),
+          String(limits.sustainedWindowSeconds),
+        ],
+      })) as number;
+    });
     return retryAfter === 0
       ? { allowed: true }
       : { allowed: false, retryAfterSeconds: Number(retryAfter) };
@@ -616,12 +662,47 @@ Then confirm the gate works:
 Run: `cd backend && npx vitest run tests/limits/redisQuota.test.ts`
 Expected: skipped, 0 failures.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Prove it fails FAST when Redis is unreachable (D5, S9)**
+
+This is the test S9 actually asks for, and it needs **no** live Redis — pointing at a closed port
+is a more faithful outage than a mock. It therefore lives in the default suite, not the gated one:
+the fail-open path must be covered on every run.
+
+Create `backend/tests/limits/redisQuotaOffline.test.ts`:
+
+```ts
+/**
+ * The fail-open path (D5) only works if an unreachable Redis produces a REJECTION. If the
+ * command instead sits in node-redis' offline queue, /api/execute hangs forever — strictly
+ * worse than the fail-closed posture the spec rejected. This test is the guard on that.
+ */
+import { describe, it, expect } from "vitest";
+import { RedisQuotaStore } from "../../src/limits/redisQuota.js";
+import { TEST_LIMITS } from "./quotaContract.js";
+
+describe("RedisQuotaStore when Redis is unreachable", () => {
+  it("rejects within a bounded time instead of hanging (S9)", async () => {
+    // Port chosen to have nothing listening; connect fails with ECONNREFUSED.
+    const store = new RedisQuotaStore("redis://127.0.0.1:6390");
+    const started = Date.now();
+    await expect(store.consume("offline-key", TEST_LIMITS)).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(2000);
+    await store.close().catch(() => {});
+  });
+});
+```
+
+Run: `cd backend && npx vitest run tests/limits/redisQuotaOffline.test.ts`
+Expected: PASS in well under two seconds. **If this test hangs, the client configuration is
+wrong** — check `disableOfflineQueue` and the `reconnectStrategy` returning an `Error`.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add backend/src/limits/redisQuota.ts backend/tests/limits/redisQuota.test.ts \
+        backend/tests/limits/redisQuotaOffline.test.ts \
         backend/package.json backend/package-lock.json
-git commit -m "feat(limits): Redis quota store — atomic two-window Lua, TTL on every key"
+git commit -m "feat(limits): Redis quota store — atomic two-window Lua, TTL, bounded failure"
 ```
 
 ---
@@ -828,6 +909,10 @@ Create `backend/src/limits/middleware.ts`:
  * Per-user quota enforcement for /api/execute. Mounted AFTER requirePrincipal (so the
  * identity is the verified sub, never a header) and BEFORE llm.generate, which is what
  * makes a refusal cost zero Anthropic spend (S3).
+ *
+ * Note it also runs before the body is validated, so a malformed request still consumes
+ * quota. That is deliberate: otherwise an attacker gets unlimited free 422s to probe with.
+ * Do not "fix" it by moving validation earlier.
  */
 import type { RequestHandler } from "express";
 import type { Principal } from "../auth.js";
@@ -946,7 +1031,6 @@ import { loadSettings } from "../../src/config.js";
 import { MemoryQuotaStore } from "../../src/limits/memoryQuota.js";
 import { fakePrincipal } from "../helpers/auth.js";
 import type { SandboxBackend } from "../../src/sandbox/base.js";
-import { HttpError } from "../../src/errors.js";
 
 /** A backend that blocks until released, so concurrency is observable. */
 function blockingBackend() {
@@ -1015,22 +1099,32 @@ describe("/api/execute under saturation", () => {
       settings: loadSettings({ AUTH_REQUIRED: "false", ANTHROPIC_API_KEY: "t", RATE_LIMIT_BURST: "100" }),
       llm: { generate: async () => ({ shouldExecute: true, language: "python", code: "print(1)", message: null }) } as never,
       sandbox: new ConcurrencyLimitedBackend(backend, limiter),
-      sandboxLimiter: limiter, // the peek must consult the SAME limiter as the decorator
       quota: new MemoryQuotaStore(),
       requirePrincipal: fakePrincipal("user-a"),
     });
 
+    // CRITICAL: supertest requests are LAZY. `request(app).post(...).send(...)` builds a
+    // thenable and dispatches nothing until .then() is called. Without the .then() below,
+    // no request reaches the app before releaseAll() fires on an empty array, and the test
+    // hangs until the suite times out rather than failing an assertion.
     const inflight = [0, 1, 2, 3, 4].map(() =>
-      request(app).post("/api/execute").send({ prompt: "go" }),
+      request(app)
+        .post("/api/execute")
+        .send({ prompt: "go" })
+        .then((r) => r),
     );
-    // Give the three excess requests time to be refused while the two holders block.
+    // Let the two winners occupy both slots and the three losers be refused.
     await new Promise((r) => setTimeout(r, 50));
     releaseAll();
     const responses = await Promise.all(inflight);
 
-    expect(peak()).toBeLessThanOrEqual(2);
-    expect(responses.filter((r) => r.status === 503).length).toBeGreaterThan(0);
-    for (const r of responses.filter((x) => x.status === 503)) {
+    // Exact counts, not `toBeLessThanOrEqual` — a cap of 2 that only ever ran 1 request
+    // would satisfy an inequality while proving nothing.
+    expect(peak()).toBe(2);
+    expect(responses.filter((r) => r.status === 200)).toHaveLength(2);
+    const refused = responses.filter((r) => r.status === 503);
+    expect(refused).toHaveLength(3);
+    for (const r of refused) {
       expect(Number(r.headers["retry-after"])).toBeGreaterThan(0);
     }
   });
@@ -1132,7 +1226,7 @@ export class ConcurrencyLimitedBackend implements SandboxBackend {
 }
 ```
 
-- [ ] **Step 5: Wire it in, with the pre-LLM peek**
+- [ ] **Step 5: Wire the decorator into `createApp`**
 
 In `backend/src/server.ts`, add the imports:
 
@@ -1141,49 +1235,33 @@ import { ConcurrencyLimiter } from "./limits/concurrency.js";
 import { ConcurrencyLimitedBackend } from "./sandbox/concurrencyLimited.js";
 ```
 
-Add to `AppDeps`:
-
-```ts
-  sandboxLimiter?: ConcurrencyLimiter; // test seam: share one limiter with an injected sandbox
-```
+`AppDeps` needs no new field: per D9 the limiter is consulted only by the decorator, so a test that
+injects `deps.sandbox` wraps it itself and owns the limiter outright.
 
 Replace the `getSandbox` block:
 
 ```ts
-  // One limiter per app, shared by the decorator (authoritative) and the peek below.
-  // Injectable because tests that supply their own wrapped `sandbox` must be able to hand
-  // the peek the SAME limiter — otherwise the peek consults an idle counter and the two
-  // enforcement points silently diverge under test while sharing one limiter in production.
-  const sandboxLimiter =
-    deps.sandboxLimiter ?? new ConcurrencyLimiter(settings.sandboxMaxConcurrent);
   let sandbox = deps.sandbox;
   const getSandbox = (): SandboxBackend => {
     if (!sandbox) {
+      // The cap is applied by wrapping, not by editing DockerBackend — so the future
+      // CloudRunBackend inherits it unchanged. The limiter is owned by the decorator and
+      // consulted nowhere else (D9), so nothing else in createApp needs a reference to it.
       sandbox = new ConcurrencyLimitedBackend(
         new DockerBackend(settings.sandboxImage),
-        sandboxLimiter,
+        new ConcurrencyLimiter(settings.sandboxMaxConcurrent),
       );
     }
     return sandbox;
   };
 ```
 
-In the `/api/execute` handler, immediately before the `getLlm().generate(prompt)` try block:
+No change to the `/api/execute` handler: the sandbox call at `server.ts:151` already routes through
+`getSandbox()`, and the decorator's `HttpError(503)` propagates to the existing `next(err)` and the
+final error handler unchanged.
 
-```ts
-      // Cheap saturation peek BEFORE spending on the LLM (S3). The decorator's tryAcquire is
-      // still authoritative — a request can pass here and be refused at launch, having paid
-      // for one LLM call. Holding a slot across generation instead would idle scarce capacity
-      // for seconds, and no-code-path requests would consume sandboxes they never use.
-      if (sandboxLimiter.saturated) {
-        throw new HttpError(503, "The service is at capacity. Please retry in a few seconds.", 5);
-      }
-```
-
-> Note for the implementer: an injected `deps.sandbox` is *not* auto-wrapped — the test wraps it
-> itself and passes `deps.sandboxLimiter` so both enforcement points share one counter. Without
-> that second injection the peek would consult a limiter nothing ever acquires from, and the test
-> would prove only half of what it appears to.
+> Note for the implementer: an injected `deps.sandbox` is *not* auto-wrapped, which is why the test
+> above wraps its own backend explicitly.
 
 - [ ] **Step 6: Run tests to verify they pass**
 
@@ -1490,7 +1568,9 @@ In `frontend/src/api.ts`, add above `execute`:
  * it cross-origin at all.
  */
 export class ApiError extends Error {
-  readonly name = "ApiError";
+  // `override` is required: the frontend tsconfig sets noImplicitOverride, and `name` is
+  // declared on Error. Without it, tsc -b fails with TS4114.
+  override readonly name = "ApiError";
   constructor(
     readonly status: number,
     detail: string,
@@ -1555,7 +1635,9 @@ function throttleMessage(e: unknown): string | null {
 }
 ```
 
-and extend the import to `import { ApiError, execute } from "./api";`
+**Extend the existing import — do not add a second one.** `App.tsx:2` already imports from
+`./api`; adding a fresh `import { ApiError, execute } from "./api"` gives `TS2300: Duplicate
+identifier 'execute'`. Add `ApiError` to the existing named-import list in place.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -1580,11 +1662,12 @@ git commit -m "feat(frontend): distinguish 429/503 with a retry hint (D7)"
 - [ ] **Step 1: Write the ADR**
 
 Create `docs/adr/0003-rate-limiting-approach.md`, continuing the existing sequence and format
-(see `0002-agentic-auth-security-testing.md`). It records the three decisions that are expensive
-to reverse — **D1** (Redis, with in-process and Postgres as the rejected options), **D5**
-(fail-open, and why the concurrency cap is what makes that safe), and **D8** (immediate refusal,
-no queue; and why the two controls legitimately store state in different places). Status:
-`Accepted`. Link the spec.
+(see `0002-agentic-auth-security-testing.md`). It records the decisions that are expensive to
+reverse — **D1** (Redis, with in-process and Postgres as the rejected options), **D5** (fail-open,
+and why the concurrency cap is what makes that safe), **D8** (immediate refusal, no queue; and why
+the two controls legitimately store state in different places), and **D9** (the cap is enforced
+only at launch, so a saturation refusal costs one Claude call — the rejected alternative refused
+no-code prompts the service could have served). Status: `Accepted`. Link the spec.
 
 - [ ] **Step 2: Update the README**
 
@@ -1599,8 +1682,18 @@ instance; excess is refused with `503` rather than queued. The backend refuses t
 `REDIS_URL`. See [ADR-0003](docs/adr/0003-rate-limiting-approach.md).
 ```
 
-Update the *Roadmap* line that promises "per-user quotas / rate limiting" as future work, and add
-`REDIS_URL` plus the `RATE_LIMIT_*` and `SANDBOX_MAX_CONCURRENT` variables to the settings table.
+The README promises per-user quotas as *future* work in **three** places — all must be corrected,
+or the document contradicts itself:
+
+- `README.md:202` — "What's still missing for a real deployment is multi-tenancy and per-user
+  quotas" → leaves multi-tenancy only.
+- `README.md:251-252` — the Roadmap line "remaining work is multi-tenancy and per-user quotas /
+  rate limiting keyed on the verified `sub`" → same treatment.
+- `README.md:255` — "and the per-user quotas above (keyed on the same verified `sub`)" in the
+  history follow-ups → drop, it is now shipped.
+
+Add `REDIS_URL` plus the `RATE_LIMIT_*` and `SANDBOX_MAX_CONCURRENT` variables to the settings
+table.
 Add `redis` to the Compose services described in the setup steps, and note that a fresh clone now
 needs it running.
 
@@ -1632,16 +1725,16 @@ applied.
 | --- | --- |
 | S1 429 over quota | 2, 5 |
 | S2 cross-user independence | 2, 5 |
-| S3 zero spend on refusal | 5 (quota), 6 (peek) |
+| S3 zero spend on a *quota* refusal (D9 narrows this) | 5 |
 | S4 no-code path charged | 5 |
 | S5 concurrency never exceeds N | 6 |
 | S6 bounded state / TTLs | 3 |
 | S7 survives restart | 3 (Redis is the mechanism) |
 | S8 refuses to boot | 1, 7 |
-| S9 fails open + alarms | 5 |
+| S9 fails open + alarms | 5 (middleware catch), 3 Step 6 (real store rejects fast) |
 | S10 unit tests need no Redis | 1, 7 |
 | S11 both verify.sh green | 8, and the final verification above |
-| D1–D8 | ADR in 10 |
+| D1–D9 | ADR in 10 |
 
 ## Suggested child issues
 

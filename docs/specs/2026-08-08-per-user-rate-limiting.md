@@ -93,7 +93,7 @@ directly from this.
 | --- | --- |
 | S1 | A user exceeding the quota gets **429**; requests under it succeed. |
 | S2 | While user A is throttled, user B is unaffected — proven by a cross-user test. |
-| S3 | A refused request costs **zero** Anthropic spend: both decisions happen before `llm.generate`. |
+| S3 | A **quota** refusal (429) costs **zero** Anthropic spend: the decision happens before `llm.generate`. A **saturation** refusal (503) happens after generation and costs one call — see D9. |
 | S4 | Quota is consumed by **every** accepted request, including the `should_execute: false` no-code path. |
 | S5 | Under a burst of M ≫ N simultaneous requests, concurrent sandbox executions never exceed the configured N. Excess is refused with **503** — never launched, never queued (D8). |
 | S6 | Limiter state stays bounded as identities accumulate: every key carries a TTL, so Redis is not turned into a memory-exhaustion vector by a token-minting attacker. |
@@ -188,6 +188,18 @@ horizontal scaling, not a compromise. The asymmetry is deliberate. (Caveat for t
 `docker-compose.yml`: several backend instances sharing one Docker daemon would over-subscribe it.
 There is one instance today; this needs revisiting with `CloudRunBackend`.)
 
+**D9 — The concurrency cap is enforced only at the sandbox launch, never before the LLM call.**
+Raised by the plan review. The cap could also be checked *before* `llm.generate` as a cheap
+saturation peek, so that a refusal under load cost nothing. Rejected, because the prompt's nature
+is unknowable until the model has answered: a peek would refuse **no-code prompts too** — *"tell
+me a joke"* never touches Docker, yet would receive a 503 whenever the sandbox pool happened to be
+full. Refusing work the service could comfortably have done is the worse outcome.
+
+*Accepted cost:* every saturation refusal wastes exactly one Claude call, since the request is
+refused only after generation. Bounded by how often the pool is actually full, and by the quota
+already limiting arrival rate. This narrows S3 — the zero-spend guarantee now covers quota
+refusals only.
+
 ## Residual risk
 
 Recorded rather than solved:
@@ -199,10 +211,12 @@ Recorded rather than solved:
    `CloudRunBackend`.
 3. **Cost is controlled by request count, not tokens** (D3). A user sending few, very expensive
    prompts stays within quota while spending more than a user sending many cheap ones.
+4. **Saturation refusals waste one Claude call each** (D9). The alternative wasted no spend but
+   refused work the service could have completed.
 
 ## Open questions
 
-**None — all resolved (D1–D8).** One item deferred as config rather than architecture: the actual
+**None — all resolved (D1–D9).** One item deferred as config rather than architecture: the actual
 window lengths, request counts, and concurrency limit. Conservative defaults are chosen in the plan
 and tuned in operation; at 256 MB and 0.5 CPU per container, a 4-core/8 GB dev box tolerates
 roughly 4–8 concurrent sandboxes.
@@ -210,5 +224,5 @@ roughly 4–8 concurrent sandboxes.
 ## Not yet decided
 
 Nothing here commits to a mechanism. The seams, the wiring, and the algorithms are the plan's job
-(`docs/plans/2026-08-08-per-user-rate-limiting.md`, not yet written); D1, D5 and D8 go in the ADR —
-they are the three that would be expensive to reverse.
+([`docs/plans/2026-08-08-per-user-rate-limiting.md`](../plans/2026-08-08-per-user-rate-limiting.md));
+D1, D5 and D8 go in the ADR — they are the three that would be expensive to reverse.
