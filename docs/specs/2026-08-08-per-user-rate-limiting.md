@@ -1,7 +1,7 @@
 # Spec: per-user rate limiting and quotas
 
-Epic: [#62](https://github.com/igor-ka/llm-code-execution/issues/62) · Status: **open questions
-unanswered — not ready to plan**
+Epic: [#62](https://github.com/igor-ka/llm-code-execution/issues/62) · Status: **partially
+decided — OQ4/OQ5/OQ6/OQ7 still block planning**
 
 Stack, commands, project layout, code style, and testing strategy are not restated here; they
 live in [`CLAUDE.md`](../../CLAUDE.md) and [`README.md`](../../README.md).
@@ -56,6 +56,9 @@ before implementation because this touches `sandbox/**` and the authenticated re
   as the seam where per-tenant overrides will plug in.
 - Refusals returned through the existing `HttpError` → `{detail}` path, so error shapes stay
   uniform.
+- **Redis as a new infrastructure dependency** (D1): a service in `docker-compose.yml`, a service
+  container in CI, and matching coverage in `backend/verify.sh` — the mirroring rule in
+  [`CLAUDE.md`](../../CLAUDE.md) means the CI step and the local script move together.
 
 **Out of scope**
 
@@ -80,60 +83,88 @@ the correct behaviour when saturated is to *refuse work*, not to schedule it cle
 | S3 | A throttled request costs **zero** Anthropic spend: the decision happens before `llm.generate`. |
 | S4 | Quota is consumed by **every** accepted request, including the `should_execute: false` no-code path. |
 | S5 | Under a burst of M ≫ N simultaneous requests, concurrent sandbox executions never exceed the configured N. Excess is refused or queued (OQ5) — never launched. |
-| S6 | Limiter state stays bounded as distinct identities accumulate; it is not itself a memory-exhaustion vector. |
-| S7 | Limits are configurable with safe defaults. An existing deployment that sets no new env var still boots and is protected. |
-| S8 | Both `verify.sh` scripts green, with the concurrency and cross-user behaviours covered by tests rather than asserted. |
+| S6 | Limiter state stays bounded as distinct identities accumulate: every key carries a TTL, so Redis is not turned into a memory-exhaustion vector by a token-minting attacker. |
+| S7 | Limits are configurable with safe defaults. Behaviour when Redis is unreachable is explicit and tested — never accidental (OQ7). |
+| S8 | The quota holds across a backend restart. In-process counters would reset, making redeploy a quota bypass; D1 exists partly to close that. |
+| S9 | Both `verify.sh` scripts green, with the concurrency and cross-user behaviours covered by tests rather than asserted. |
 
 S5 and S6 are the two that are easy to *claim* and hard to *prove* — they need tests that exercise
 real concurrency and real key churn, not a unit test of the counter arithmetic.
 
+## Decisions
+
+Answered 2026-08-08. Recorded here so the plan does not re-litigate them.
+
+**D1 — Limiter state lives in Redis.** *(was OQ1)*
+Rejected: in-process counters, Postgres. The deciding argument is the deployment target — Cloud
+Run autoscales horizontally by default, so a per-process counter would be wrong on day one, giving
+N instances N× the intended limit. In-process state also resets on restart, making redeploy a
+quota bypass (S8). Postgres would avoid a new dependency but puts a transactional store on the hot
+path of every request. **This is expensive to reverse and gets an ADR** — including the rejected
+options and the cost accepted below.
+
+*Accepted costs:* a third piece of infrastructure (Compose service, CI service container,
+`verify.sh` coverage); a network round trip before every `/api/execute`; a new failure mode when
+Redis is unreachable (OQ7); and integration tests that need a live Redis, mirroring the
+`DATABASE_URL`-gated history suites — with the same trap, that a green `verify.sh` is not evidence
+they ran.
+
+**D2 — Anonymous traffic shares one bucket.** *(was OQ2)*
+With `AUTH_REQUIRED=false` there is no `sub`, so all anonymous callers share a single bucket —
+effectively a global rate limit. Rejected: IP keying (would require trusting `X-Forwarded-For`, a
+spoofable header and therefore a limiter bypass) and no-limit-when-anonymous (leaves API budget
+unprotected). Consistent with history's posture: anonymous is degraded, never privileged.
+
+**D3 — The quota counts requests, in two windows.** *(was OQ3)*
+A short burst allowance plus a longer sustained window. Countable and refusable *before* any spend,
+which is what makes S3 achievable. Token spend is the truer budget but is only known after the call
+returns — a lagging control that cannot stop the first expensive request. Consciously accepted: a
+few expensive prompts can cost more than many cheap ones.
+
+**D4 — Two refusals, two status codes.**
+Per-user quota exhausted → **429** (RFC 6585 §4: *the user has sent too many requests*). Global
+sandbox saturation → **503** (RFC 9110 §15.6.4: *temporary overload*). The distinction is not
+cosmetic: the quota is checked first, so any request that reaches the sandbox cap is **inside** its
+own allowance and is being refused because of *other* users' load — 429 would misattribute that to
+the caller. Both carry `Retry-After`. Noted for the deployment work: Cloud Run's load balancer
+counts container 503s as backend errors, which 429s are not.
+
 ## Open questions
 
-**These block planning.** Each changes the shape of the solution, so none can be deferred into the
-plan. Recommendations are mine; the decision is the human's.
-
-**OQ1 — In-process counters, or a shared store?**
-In-process means the cap is per-process: N instances ⇒ N× the intended limit. Shared state
-(Postgres, already a dependency; or Redis, a new one) is correct under horizontal scaling but adds
-a round trip to every request and a failure mode — what happens when the store is down, fail-open
-or fail-closed? There is one instance today and no deployment yet.
-*Recommendation:* in-process for v1, with the multi-instance gap recorded in the ADR and revisited
-by the Cloud Run work. **This is the decision that would be expensive to reverse — it likely earns
-an ADR either way.**
-
-**OQ2 — What happens when `AUTH_REQUIRED=false` and there is no `sub`?**
-Options: (a) one shared bucket for all anonymous traffic — effectively a global rate limit, no new
-trust assumptions; (b) key on IP, which requires deciding whether to trust `X-Forwarded-For`;
-(c) no per-user limit in anonymous mode, relying on the sandbox cap alone.
-*Recommendation:* (a). Anonymous is local-dev-only, and it avoids trusting a spoofable header —
-consistent with history's posture that anonymous is degraded, never privileged.
-
-**OQ3 — Does the quota count requests, or token spend?**
-Requests are cheap to count and refuse *before* spending. Tokens are the real budget but are only
-known *after* the call returns, which makes them a lagging control.
-*Recommendation:* requests for v1 — two windows, a short burst allowance plus a longer sustained
-one. Note this consciously accepts that a few expensive prompts cost more than many cheap ones.
+**These still block planning.**
 
 **OQ4 — Is any frontend work in scope?**
-The SPA already displays the server's `detail`, so 429 is *surfaced* today. Anything beyond that —
-a countdown, a disabled submit button, automatic retry — is new UI work.
+The SPA already displays the server's `detail` for any non-2xx, so 429 and 503 are *surfaced*
+today. Anything beyond that — a countdown from `Retry-After`, a disabled submit button, automatic
+retry — is new UI work.
 *Recommendation:* out of scope. If it's in, it is its own child issue.
 
-**OQ5 — When the sandbox cap is reached: refuse immediately, or wait briefly?**
-Immediate refusal is simpler and honest. A short bounded wait smooths bursts at the cost of
-queueing latency and a second tuning knob. Either way the HTTP semantics differ from OQ's 429:
-"the server is full" is **503**, not "you sent too many".
-*Recommendation:* bounded short wait, then 503 — but this is a genuine trade-off, not an obvious
-call.
+**OQ5 — At the sandbox cap: refuse immediately, or wait briefly first?**
+The status code is settled (D4: 503). What remains is whether a request waits in a bounded queue
+before being refused. Immediate refusal is simpler and adds no knob; a short wait smooths ordinary
+overlap so brief contention isn't user-visible, at the cost of queueing latency and a second
+tunable.
+*Recommendation:* bounded short wait — but this is a genuine trade-off, not an obvious call.
 
 **OQ6 — What are the actual numbers?**
 Defaults for the burst window, the sustained window, and max concurrent sandboxes. At 256 MB and
 0.5 CPU each, a 4-core/8 GB dev box tolerates roughly 4–8 concurrent containers.
-*Recommendation:* pick conservative defaults now and treat them as tunable; they are config, not
-architecture.
+*Recommendation:* conservative defaults, treated as tunable — config, not architecture.
+
+**OQ7 — What happens when Redis is unreachable?** *(new, created by D1)*
+Unavoidable once the limiter depends on a network service. Three sub-questions:
+(a) **Fail-open** (serve the request unlimited — availability preserved, protection silently gone)
+or **fail-closed** (refuse — protection preserved, one Redis outage takes the whole service down)?
+(b) Is there an in-process fallback during an outage — partial protection, or added complexity for
+a rare path?
+(c) What does local dev do with no `REDIS_URL` set? History's precedent is *feature off when
+unconfigured* (`historyEnabled: authRequired && databaseUrl !== ""`), but that reasoning does not
+transfer cleanly: history is a feature, and this is a **security control**. Silently disabling it
+because an env var is missing is exactly the failure mode S7 exists to prevent.
+*No recommendation yet — (a) is a real availability-vs-protection trade-off and is the human's
+call.*
 
 ## Not yet decided
 
-Nothing in this document commits to an implementation. The mechanism, the seams, and the wiring
-are the plan's job (`docs/plans/2026-08-08-per-user-rate-limiting.md`, not yet written), and any
-decision expensive to reverse — OQ1 above — gets an ADR.
+Nothing here commits to a mechanism. The seams, the wiring, and the algorithm are the plan's job
+(`docs/plans/2026-08-08-per-user-rate-limiting.md`, not yet written); D1 and D4 get an ADR.
