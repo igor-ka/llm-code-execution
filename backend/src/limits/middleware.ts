@@ -3,9 +3,13 @@
  * identity is the verified sub, never a header) and BEFORE llm.generate, which is what makes
  * a refusal cost zero Anthropic spend (S3).
  *
- * Note it also runs before the body is validated, so a malformed request still consumes
- * quota. That is deliberate: otherwise an attacker gets unlimited free 422s to probe with.
- * Do not "fix" it by moving validation earlier.
+ * Note it also runs before the route's Zod validation, so a well-formed-JSON-but-invalid body
+ * still consumes quota. That is deliberate — do not "fix" it by moving validation earlier.
+ *
+ * It does NOT cover malformed JSON: express.json() is mounted app-wide ahead of this, so a
+ * syntactically broken body 422s before requirePrincipal or this middleware ever run. Those
+ * requests are unmetered. They cost nothing downstream (no identity, no LLM, no sandbox), so
+ * that is acceptable — but the invariant is narrower than "every rejected request is charged".
  */
 import type { RequestHandler } from "express";
 import type { Principal } from "../auth.js";

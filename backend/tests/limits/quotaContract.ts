@@ -58,6 +58,17 @@ export function quotaContract(name: string, makeStore: () => Promise<QuotaStore>
       expect(await store.usage(key)).toEqual({ burst: 3, sustained: 3 });
     });
 
+    it("keeps state bounded as identities accumulate (S6)", async () => {
+      // An attacker minting fresh subs must not grow the store without bound. Redis enforces
+      // this with TTLs; the in-memory oracle must hold the same property or the two stores are
+      // not equivalent where it matters most.
+      const short = { ...TEST_LIMITS, burstWindowSeconds: 1, sustainedWindowSeconds: 1 };
+      for (let i = 0; i < 1200; i++) await store.consume(`${key}:churn:${i}`, short);
+      await new Promise((r) => setTimeout(r, 1100)); // let every window expire
+      await store.consume(`${key}:churn:final`, short);
+      expect(await store.usage(`${key}:churn:0`)).toEqual({ burst: 0, sustained: 0 });
+    });
+
     it("refuses on the sustained window even when the burst window is clear", async () => {
       const wide: QuotaLimits = { ...TEST_LIMITS, burst: 100, burstWindowSeconds: 60 };
       for (let i = 0; i < wide.sustained; i++) {

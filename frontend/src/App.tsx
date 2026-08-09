@@ -22,12 +22,16 @@ import { RunResult } from "./components/RunResult";
  * Returns null for anything else so ordinary errors keep their existing message.
  */
 function throttleMessage(e: unknown): string | null {
-  if (!(e instanceof ApiError) || (e.status !== 429 && e.status !== 503)) return null;
+  if (!(e instanceof ApiError)) return null;
   const wait = e.retryAfterSeconds;
   const when = wait !== undefined ? ` Try again in ${wait}s.` : "";
-  return e.status === 429
-    ? `You're sending requests too quickly.${when}`
-    : `The service is at capacity.${when}`;
+  // 429 only ever comes from the quota, so it is unambiguous. 503 is NOT: the backend also
+  // returns 503 for "ANTHROPIC_API_KEY is not configured", and rewriting that as "at
+  // capacity" would bury a real diagnostic behind a wrong explanation. Saturation always
+  // carries Retry-After; the misconfiguration 503 does not — so the hint is the discriminator.
+  if (e.status === 429) return `You're sending requests too quickly.${when}`;
+  if (e.status === 503 && wait !== undefined) return `The service is at capacity.${when}`;
+  return null;
 }
 
 export default function App() {

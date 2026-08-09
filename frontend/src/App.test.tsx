@@ -208,6 +208,20 @@ describe("App", () => {
     expect(screen.queryByText(/too quickly/i)).not.toBeInTheDocument();
   });
 
+  it("does not rewrite a 503 that carries no retry hint (misconfiguration, not load)", async () => {
+    const user = userEvent.setup();
+    // The backend returns this 503 when ANTHROPIC_API_KEY is unset. Rewriting it as "at
+    // capacity" would bury a real diagnostic behind a wrong explanation.
+    mockedExecute.mockRejectedValue(new ApiError(503, "ANTHROPIC_API_KEY is not configured"));
+    render(<App />);
+
+    await user.type(screen.getByRole("textbox"), "misconfigured");
+    await user.click(runButton());
+
+    expect(await screen.findByText(/ANTHROPIC_API_KEY is not configured/)).toBeInTheDocument();
+    expect(screen.queryByText(/at capacity/i)).not.toBeInTheDocument();
+  });
+
   it("omits the retry sentence when the server sent no hint", async () => {
     const user = userEvent.setup();
     mockedExecute.mockRejectedValue(new ApiError(429, "Rate limit exceeded."));

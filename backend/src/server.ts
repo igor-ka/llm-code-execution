@@ -74,6 +74,7 @@ export function createApp(deps: AppDeps = {}): Express {
       sandbox = new ConcurrencyLimitedBackend(
         new DockerBackend(settings.sandboxImage),
         new ConcurrencyLimiter(settings.sandboxMaxConcurrent),
+        settings.sandboxTimeoutSeconds,
       );
     }
     return sandbox;

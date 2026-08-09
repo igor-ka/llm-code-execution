@@ -15,13 +15,17 @@ import type { SandboxResult } from "../schemas.js";
 import type { ConcurrencyLimiter } from "../limits/concurrency.js";
 import { HttpError } from "../errors.js";
 
-/** Seconds hinted to a caller refused at the cap — a slot frees within one sandbox timeout. */
-const RETRY_AFTER_SECONDS = 5;
-
 export class ConcurrencyLimitedBackend implements SandboxBackend {
+  /**
+   * @param retryAfterSeconds hinted to a caller refused at the cap. Must be at least the
+   * sandbox timeout: a slot is only guaranteed to free once the longest-running execution is
+   * killed, so a shorter hint marches clients straight into a second 503 and amplifies load on
+   * an already-saturated service. Pass `settings.sandboxTimeoutSeconds`.
+   */
   constructor(
     private readonly inner: SandboxBackend,
     private readonly limiter: ConcurrencyLimiter,
+    private readonly retryAfterSeconds: number,
   ) {}
 
   async execute(code: string, language: string, limits: ExecutionLimits): Promise<SandboxResult> {
@@ -32,7 +36,7 @@ export class ConcurrencyLimitedBackend implements SandboxBackend {
       throw new HttpError(
         503,
         "The service is at capacity. Please retry in a few seconds.",
-        RETRY_AFTER_SECONDS,
+        this.retryAfterSeconds,
       );
     }
     try {

@@ -12,8 +12,23 @@ interface Window {
   resetAtMs: number;
 }
 
+/**
+ * Sweep expired entries once the map passes this size. Without it the map grows one entry per
+ * distinct identity forever, which would break the equivalence the shared contract suite
+ * claims: the Redis store proves bounded state via TTLs (S6), so the oracle must hold the same
+ * property rather than merely appear to.
+ */
+const SWEEP_THRESHOLD = 1000;
+
 export class MemoryQuotaStore implements QuotaStore {
   private readonly windows = new Map<string, Window>();
+
+  /** Drop windows that have already reset. O(n), amortised by the threshold check. */
+  private sweep(now: number): void {
+    for (const [k, w] of this.windows) {
+      if (now >= w.resetAtMs) this.windows.delete(k);
+    }
+  }
 
   /**
    * Read (and lazily roll) one window. Returns 0 when there is room, else the seconds left
@@ -32,6 +47,7 @@ export class MemoryQuotaStore implements QuotaStore {
   }
 
   async consume(key: string, limits: QuotaLimits): Promise<QuotaDecision> {
+    if (this.windows.size >= SWEEP_THRESHOLD) this.sweep(Date.now());
     // Check both windows before consuming either, so a refusal charges nothing and a
     // partial charge is impossible.
     const burstRetry = this.bump(`${key}:b`, limits.burstWindowSeconds, limits.burst, false);

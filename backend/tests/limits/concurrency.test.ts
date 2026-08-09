@@ -55,7 +55,7 @@ describe("ConcurrencyLimiter", () => {
         throw new Error("boom");
       },
     };
-    const wrapped = new ConcurrencyLimitedBackend(throwing, limiter);
+    const wrapped = new ConcurrencyLimitedBackend(throwing, limiter, 10);
     await expect(wrapped.execute("x", "python", {} as never)).rejects.toThrow("boom");
     expect(limiter.saturated).toBe(false); // a leak here would wedge the service permanently
   });
@@ -67,7 +67,7 @@ describe("ConcurrencyLimiter", () => {
         throw new Error("unreached");
       },
     };
-    const wrapped = new ConcurrencyLimitedBackend(throwing, limiter);
+    const wrapped = new ConcurrencyLimitedBackend(throwing, limiter, 10);
     limiter.tryAcquire(); // occupy the only slot
     await expect(wrapped.execute("x", "python", {} as never)).rejects.toMatchObject({
       status: 503,
@@ -93,7 +93,7 @@ describe("/api/execute under saturation", () => {
           message: null,
         }),
       } as never,
-      sandbox: new ConcurrencyLimitedBackend(backend, limiter),
+      sandbox: new ConcurrencyLimitedBackend(backend, limiter, 10),
       quota: new MemoryQuotaStore(),
       requirePrincipal: fakePrincipal("user-a"),
     });

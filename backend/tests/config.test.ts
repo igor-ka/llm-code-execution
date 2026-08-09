@@ -89,3 +89,17 @@ describe("rate-limit settings", () => {
     expect(() => loadSettings({})).not.toThrow();
   });
 });
+
+describe("rate-limit setting validation", () => {
+  // NaN would make every limit comparison false, silently disabling BOTH controls with no
+  // error and no log — the exact state D6 exists to prevent, reached by a typo.
+  it.each([
+    ["RATE_LIMIT_BURST", "1_000"],
+    ["RATE_LIMIT_BURST_WINDOW_SECONDS", "sixty"],
+    ["RATE_LIMIT_SUSTAINED", "-5"],
+    ["RATE_LIMIT_SUSTAINED_WINDOW_SECONDS", "0"],
+    ["SANDBOX_MAX_CONCURRENT", "1_0"],
+  ])("refuses a malformed %s rather than yielding NaN", (key, value) => {
+    expect(() => loadSettings({ [key]: value })).toThrow(new RegExp(key));
+  });
+});
