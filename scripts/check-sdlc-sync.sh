@@ -15,11 +15,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# Files whose change means the development process itself changed. This deliberately
-# includes *this script*: docs/sdlc.md documents its exact semantics (watched paths, the
-# failure message, the escape hatch), so changing it without updating the doc would let
-# the documentation silently desync from the enforcement it describes.
-WATCHED_RE='^(\.claude/skills/|\.github/workflows/|scripts/check-sdlc-sync\.sh$|backend/verify\.sh$|frontend/verify\.sh$)'
+# Files whose change means the development process itself changed. This deliberately includes
+# all of scripts/: docs/sdlc.md documents the exact semantics of the checks that live there
+# (watched paths, failure messages, escape hatches), so changing one without updating the doc
+# would let the documentation silently desync from the enforcement it describes.
+WATCHED_RE='^(\.claude/skills/|\.github/workflows/|scripts/|backend/verify\.sh$|frontend/verify\.sh$)'
 DOC='docs/sdlc.md'
 
 if [[ "${PR_TITLE:-}" == *"[skip-sdlc-sync]"* ]]; then
