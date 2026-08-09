@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { loadSettings } from "../src/config.js";
+import { loadSettings, assertRedisConfigured } from "../src/config.js";
 
 describe("loadSettings", () => {
   it("applies documented defaults on an empty environment", () => {
@@ -44,5 +44,48 @@ describe("loadSettings", () => {
     const s = loadSettings({ SANDBOX_MEMORY_MB: "512", SANDBOX_CPUS: "1.5" });
     expect(s.sandboxMemoryMb).toBe(512);
     expect(s.sandboxCpus).toBe(1.5);
+  });
+});
+
+describe("rate-limit settings", () => {
+  it("defaults are conservative and safe", () => {
+    const s = loadSettings({});
+    expect(s.redisUrl).toBe("");
+    expect(s.quotaBurst).toBe(10);
+    expect(s.quotaBurstWindowSeconds).toBe(60);
+    expect(s.quotaSustained).toBe(100);
+    expect(s.quotaSustainedWindowSeconds).toBe(3600);
+    expect(s.sandboxMaxConcurrent).toBe(4);
+  });
+
+  it("reads overrides from the environment", () => {
+    const s = loadSettings({
+      REDIS_URL: "redis://localhost:6379",
+      RATE_LIMIT_BURST: "3",
+      RATE_LIMIT_BURST_WINDOW_SECONDS: "5",
+      RATE_LIMIT_SUSTAINED: "30",
+      RATE_LIMIT_SUSTAINED_WINDOW_SECONDS: "600",
+      SANDBOX_MAX_CONCURRENT: "2",
+    });
+    expect(s.redisUrl).toBe("redis://localhost:6379");
+    expect(s.quotaBurst).toBe(3);
+    expect(s.quotaBurstWindowSeconds).toBe(5);
+    expect(s.quotaSustained).toBe(30);
+    expect(s.quotaSustainedWindowSeconds).toBe(600);
+    expect(s.sandboxMaxConcurrent).toBe(2);
+  });
+
+  it("assertRedisConfigured throws when REDIS_URL is empty (D6)", () => {
+    expect(() => assertRedisConfigured(loadSettings({}))).toThrow(/REDIS_URL/);
+  });
+
+  it("assertRedisConfigured passes when REDIS_URL is set", () => {
+    expect(() =>
+      assertRedisConfigured(loadSettings({ REDIS_URL: "redis://localhost:6379" })),
+    ).not.toThrow();
+  });
+
+  it("loadSettings itself never throws without REDIS_URL (S10)", () => {
+    expect(() => loadSettings({})).not.toThrow();
   });
 });
