@@ -3,6 +3,8 @@ export class HttpError extends Error {
   constructor(
     public readonly status: number,
     public readonly detail: string,
+    /** Seconds until the caller may retry — emitted as the Retry-After header. */
+    public readonly retryAfterSeconds?: number,
   ) {
     super(detail);
     this.name = "HttpError";

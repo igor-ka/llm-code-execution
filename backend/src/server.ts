@@ -18,12 +18,18 @@ import { PostgresHistoryStore } from "./history/pgStore.js";
 import { makePool } from "./history/pool.js";
 import type { NewRun } from "./history/types.js";
 import { historyRouter } from "./history/router.js";
+import type { QuotaStore } from "./limits/quota.js";
+import { RedisQuotaStore } from "./limits/redisQuota.js";
+import { makeQuotaMiddleware } from "./limits/middleware.js";
+import { ConcurrencyLimiter } from "./limits/concurrency.js";
+import { ConcurrencyLimitedBackend } from "./sandbox/concurrencyLimited.js";
 
 export interface AppDeps {
   settings?: Settings;
   llm?: LLMService;
   sandbox?: SandboxBackend;
   history?: HistoryStore; // per-user chat history store (H0 seam; H1 builds the real one)
+  quota?: QuotaStore; // per-user request quota (D1); tests inject MemoryQuotaStore
   requirePrincipal?: RequestHandler; // test seam
 }
 
@@ -40,7 +46,9 @@ function limitsFrom(s: Settings): ExecutionLimits {
 export function createApp(deps: AppDeps = {}): Express {
   const settings = deps.settings ?? getSettings();
   const app = express();
-  app.use(cors({ origin: settings.frontendOrigin }));
+  // Retry-After is not a CORS-safelisted response header, so without exposedHeaders the
+  // cross-origin SPA cannot read it at all — the throttling UI would have no retry hint.
+  app.use(cors({ origin: settings.frontendOrigin, exposedHeaders: ["Retry-After"] }));
   app.use(express.json());
 
   const requirePrincipal = deps.requirePrincipal ?? makeRequirePrincipal(settings);
@@ -59,9 +67,30 @@ export function createApp(deps: AppDeps = {}): Express {
   };
   let sandbox = deps.sandbox;
   const getSandbox = (): SandboxBackend => {
-    if (!sandbox) sandbox = new DockerBackend(settings.sandboxImage);
+    if (!sandbox) {
+      // The cap is applied by wrapping, not by editing DockerBackend — so the future
+      // CloudRunBackend inherits it unchanged. The limiter is owned by the decorator and
+      // consulted nowhere else (D9), so nothing else here needs a reference to it.
+      sandbox = new ConcurrencyLimitedBackend(
+        new DockerBackend(settings.sandboxImage),
+        new ConcurrencyLimiter(settings.sandboxMaxConcurrent),
+      );
+    }
     return sandbox;
   };
+  // Quota store seam. Tests inject deps.quota and win outright; production builds one
+  // RedisQuotaStore over a single connection. index.ts has already refused to boot if
+  // REDIS_URL is unset (D6), so an empty url here only happens in tests.
+  const quota: QuotaStore | undefined =
+    deps.quota ?? (settings.redisUrl ? new RedisQuotaStore(settings.redisUrl) : undefined);
+  const quotaMiddleware: RequestHandler = quota
+    ? makeQuotaMiddleware(quota, {
+        burst: settings.quotaBurst,
+        burstWindowSeconds: settings.quotaBurstWindowSeconds,
+        sustained: settings.quotaSustained,
+        sustainedWindowSeconds: settings.quotaSustainedWindowSeconds,
+      })
+    : (_req, _res, next) => next();
   // History store seam. Tests inject deps.history and win outright. In production, when
   // history is enabled (auth on + DATABASE_URL set), lazily construct a single cached
   // PostgresHistoryStore over one pool. H2 (persist) and H3 (router mount) only read
@@ -84,7 +113,7 @@ export function createApp(deps: AppDeps = {}): Express {
     res.json({ auth_required: settings.authRequired, history_enabled: getHistory() !== undefined });
   });
 
-  app.post("/api/execute", requirePrincipal, async (req, res, next) => {
+  app.post("/api/execute", requirePrincipal, quotaMiddleware, async (req, res, next) => {
     try {
       const parsed = ExecuteRequest.safeParse(req.body);
       if (!parsed.success) {
@@ -181,6 +210,9 @@ export function createApp(deps: AppDeps = {}): Express {
   app.use(
     (err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
       if (err instanceof HttpError) {
+        if (err.retryAfterSeconds !== undefined) {
+          res.setHeader("Retry-After", String(err.retryAfterSeconds));
+        }
         res.status(err.status).json({ detail: err.detail });
         return;
       }

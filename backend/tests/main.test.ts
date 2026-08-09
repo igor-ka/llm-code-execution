@@ -6,6 +6,7 @@ import type { LLMService } from "../src/llm.js";
 import type { SandboxBackend } from "../src/sandbox/base.js";
 import type { GenerationResult, SandboxResult } from "../src/schemas.js";
 import { MemoryHistoryStore } from "../src/history/memoryStore.js";
+import { HttpError } from "../src/errors.js";
 
 const openSettings = (over = {}) => loadSettings({ AUTH_REQUIRED: "false", ...over });
 
@@ -185,5 +186,33 @@ describe("POST /api/execute", () => {
     const resp = await request(app).post("/api/execute").send({ prompt: "hello" });
     expect(resp.status).toBe(401);
     expect(sandbox.calls).toBe(0);
+  });
+});
+
+describe("retry hints", () => {
+  it("serialises retryAfterSeconds as Retry-After and exposes it to the browser (D7)", async () => {
+    const app = createApp({
+      settings: openSettings({ ANTHROPIC_API_KEY: "test" }),
+      llm: fakeLlm(() => {
+        throw new HttpError(429, "Too many requests", 42);
+      }),
+    });
+    const resp = await request(app).post("/api/execute").send({ prompt: "hi" });
+    expect(resp.status).toBe(429);
+    expect(resp.body).toEqual({ detail: "Too many requests" });
+    expect(resp.headers["retry-after"]).toBe("42");
+  });
+
+  it("omits Retry-After when the error carries no hint", async () => {
+    const app = createApp({ settings: openSettings({ ANTHROPIC_API_KEY: "" }) });
+    const resp = await request(app).post("/api/execute").send({ prompt: "hi" });
+    expect(resp.status).toBe(503);
+    expect(resp.headers["retry-after"]).toBeUndefined();
+  });
+
+  it("exposes Retry-After through CORS so the cross-origin SPA can read it (D7)", async () => {
+    const app = createApp({ settings: openSettings() });
+    const resp = await request(app).get("/api/health").set("Origin", "http://localhost:5173");
+    expect(resp.headers["access-control-expose-headers"]).toContain("Retry-After");
   });
 });
