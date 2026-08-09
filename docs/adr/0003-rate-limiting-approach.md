@@ -5,6 +5,12 @@
 - **Tracking:** epic [#62](https://github.com/igor-ka/llm-code-execution/issues/62) (work items [#64](https://github.com/igor-ka/llm-code-execution/issues/64)–[#70](https://github.com/igor-ka/llm-code-execution/issues/70))
 - **Related:** spec [2026-08-08-per-user-rate-limiting](../specs/2026-08-08-per-user-rate-limiting.md); auth ADR [0001](0001-authentication-approach.md)
 
+> **Reading the `D<n>` / `S<n>` codes.** Source comments in `backend/src/limits/**` and
+> `backend/src/sandbox/concurrencyLimited.ts` cite decisions as **D1–D9** and success criteria as
+> **S1–S11**. The decisions are the sections below; the criteria live in
+> [the spec](../specs/2026-08-08-per-user-rate-limiting.md#success-criteria). D2 (anonymous
+> bucket), D3 (count requests, two windows) and D7 (SPA handling) are recorded in the spec only.
+
 ## Context
 
 `POST /api/execute` had no cap of any kind. One authenticated user — or one client stuck in a
@@ -24,7 +30,7 @@ one control cannot cover both. This is the **D** in STRIDE, not a performance fe
 
 Two controls, and — deliberately — two different places to keep their state.
 
-### 1. Per-user request quota in Redis
+### D1 — Per-user request quota in Redis
 
 Keyed on the verified `sub`, checked before `llm.generate`, two fixed windows (a short burst
 allowance plus a longer sustained one), enforced by a single Lua script per check.
@@ -49,7 +55,7 @@ requests it refused, so a client in a retry loop burns its own sustained allowan
 succeeding. Splitting read and write across round trips would race. `EXPIRE` fires only when a key
 is created, so a hammering client cannot extend its own window.
 
-### 2. Sandbox concurrency cap, in-process
+### D8 — Sandbox concurrency cap, in-process (and D9, enforced only at launch)
 
 A `SandboxBackend` decorator holding a counter, refusing at the cap rather than queueing.
 
@@ -71,7 +77,7 @@ cost nothing — but the prompt's nature is unknowable until the model answers, 
 pool happened to be full. Refusing work the service could comfortably have done is worse than the
 accepted cost, which is that each saturation refusal wastes exactly one Claude call.
 
-### 3. Fail open when Redis is unreachable
+### D5 — Fail open when Redis is unreachable
 
 `/api/execute` proceeds, and an error-level signal fires.
 
@@ -92,7 +98,7 @@ so without `disableOfflineQueue` commands sit in an offline queue indefinitely a
 needs a `reconnectStrategy` that eventually returns an `Error`, and a bounded timeout around the
 command, since `connectTimeout` covers only the initial connect.
 
-### 4. Two refusals, two status codes
+### D4 — Two refusals, two status codes
 
 Over-quota → **429** (RFC 6585 §4, *the user has sent too many requests*). Saturation → **503**
 (RFC 9110 §15.6.4, *temporary overload*). Both carry `Retry-After`.
@@ -102,7 +108,7 @@ being refused because of *other* users' load; 429 would misattribute that to the
 the deployment work: Cloud Run's load balancer counts container 503s as backend errors, which 429s
 are not.
 
-### 5. No `REDIS_URL`, no boot
+### D6 — No `REDIS_URL`, no boot
 
 The backend refuses to start rather than run with the budget control absent.
 

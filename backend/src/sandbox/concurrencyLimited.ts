@@ -7,7 +7,8 @@
  * failure (non-zero exit, stderr, timeout), which this is not — it is a refusal to start at
  * all.
  *
- * Enforcement happens here and nowhere else (D9). A cheaper check before llm.generate would
+ * Enforcement happens here and nowhere else (D9 — "the cap is enforced only at the sandbox
+ * launch, never before the LLM call"). A cheaper check before llm.generate would
  * save the API call, but it would also refuse no-code prompts that never touch Docker.
  */
 import type { SandboxBackend, ExecutionLimits } from "./base.js";

@@ -1,7 +1,8 @@
 /**
  * In-process cap on concurrent sandbox executions.
  *
- * In-process is the CORRECT semantics here, not a compromise (D8): each backend instance
+ * In-process is the CORRECT semantics here, not a compromise (D8 — "the cap refuses
+ * immediately, no queue, in-process state"): each backend instance
  * protects the host it runs on, so the count is naturally per-instance — unlike the per-user
  * quota, which is a global budget and therefore lives in Redis.
  *

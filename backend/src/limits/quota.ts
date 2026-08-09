@@ -3,7 +3,12 @@
  * in-memory implementation used by unit tests, and a real one used in production, with a
  * single shared contract suite proving they behave identically.
  *
- * Counting requests (not tokens) is deliberate — see D3 in the spec. Refusals are decided
+ * **Codes used across this package:** `D<n>` are decisions, recorded in
+ * `docs/adr/0003-rate-limiting-approach.md`; `S<n>` are success criteria, in
+ * `docs/specs/2026-08-08-per-user-rate-limiting.md`. They are cited rather than restated so the
+ * rationale has exactly one home.
+ *
+ * Counting requests (not tokens) is deliberate — D3, "count requests in two windows". Refusals are decided
  * BEFORE llm.generate so a refused request costs nothing (S3).
  */
 
