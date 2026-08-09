@@ -12,6 +12,9 @@ services:
       # Reach Postgres over the compose network by service name (overrides any localhost
       # DATABASE_URL from .env, which is only correct for host-run processes).
       DATABASE_URL: postgres://app:app@postgres:5432/app
+      # Same for Redis: reach it by compose service name. The backend refuses to start
+      # without this (D6) — the request quota is not optional.
+      REDIS_URL: redis://redis:6379
     ports:
       - "8000:8000"
     volumes:
@@ -23,6 +26,9 @@ services:
         condition: service_started
       # Wait until Postgres accepts connections so the boot migration doesn't race it.
       postgres:
+        condition: service_healthy
+      # Likewise Redis: the backend asserts REDIS_URL at boot and the first request needs it.
+      redis:
         condition: service_healthy
 
   # One-shot service that builds the sandbox EXECUTION image into the host daemon so the
@@ -51,6 +57,20 @@ services:
       - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Quota counters for the per-user rate limiter. Deliberately has NO volume: the counters are
+  # windowed and disposable, and losing them on restart costs at most one window of
+  # over-allowance. (The backend still refuses to boot without this service — D6.)
+  redis:
+    image: redis:7-alpine
+    # Exposed on the host so local integration tests can reach it at localhost:6379.
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 10
