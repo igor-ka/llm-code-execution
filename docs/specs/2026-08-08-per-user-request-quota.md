@@ -1,7 +1,7 @@
 # Spec: per-user request quota
 
-Epic: [#62](https://github.com/igor-ka/llm-code-execution/issues/62) · Status: **partially
-decided — OQ4/OQ6/OQ7 still block planning**
+Epic: [#62](https://github.com/igor-ka/llm-code-execution/issues/62) · Status: **all questions
+answered — ready to plan**
 
 Stack, commands, project layout, code style, and testing strategy are not restated here; they
 live in [`CLAUDE.md`](../../CLAUDE.md) and [`README.md`](../../README.md).
@@ -44,6 +44,7 @@ implementation because this sits on the authenticated request path.
 
 - `POST /api/execute` — the only endpoint that spends API budget.
 - A per-user request quota keyed on the **verified `sub`**, never a header or body field.
+- **SPA handling of the refusal** (D7): its own child issue, not folded into the backend slices.
 - Limits centralised in [`config.ts`](../../backend/src/config.ts), which already documents itself
   as the seam where per-tenant overrides will plug in.
 - Refusals returned through the existing `HttpError` → `{detail}` path, so error shapes stay
@@ -64,7 +65,7 @@ implementation because this sits on the authenticated request path.
 - **Per-tenant differentiated limits.** `tenantId` is carried but unused; the repo is single-tenant
   (#9).
 - **IP-based limiting, WAF, network-layer DDoS.** Out of the application's reach.
-- **SPA retry/backoff logic.** Contingent on OQ4.
+- **Automatic client-side retry.** The SPA surfaces the refusal (D7); it does not silently re-send.
 
 **Non-goal.** This is not a fair-share scheduler or a throughput optimiser. It is a safety limit:
 the correct behaviour at the limit is to *refuse work*, not to schedule it cleverly.
@@ -80,10 +81,15 @@ the correct behaviour at the limit is to *refuse work*, not to schedule it cleve
 | S5 | Limiter state stays bounded as distinct identities accumulate: every key carries a TTL, so Redis is not turned into a memory-exhaustion vector by a token-minting attacker. |
 | S6 | Limits are configurable with safe defaults, and behaviour when Redis is unreachable is explicit and tested — never accidental (OQ7). |
 | S7 | The quota holds across a backend restart. In-process counters would reset, making redeploy a bypass; D1 exists partly to close that. |
-| S8 | Both `verify.sh` scripts green, with the cross-user and Redis-failure behaviours covered by tests rather than asserted. |
+| S8 | The backend **refuses to start** without `REDIS_URL` (D6), with an error naming the missing variable. |
+| S9 | With Redis unreachable at request time, `/api/execute` returns **503** and makes no Anthropic call (D5). Proven by a test that severs the connection, not by inspection. |
+| S10 | The existing backend suites still run **without a live Redis**. A hard dependency at the composition root must not become a hard dependency of every unit test. |
+| S11 | Both `verify.sh` scripts green, with the cross-user, boot-refusal, and Redis-failure behaviours covered by tests rather than asserted. |
 
 S5 and S7 are easy to *claim* and hard to *prove* — they need tests that exercise real key churn
-and a real restart, not a unit test of the counter arithmetic.
+and a real restart, not a unit test of the counter arithmetic. S10 is the constraint most likely to
+be discovered late: `createApp` is the seam every backend test builds on, so the fail-fast check
+belongs at the composition root, not inside it.
 
 ## Decisions
 
@@ -115,12 +121,36 @@ which is what makes S3 achievable. Token spend is the truer budget but is only k
 returns — a lagging control that cannot stop the first expensive request. Consciously accepted: a
 few expensive prompts can cost more than many cheap ones.
 
-**D4 — Over-quota is 429.**
-RFC 6585 §4: *the user has sent too many requests in a given amount of time*. Carries
-`Retry-After`. With the sandbox cap out of scope there is no second refusal mode, so 503 does not
-arise in this work — if the concurrency cap is built later, *that* refusal is a 503 (RFC 9110
-§15.6.4, *temporary overload*), because it is caused by other users' load rather than the caller's
-own behaviour.
+**D4 — Two refusals, two status codes.**
+Over-quota → **429** (RFC 6585 §4, *the user has sent too many requests*), carrying `Retry-After`.
+Limiter unavailable → **503** (RFC 9110 §15.6.4, *temporary overload*), because the caller did
+nothing wrong. *Revised after D5:* an earlier draft of this decision said 503 could not arise once
+the sandbox cap left scope. Fail-closed reintroduced it — from a different cause.
+
+**D5 — Fail-closed when Redis is unreachable.**
+`/api/execute` returns 503 and makes no Anthropic call. Rejected: fail-open (protection vanishes
+exactly when the system is already degrading, and anyone able to pressure Redis gets unlimited
+access) and an in-process fallback (a second limiter to build and reason about, for a rare path).
+*Accepted cost, stated plainly:* Redis becomes a hard availability dependency of `/api/execute`, so
+a Redis outage is a service outage. A control meant to protect availability can now remove it —
+that is the deliberate trade, chosen because silent absence of protection is judged the worse
+failure. This raises the operational bar: Redis needs the monitoring a critical-path dependency
+gets, and this belongs in the ADR alongside D1.
+
+**D6 — No `REDIS_URL`, no boot.**
+The backend refuses to start rather than running unprotected. Rejected: the `historyEnabled`
+pattern (*off when unconfigured*), because a missing env var would silently disable a security
+control — what S6 exists to prevent. Accepted cost: Redis is now required to run the backend at
+all, so the README's setup steps, `.env.example`, and `docker-compose.yml` all change, and
+contributors lose part of the clone-and-run story. S10 keeps this out of the unit tests.
+
+**D7 — SPA handling is in scope, as its own child issue.**
+Not folded into a backend slice. **Constraint the plan must not miss:** `Retry-After` is not a
+CORS-safelisted response header, and the SPA is cross-origin
+([`server.ts:43`](../../backend/src/server.ts#L43) sets `cors({ origin: frontendOrigin })` with no
+`exposedHeaders`). As things stand the browser **cannot read the header at all** — so either CORS
+exposes it or the retry hint travels in the JSON body. Choosing between those is the plan's job;
+knowing the header is invisible today is not optional.
 
 ## Residual risk
 
@@ -130,42 +160,20 @@ Narrowing to the quota leaves two gaps, recorded rather than solved:
    *number of active users × their quota*, which has no fixed upper bound. A modest number of
    users acting simultaneously — entirely within their limits — can still saturate the host. Only
    the concurrency cap closes this.
-2. **The quota is now a single layer.** The sandbox cap would have been an independent second
-   control needing no Redis. Without it, whatever OQ7 decides for a Redis outage applies to *all*
-   protection, not to some of it. Fail-open now means fully unprotected.
+2. **The quota is a single layer, and now a fragile one.** The sandbox cap would have been an
+   independent second control needing no Redis. Without it, D5's fail-closed posture means a Redis
+   outage stops `/api/execute` entirely — there is nothing behind it to degrade to. Host
+   exhaustion, meanwhile, stays completely unguarded.
 
-Both belong to epic #62 and neither is fixed by this spec. They are the argument for building the
-concurrency cap next rather than never.
+Both belong to epic #62 and neither is fixed by this spec. Together they are the argument for
+building the concurrency cap next rather than never: it is the only control here that needs no
+external service, and it would give D5 something to fall back on.
 
 ## Open questions
 
-**These still block planning.**
-
-**OQ4 — Is any frontend work in scope?**
-The SPA already displays the server's `detail` for any non-2xx, so 429 is *surfaced* today.
-Anything beyond that — a countdown from `Retry-After`, a disabled submit button, automatic retry —
-is new UI work.
-*Recommendation:* out of scope. If it's in, it is its own child issue.
-
-**OQ6 — What are the actual numbers?**
-Defaults for the burst window and the sustained window.
-*Recommendation:* conservative defaults, treated as tunable — config, not architecture.
-
-**OQ7 — What happens when Redis is unreachable?**
-Unavoidable once the limiter depends on a network service, and sharpened by the narrowed scope:
-with no sandbox cap behind it, this decides whether protection is *degraded* or *absent*.
-(a) **Fail-open** (serve unlimited — availability preserved, protection silently gone, and an
-attacker who can degrade Redis gets unlimited access) or **fail-closed** (refuse — protection
-preserved, but one Redis outage takes the whole service down, which is self-defeating for a
-control that exists to protect availability)?
-(b) Is there an in-process fallback during an outage — partial protection, or added complexity on
-a rare path?
-(c) What does local dev do with no `REDIS_URL` set? History's precedent is *feature off when
-unconfigured* (`historyEnabled: authRequired && databaseUrl !== ""`), but that reasoning does not
-transfer: history is a feature, and this is a **security control**. Silently disabling it because
-an env var is missing is exactly what S6 exists to prevent.
-*No recommendation on (a) — it is a genuine availability-vs-protection trade-off and the human's
-call.*
+**None — all resolved (D1–D7).** One item deferred rather than asked, because it is config rather
+than architecture: the actual window lengths and request counts. Conservative defaults are chosen
+in the plan and tuned in operation.
 
 ## Not yet decided
 
