@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useAuth0 } from "@auth0/auth0-react";
-import { ApiError, execute, fetchAuthConfig, type ExecuteResponse } from "./api";
+import { errorMessage, execute, fetchAuthConfig, type ExecuteResponse } from "./api";
 import {
   clearHistory,
   deleteRun,
@@ -15,24 +15,6 @@ import {
 import { HistorySidebar } from "./components/HistorySidebar";
 import { SessionView } from "./components/SessionView";
 import { RunResult } from "./components/RunResult";
-
-/**
- * Turn a throttling refusal into something actionable. 429 is "you went too fast"; 503 is
- * "everyone did" — the distinction matters to the user, since only one of them is their doing.
- * Returns null for anything else so ordinary errors keep their existing message.
- */
-function throttleMessage(e: unknown): string | null {
-  if (!(e instanceof ApiError)) return null;
-  const wait = e.retryAfterSeconds;
-  const when = wait !== undefined ? ` Try again in ${wait}s.` : "";
-  // 429 only ever comes from the quota, so it is unambiguous. 503 is NOT: the backend also
-  // returns 503 for "ANTHROPIC_API_KEY is not configured", and rewriting that as "at
-  // capacity" would bury a real diagnostic behind a wrong explanation. Saturation always
-  // carries Retry-After; the misconfiguration 503 does not — so the hint is the discriminator.
-  if (e.status === 429) return `You're sending requests too quickly.${when}`;
-  if (e.status === 503 && wait !== undefined) return `The service is at capacity.${when}`;
-  return null;
-}
 
 export default function App() {
   const { isLoading, isAuthenticated, user, loginWithRedirect, logout, getAccessTokenSilently } =
@@ -138,7 +120,7 @@ export default function App() {
       const token = await getToken();
       setResponse(await execute(prompt, token));
     } catch (e) {
-      setError(throttleMessage(e) ?? (e instanceof Error ? e.message : String(e)));
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }

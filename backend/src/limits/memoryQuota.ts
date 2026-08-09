@@ -31,37 +31,44 @@ export class MemoryQuotaStore implements QuotaStore {
   }
 
   /**
-   * Read (and lazily roll) one window. Returns 0 when there is room, else the seconds left
-   * until it resets. `consume` is false for the check pass so a refusal charges nothing.
+   * Seconds until `key` has room, or 0 if it has room now. **Pure** — it must never create or
+   * roll a window. Redis only creates a key on an allowed INCR, so a check that materialised a
+   * zero-count window here would start the clock early on a request the other window refused,
+   * expiring early and granting capacity sooner than Redis does. The two stores would then
+   * disagree exactly where the contract suite claims they agree.
    */
-  private bump(key: string, windowSeconds: number, limit: number, consume: boolean): number {
-    const now = Date.now();
+  private peek(key: string, limit: number, now: number): number {
+    const w = this.windows.get(key);
+    if (!w || now >= w.resetAtMs) return 0; // absent or rolled over ⇒ empty ⇒ room
+    if (w.count < limit) return 0;
+    return Math.max(1, Math.ceil((w.resetAtMs - now) / 1000));
+  }
+
+  /** Charge one request, creating or rolling the window as needed. */
+  private charge(key: string, windowSeconds: number, now: number): void {
     let w = this.windows.get(key);
     if (!w || now >= w.resetAtMs) {
       w = { count: 0, resetAtMs: now + windowSeconds * 1000 };
       this.windows.set(key, w);
     }
-    if (w.count >= limit) return Math.max(1, Math.ceil((w.resetAtMs - now) / 1000));
-    if (consume) w.count += 1;
-    return 0;
+    w.count += 1;
   }
 
   async consume(key: string, limits: QuotaLimits): Promise<QuotaDecision> {
-    if (this.windows.size >= SWEEP_THRESHOLD) this.sweep(Date.now());
-    // Check both windows before consuming either, so a refusal charges nothing and a
-    // partial charge is impossible.
-    const burstRetry = this.bump(`${key}:b`, limits.burstWindowSeconds, limits.burst, false);
-    if (burstRetry > 0) return { allowed: false, retryAfterSeconds: burstRetry };
-    const sustainedRetry = this.bump(
-      `${key}:s`,
-      limits.sustainedWindowSeconds,
-      limits.sustained,
-      false,
-    );
-    if (sustainedRetry > 0) return { allowed: false, retryAfterSeconds: sustainedRetry };
+    const now = Date.now();
+    if (this.windows.size >= SWEEP_THRESHOLD) this.sweep(now);
 
-    this.bump(`${key}:b`, limits.burstWindowSeconds, limits.burst, true);
-    this.bump(`${key}:s`, limits.sustainedWindowSeconds, limits.sustained, true);
+    // Evaluate BOTH windows and refuse with the LONGEST wait: reporting the burst window's
+    // shorter TTL while the sustained window is also full would guarantee an obedient client a
+    // second 429. Checking before charging also means a refusal costs nothing.
+    const wait = Math.max(
+      this.peek(`${key}:b`, limits.burst, now),
+      this.peek(`${key}:s`, limits.sustained, now),
+    );
+    if (wait > 0) return { allowed: false, retryAfterSeconds: wait };
+
+    this.charge(`${key}:b`, limits.burstWindowSeconds, now);
+    this.charge(`${key}:s`, limits.sustainedWindowSeconds, now);
     return { allowed: true };
   }
 

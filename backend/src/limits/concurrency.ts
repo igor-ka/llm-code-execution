@@ -13,6 +13,7 @@ export class ConcurrencyLimiter {
 
   constructor(private readonly max: number) {}
 
+  /** Whether every slot is taken. The single definition of "full" — tryAcquire consults it. */
   get saturated(): boolean {
     return this.active >= this.max;
   }
@@ -23,7 +24,7 @@ export class ConcurrencyLimiter {
    * lifetime of the process.
    */
   tryAcquire(): (() => void) | null {
-    if (this.active >= this.max) return null;
+    if (this.saturated) return null;
     this.active += 1;
     let released = false;
     return () => {

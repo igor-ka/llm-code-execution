@@ -108,8 +108,18 @@ describe("/api/execute under saturation", () => {
         .send({ prompt: "go" })
         .then((r) => r),
     );
-    // Let the two winners occupy both slots and the three losers be refused.
-    await new Promise((r) => setTimeout(r, 50));
+    // Barrier, not a sleep. A fixed delay does not establish that all five requests reached the
+    // limiter: on a slow runner releaseAll() could free a winner before a late request arrives,
+    // that request would then acquire the freed slot, enter blockingBackend, and wait forever —
+    // the test hangs instead of failing. Waiting until three refusals have actually been
+    // observed proves the losers are done before anything is released.
+    const refusals: number[] = [];
+    inflight.forEach((p) => void p.then((r) => r.status === 503 && refusals.push(r.status)));
+    const deadline = Date.now() + 5000;
+    while (refusals.length < 3 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(refusals).toHaveLength(3); // fail loudly here rather than hanging below
     releaseAll();
     const responses = await Promise.all(inflight);
 

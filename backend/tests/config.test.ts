@@ -99,6 +99,10 @@ describe("rate-limit setting validation", () => {
     ["RATE_LIMIT_SUSTAINED", "-5"],
     ["RATE_LIMIT_SUSTAINED_WINDOW_SECONDS", "0"],
     ["SANDBOX_MAX_CONCURRENT", "1_0"],
+    // Fractional reaches Redis EXPIRE, which rejects non-integer seconds — the script
+    // then errors on every call and the middleware fails open, silently disabling the quota.
+    ["RATE_LIMIT_BURST_WINDOW_SECONDS", "1.5"],
+    ["SANDBOX_MAX_CONCURRENT", "2.5"],
   ])("refuses a malformed %s rather than yielding NaN", (key, value) => {
     expect(() => loadSettings({ [key]: value })).toThrow(new RegExp(key));
   });

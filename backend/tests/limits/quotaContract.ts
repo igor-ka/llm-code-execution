@@ -58,6 +58,38 @@ export function quotaContract(name: string, makeStore: () => Promise<QuotaStore>
       expect(await store.usage(key)).toEqual({ burst: 3, sustained: 3 });
     });
 
+    it("reports the LONGEST wait when both windows are exhausted", async () => {
+      // Burst refills in 1s, sustained in an hour. Advertising the burst TTL here would send an
+      // obedient client back in 1s to be refused again by the sustained window.
+      const limits = {
+        burst: 2,
+        burstWindowSeconds: 1,
+        sustained: 2,
+        sustainedWindowSeconds: 3600,
+      };
+      await store.consume(key, limits);
+      await store.consume(key, limits);
+      const decision = await store.consume(key, limits);
+      expect(decision.allowed).toBe(false);
+      if (!decision.allowed) {
+        expect(decision.retryAfterSeconds).toBeGreaterThan(limits.burstWindowSeconds);
+      }
+    });
+
+    it("a refused request does not start the other window's clock", async () => {
+      // Exhaust burst only; sustained is untouched and must stay untouched. If the refusal
+      // materialised a sustained window, that window would expire earlier than Redis's would.
+      const limits = {
+        burst: 1,
+        burstWindowSeconds: 60,
+        sustained: 10,
+        sustainedWindowSeconds: 60,
+      };
+      await store.consume(key, limits);
+      expect((await store.consume(key, limits)).allowed).toBe(false);
+      expect(await store.usage(key)).toEqual({ burst: 1, sustained: 1 });
+    });
+
     it("keeps state bounded as identities accumulate (S6)", async () => {
       // An attacker minting fresh subs must not grow the store without bound. Redis enforces
       // this with TTLs; the in-memory oracle must hold the same property or the two stores are

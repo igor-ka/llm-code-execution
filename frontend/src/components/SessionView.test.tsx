@@ -6,8 +6,13 @@ import { SessionView } from "./SessionView";
 import type { RunView } from "../history";
 
 // Isolate the component from the network.
-vi.mock("../api", () => ({ execute: vi.fn() }));
-import { execute } from "../api";
+// Keep the real module and stub only execute: ApiError must be a real class (SessionView's
+// error formatting does an instanceof check) and errorMessage must be the real implementation.
+vi.mock("../api", async (importActual) => ({
+  ...(await importActual<typeof import("../api")>()),
+  execute: vi.fn(),
+}));
+import { ApiError, execute } from "../api";
 const mockedExecute = vi.mocked(execute);
 
 // A stand-in parent that owns the runs list, mirroring how App wires SessionView: onRun
@@ -125,6 +130,31 @@ describe("SessionView", () => {
     await user.click(runButton());
 
     expect(await screen.findByText(/backend exploded/)).toBeInTheDocument();
+  });
+
+  it("explains a 429 with its retry hint in the history path too (D7)", async () => {
+    const user = userEvent.setup();
+    mockedExecute.mockRejectedValue(new ApiError(429, "Rate limit exceeded.", 42));
+    render(<Harness selectedId="s1" />);
+
+    await user.type(screen.getByRole("textbox"), "too fast");
+    await user.click(runButton());
+
+    // This is the PRIMARY authenticated UX. It previously showed the raw backend detail and
+    // dropped the retry hint entirely, because the formatter lived in App's fallback path only.
+    expect(await screen.findByText(/sending requests too quickly/i)).toBeInTheDocument();
+    expect(screen.getByText(/Try again in 42s/)).toBeInTheDocument();
+  });
+
+  it("does not rewrite a 503 that carries no retry hint", async () => {
+    const user = userEvent.setup();
+    mockedExecute.mockRejectedValue(new ApiError(503, "ANTHROPIC_API_KEY is not configured"));
+    render(<Harness selectedId="s1" />);
+
+    await user.type(screen.getByRole("textbox"), "misconfigured");
+    await user.click(runButton());
+
+    expect(await screen.findByText(/ANTHROPIC_API_KEY is not configured/)).toBeInTheDocument();
   });
 
   it("calls onDeleteRun when a run's delete button is clicked", async () => {

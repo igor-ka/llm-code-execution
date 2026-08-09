@@ -30,15 +30,23 @@ local function retry_for(key, window)
   return ttl
 end
 
+-- Evaluate BOTH windows and return the longest wait. Returning the burst TTL as soon as the
+-- burst window is full would advertise a retry time at which the sustained window is still
+-- exhausted, so an obedient client is guaranteed a second 429.
+local wait = 0
+
 local burst = tonumber(redis.call('GET', KEYS[1]) or '0')
 if burst >= tonumber(ARGV[1]) then
-  return retry_for(KEYS[1], tonumber(ARGV[2]))
+  wait = retry_for(KEYS[1], tonumber(ARGV[2]))
 end
 
 local sustained = tonumber(redis.call('GET', KEYS[2]) or '0')
 if sustained >= tonumber(ARGV[3]) then
-  return retry_for(KEYS[2], tonumber(ARGV[4]))
+  local s = retry_for(KEYS[2], tonumber(ARGV[4]))
+  if s > wait then wait = s end
 end
+
+if wait > 0 then return wait end
 
 -- Allowed: consume both windows. EXPIRE only on creation, so a hammering client cannot
 -- extend its own window; each key dies a fixed time after the window's first request.

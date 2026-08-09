@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { execute } from "../api";
+import { execute, errorMessage } from "../api";
 import type { RunView } from "../history";
 import { RunResult } from "./RunResult";
 
@@ -40,7 +40,7 @@ export function SessionView({ runs, selectedId, getToken, onRun, onDeleteRun }: 
       onRun(run);
       setPrompt("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }

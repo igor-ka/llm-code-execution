@@ -42,7 +42,7 @@ const str = (v: string | undefined, dflt: string): string => (v === undefined ? 
 const num = (v: string | undefined, dflt: number): number =>
   v === undefined || v === "" ? dflt : Number(v);
 /**
- * A positive integer, or the default. Unlike num(), this REFUSES malformed input instead of
+ * A positive INTEGER, or the default. Unlike num(), this REFUSES malformed input instead of
  * silently yielding NaN.
  *
  * That distinction is load-bearing for the rate limits: every comparison against NaN is false,
@@ -50,12 +50,17 @@ const num = (v: string | undefined, dflt: number): number =>
  * Number()) would make the quota allow everything and `SANDBOX_MAX_CONCURRENT=1_0` would make
  * the concurrency cap never saturate. Both controls would be off, with no error and no log —
  * exactly the "running with the control absent" state D6 exists to prevent.
+ *
+ * Integer, not merely positive, for the same reason one step further out: these are discrete
+ * counts and whole seconds. A fractional window reaches Redis EXPIRE, which rejects non-integer
+ * seconds — the script then errors on every call, the middleware takes its fail-open path, and
+ * the quota is silently disabled. Same destination as NaN, by a longer road.
  */
-const posNum = (name: string, v: string | undefined, dflt: number): number => {
+const posInt = (name: string, v: string | undefined, dflt: number): number => {
   if (v === undefined || v === "") return dflt;
   const n = Number(v);
-  if (!Number.isFinite(n) || n <= 0) {
-    throw new Error(`${name} must be a positive number, got ${JSON.stringify(v)}`);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`${name} must be a positive integer, got ${JSON.stringify(v)}`);
   }
   return n;
 };
@@ -90,19 +95,19 @@ export function loadSettings(env: Env = process.env): Settings {
     // roughly what a 4-core/8 GB dev box tolerates). All tunable — they are config, not
     // architecture. See docs/specs/2026-08-08-per-user-rate-limiting.md.
     redisUrl: str(env.REDIS_URL, ""),
-    quotaBurst: posNum("RATE_LIMIT_BURST", env.RATE_LIMIT_BURST, 10),
-    quotaBurstWindowSeconds: posNum(
+    quotaBurst: posInt("RATE_LIMIT_BURST", env.RATE_LIMIT_BURST, 10),
+    quotaBurstWindowSeconds: posInt(
       "RATE_LIMIT_BURST_WINDOW_SECONDS",
       env.RATE_LIMIT_BURST_WINDOW_SECONDS,
       60,
     ),
-    quotaSustained: posNum("RATE_LIMIT_SUSTAINED", env.RATE_LIMIT_SUSTAINED, 100),
-    quotaSustainedWindowSeconds: posNum(
+    quotaSustained: posInt("RATE_LIMIT_SUSTAINED", env.RATE_LIMIT_SUSTAINED, 100),
+    quotaSustainedWindowSeconds: posInt(
       "RATE_LIMIT_SUSTAINED_WINDOW_SECONDS",
       env.RATE_LIMIT_SUSTAINED_WINDOW_SECONDS,
       3600,
     ),
-    sandboxMaxConcurrent: posNum("SANDBOX_MAX_CONCURRENT", env.SANDBOX_MAX_CONCURRENT, 4),
+    sandboxMaxConcurrent: posInt("SANDBOX_MAX_CONCURRENT", env.SANDBOX_MAX_CONCURRENT, 4),
   };
 }
 
