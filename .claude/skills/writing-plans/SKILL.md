@@ -73,8 +73,19 @@ changes that make sense independently.
 
 **Tech Stack:** [Key technologies/libraries]
 
+**PR boundaries:** [The pull requests this plan produces — one line each, naming the child
+issue each one closes. "PR 1: quota seam + in-memory store — closes #64". One child per PR.
+Where two children genuinely cannot be separated, say so here and say why.]
+
 ---
 ```
+
+**Why `PR boundaries` is in the header and not left to the implementer.** The decomposition
+decision is cheapest at planning time and most expensive once a branch is finished — at that
+point the only remaining moves are splitting completed work or reaching for an escape hatch.
+Naming the PRs here puts the decision in front of a human at the plan review, before any code
+exists. The `PR shape` CI check enforces the same rule at merge time, but it is a backstop; this
+is the control.
 
 ## Task Structure
 

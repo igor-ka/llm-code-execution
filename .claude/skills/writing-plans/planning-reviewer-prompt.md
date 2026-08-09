@@ -26,6 +26,7 @@ Task tool (general-purpose):
     | Completeness | TODOs, placeholders, "TBD", incomplete tasks, missing steps |
     | Spec Alignment | Plan covers the requirements, no major scope creep |
     | Task Decomposition | Tasks have clear boundaries, steps are actionable |
+    | PR boundaries | Does the header name the PRs this plan produces, one child issue each? Does that split match the task graph and its dependency order? Where two children are merged into one PR, is the reason stated and does it hold? |
     | Buildability | Could an engineer follow this plan without getting stuck? |
     | Blast radius | What is the worst case of this change, and how many systems/people does it touch? |
     | Reversibility | If this is wrong, how cheaply can it be undone? Prefer reversible steps. |
