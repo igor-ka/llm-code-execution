@@ -198,9 +198,12 @@ Individual targets exist for the inner loop: `install`, `lint`, `format`, `test`
 `SKIP_DOCKER=1` speed up iteration — but the pre-push run should be unskipped, because CI does
 not skip.
 
-> **The trap worth internalising:** the Postgres history suites **self-skip when `DATABASE_URL`
-> is unset**. A green `./verify.sh` is *not* evidence they ran. Touching `src/history/**` or
-> `migrations/**` means running `DATABASE_URL=… ./verify.sh test:integration` explicitly.
+> **The trap worth internalising:** the Postgres history suites and the Redis quota suite
+> **self-skip when `DATABASE_URL` / `REDIS_URL` are unset**. A green `./verify.sh` is *not*
+> evidence they ran. Touching `src/history/**`, `migrations/**`, or `src/limits/**` means
+> running `DATABASE_URL=… REDIS_URL=… ./verify.sh test:integration` explicitly. The gate now
+> runs when *either* variable is set and prints which half is self-skipping — a partial run is
+> better than none, but it is not full coverage.
 
 ### 5. Review — *two mandatory passes, then reasoned reception*
 
@@ -269,8 +272,9 @@ Details that are easy to get wrong:
 - **CI splits `verify.sh` into named steps** (Install / Lint / Format / Test / Build / …) purely
   so each gets its own pass/fail and timing in the log. That is presentation, not a second
   definition of the checks.
-- **Postgres runs as a service container**, and only the `Integration test` step sets
-  `DATABASE_URL` — which is exactly why the DB-free `Test` step still skips those suites.
+- **Postgres and Redis run as service containers**, and only the `Integration test` step sets
+  `DATABASE_URL` / `REDIS_URL` — which is exactly why the service-free `Test` step still skips
+  those suites.
 - **Docker builds run on pull requests only**, to keep pushes to `main` fast.
 
 **There is no CD yet.** Deployment is roadmap (GCP Cloud Run); the release and observability

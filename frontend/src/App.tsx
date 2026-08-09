@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useAuth0 } from "@auth0/auth0-react";
-import { execute, fetchAuthConfig, type ExecuteResponse } from "./api";
+import { errorMessage, execute, fetchAuthConfig, type ExecuteResponse } from "./api";
 import {
   clearHistory,
   deleteRun,
@@ -120,7 +120,7 @@ export default function App() {
       const token = await getToken();
       setResponse(await execute(prompt, token));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }

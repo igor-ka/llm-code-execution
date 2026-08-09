@@ -11,7 +11,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "tsc -p tsconfig.test.json && vitest run",
-    "test:integration": "tsc -p tsconfig.test.json && vitest run --no-file-parallelism tests/history/pgStore.test.ts tests/history/migrate.test.ts tests/history/isolation.test.ts"
+    "test:integration": "tsc -p tsconfig.test.json && vitest run --no-file-parallelism tests/history/pgStore.test.ts tests/history/migrate.test.ts tests/history/isolation.test.ts tests/limits/redisQuota.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
@@ -21,6 +21,7 @@
     "express": "^5.0.1",
     "jose": "^5.9.6",
     "pg": "^8.22.0",
+    "redis": "^5.12.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {

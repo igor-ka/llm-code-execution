@@ -41,6 +41,58 @@ export async function fetchAuthConfig(): Promise<AuthConfig> {
   };
 }
 
+/**
+ * A non-2xx response, preserving what the UI needs to react rather than flattening it to a
+ * string. `retryAfterSeconds` comes from the Retry-After header, which the backend exposes via
+ * Access-Control-Expose-Headers — without that the browser could not read it cross-origin.
+ */
+export class ApiError extends Error {
+  // `override` is required: `name` is declared on Error and the app tsconfig sets
+  // noImplicitOverride.
+  override readonly name = "ApiError";
+  constructor(
+    readonly status: number,
+    detail: string,
+    readonly retryAfterSeconds?: number,
+  ) {
+    super(detail);
+  }
+}
+
+/**
+ * Turn a throttling refusal into something actionable. 429 is "you went too fast"; 503 is
+ * "everyone did" — the distinction matters to the user, since only one of them is their doing.
+ * Returns null for anything else so ordinary errors keep their own message.
+ *
+ * Lives here, not in a component, because BOTH submit paths need it: App's no-history fallback
+ * and SessionView's history-enabled path. It previously sat in App and the history UX — the
+ * normal authenticated one — silently missed it.
+ */
+export function throttleMessage(e: unknown): string | null {
+  if (!(e instanceof ApiError)) return null;
+  const wait = e.retryAfterSeconds;
+  const when = wait !== undefined ? ` Try again in ${wait}s.` : "";
+  // 429 only ever comes from the quota, so it is unambiguous. 503 is NOT: the backend also
+  // returns 503 for "ANTHROPIC_API_KEY is not configured", and rewriting that as "at capacity"
+  // would bury a real diagnostic. Saturation always carries Retry-After; that 503 does not.
+  if (e.status === 429) return `You're sending requests too quickly.${when}`;
+  if (e.status === 503 && wait !== undefined) return `The service is at capacity.${when}`;
+  return null;
+}
+
+/** Format any thrown value for display, applying the throttling wording when it applies. */
+export function errorMessage(e: unknown): string {
+  return throttleMessage(e) ?? (e instanceof Error ? e.message : String(e));
+}
+
+/** Parse Retry-After as delta-seconds; undefined when absent or not a number. */
+function retryAfterFrom(resp: Response): number | undefined {
+  const raw = resp.headers?.get("Retry-After");
+  if (raw === null || raw === undefined) return undefined;
+  const seconds = Number(raw);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
+}
+
 export async function execute(
   prompt: string,
   accessToken?: string,
@@ -66,7 +118,7 @@ export async function execute(
     } catch {
       /* keep default detail */
     }
-    throw new Error(detail);
+    throw new ApiError(resp.status, detail, retryAfterFrom(resp));
   }
 
   return (await resp.json()) as ExecuteResponse;

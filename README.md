@@ -42,11 +42,11 @@ backend/
   migrations/                ordered SQL, applied on boot (001_history.sql)
   sandbox-image/Dockerfile   the minimal, non-root EXECUTION image (Python — unchanged)
   tests/                     Vitest suites; history/ = contract + router + persist + isolation battery
-  verify.sh                  checks (eslint + prettier + vitest + tsc + docker); +test:integration (Postgres)
+  verify.sh                  checks (eslint + prettier + vitest + tsc + docker); +test:integration (Postgres, Redis)
 frontend/                    React + Vite UI
   src/                       App.tsx, api.ts, history.ts, components/ (HistorySidebar, SessionView, RunResult)
   verify.sh                  one-command checks (lint + format + vitest + build + docker)
-docker-compose.yml           backend + frontend + postgres + one-shot sandbox-image build
+docker-compose.yml           backend + frontend + postgres + redis + one-shot sandbox-image build
 ```
 
 ## Prerequisites
@@ -79,13 +79,21 @@ UI is hidden. Under Docker Compose the backend reaches the bundled `postgres` se
 `postgres://app:app@postgres:5432/app` (wired in `docker-compose.yml`); the backend applies the
 `migrations/` on boot. For a host-run backend, point `DATABASE_URL` at your own Postgres.
 
+**`REDIS_URL` is required** — unlike `DATABASE_URL`, leaving it empty does *not* degrade
+gracefully: the backend **refuses to start**. The per-user request quota is a security control,
+not an optional feature, so a missing variable must not silently disable it. Compose supplies
+`redis://redis:6379`; a host-run backend needs its own Redis (`docker run -p 6379:6379
+redis:7-alpine` is enough). The `RATE_LIMIT_*` and `SANDBOX_MAX_CONCURRENT` values in
+`.env.example` tune the limits — see *Rate limiting* under Security posture.
+
 ## Run (Docker Compose — recommended)
 
 ```bash
 docker compose up --build
 ```
 
-This builds the sandbox execution image, starts **postgres** (history datastore), the backend on
+This builds the sandbox execution image, starts **postgres** (history datastore) and **redis**
+(quota counters), the backend on
 **http://localhost:8000** and the frontend on **http://localhost:5173**. Open the frontend
 and try a prompt. Because auth is on by default, you'll need the Auth0 setup below (or set
 `AUTH_REQUIRED=false` in `.env` for an open local instance — note that history is disabled in
@@ -191,6 +199,15 @@ Content-Security-Policy (`script-src
 Auth0 tenant) to limit XSS, since the access token lives in JS memory; the dev server relaxes
 it just enough for HMR.
 
+**Rate limiting.** Every `/api/execute` is charged against a per-user quota keyed on the verified
+`sub` — Redis-backed, so the limit holds across instances and survives a restart — and the check
+runs *before* any Anthropic call, so a refusal costs nothing. Over-quota returns **429** with
+`Retry-After`. Concurrent sandbox executions are capped per instance; excess is refused with
+**503** rather than queued, because a caller at the cap is inside its own allowance and is being
+refused by other users' load. If Redis is unreachable the quota **fails open** and alarms — safe
+only because the concurrency cap still bounds the host. The backend refuses to start without
+`REDIS_URL` rather than run unprotected. See [ADR-0003](docs/adr/0003-rate-limiting-approach.md).
+
 **Known limitations — close these before any real/multi-tenant deployment:**
 
 - **Authentication is on by default but single-tenant.** `/api/execute` has an OIDC
@@ -198,10 +215,12 @@ it just enough for HMR.
   issuer, audience, expiry, and an `execute:code` scope), and `user_id`/`tenant_id` are
   derived from the verified token claims rather than the request body. The SPA login is wired
   and verified end-to-end; the gate is enforced by default (`AUTH_REQUIRED=true`, set `false`
-  only for IdP-less local dev). What's still missing for a real deployment is multi-tenancy
-  and per-user quotas. See the `OIDC_*` settings below and the auth epic (#9).
-- **No rate limiting / concurrency cap.** A burst of requests can exhaust host resources
-  (one container each) and API budget. Add per-user quotas + a sandbox concurrency limit.
+  only for IdP-less local dev). What's still missing for a real deployment is multi-tenancy.
+  See the `OIDC_*` settings below and the auth epic (#9).
+- **Rate-limit state is only as good as Redis.** The quota fails open during a Redis outage, so
+  Anthropic spend is unbounded for its duration; the sandbox cap still holds. The cap is
+  per-instance, which is correct while one backend owns its Docker daemon and wrong if several
+  ever share one. See ADR-0003's *Consequences*.
 - **Docker socket is mounted into the backend** (`docker-compose.yml`), which is
   root-equivalent control of the host. Acceptable for local dev; in production use a
   restricted socket proxy, or the planned `CloudRunBackend` (which removes the socket entirely).
@@ -248,11 +267,13 @@ The behavioral checks below have been run and pass (✅). Re-run them anytime.
 ## Roadmap (intentionally out of scope here)
 
 - Auth: backend OIDC token gate and the Auth0 SPA login are both in and verified end-to-end
-  (on by default via `AUTH_REQUIRED`); remaining work is multi-tenancy and per-user quotas /
-  rate limiting keyed on the verified `sub` (limits centralized in `config.ts`).
+  (on by default via `AUTH_REQUIRED`); remaining work is multi-tenancy.
+- **Rate limiting: shipped** — per-user quota keyed on the verified `sub` plus a sandbox
+  concurrency cap (see *Rate limiting* above and ADR-0003). Follow-ups: token-spend accounting
+  rather than request counting, and per-tenant limits once multi-tenancy exists.
 - **Chat history: shipped** — per-user, isolated, Postgres-backed (see *Per-user chat history*).
-  Follow-ups: a retention window / per-user row cap, richer full-text search (`pg_trgm` or a
-  `tsvector` column), and the per-user quotas above (keyed on the same verified `sub`).
+  Follow-ups: a retention window / per-user row cap, and richer full-text search (`pg_trgm` or a
+  `tsvector` column).
 - GCP deploy: a `CloudRunBackend` implementing `SandboxBackend`, or GKE + gVisor.
 - Vertex AI for Claude (swap the client in `llm.ts`), more languages, artifact/chart return.
 ```

@@ -76,7 +76,11 @@ export function makeRequirePrincipal(settings: Settings, keyOverride?: KeyInput)
         issuer: settings.oidcIssuer,
         audience: settings.oidcAudience,
         algorithms: ["RS256"],
-        requiredClaims: ["exp", "iss", "aud"],
+        // `sub` is required, not optional: OIDC mandates it, and every downstream control is
+        // keyed on it. Without it a verified token yields userId null, which would drop the
+        // caller into the shared anonymous quota bucket — letting one such caller exhaust the
+        // allowance of every other, and defeating per-user isolation.
+        requiredClaims: ["exp", "iss", "aud", "sub"],
       });
       if (!hasRequiredScope(payload)) {
         next(new HttpError(403, `Token is missing the required scope '${REQUIRED_SCOPE}'`));

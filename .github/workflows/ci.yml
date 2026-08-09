@@ -39,6 +39,18 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      # Quota counters for the Redis-backed rate limiter, same DATABASE_URL-style gating:
+      # only the "Integration test" step sets REDIS_URL, so the "Test" step still skips
+      # the Redis suite.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -59,10 +71,12 @@ jobs:
         run: ./verify.sh test
       - name: Build
         run: ./verify.sh build
-      # Runs the HistoryStore contract + migration suites against the service Postgres above.
+      # Runs the HistoryStore contract + migration suites against the service Postgres above,
+      # and the QuotaStore contract suite against the service Redis.
       - name: Integration test
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          REDIS_URL: redis://localhost:6379
         run: ./verify.sh test:integration
       # Build the images on PRs only — keeps pushes to main fast.
       - name: Docker build
