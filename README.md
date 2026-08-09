@@ -246,11 +246,13 @@ drift (CI invokes the same scripts).
 Both accept `SKIP_INSTALL=1` (reuse the current environment) and `SKIP_DOCKER=1`
 (host checks only, skip the image build).
 
-CI runs one additional check that has no local equivalent: the **`SDLC docs`** job compares a
-pull request against its base ref and fails if the change touches the development process
-(`.claude/skills/**`, either `verify.sh`, or `.github/workflows/ci.yml`) without updating
-[`docs/sdlc.md`](docs/sdlc.md). That document describes how a change gets from an idea to
-`main` — phases, gates, and how they meet CI.
+CI runs two additional checks that have no local equivalent, because both read pull-request
+metadata rather than a working tree. The **`SDLC docs`** job compares a pull request against
+its base ref and fails if the change touches the development process (`.claude/skills/**`,
+either `verify.sh`, `scripts/**`, or `.github/workflows/**`) without updating
+[`docs/sdlc.md`](docs/sdlc.md). The **`PR shape`** job fails a pull request whose body would
+close more than one issue — `[multi-child]` in the title is the visible exception. That document
+describes how a change gets from an idea to `main` — phases, gates, and how they meet CI.
 
 The behavioral checks below have been run and pass (✅). Re-run them anytime.
 
