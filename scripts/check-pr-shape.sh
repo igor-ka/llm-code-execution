@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# docs/sdlc.md says a pull request is "one change, closing a child" (:66). That rule lived only
+# in the instruction layer until this script; see "One child per PR" in docs/sdlc.md.
+#
+# It counts the issues a PR body would close and fails when there is more than one. Like
+# scripts/check-sdlc-sync.sh it is a *metadata-level* check with no single-working-tree
+# equivalent — there is no PR body in a working tree — which is why it lives here rather than
+# in backend/verify.sh or frontend/verify.sh.
+#
+# Usage:  scripts/check-pr-shape.sh
+#   PR_BODY            pull request body (empty is a valid PR that closes nothing)
+#   PR_TITLE           pull request title; containing [multi-child] skips the check
+#   GITHUB_REPOSITORY  owner/repo, used to qualify bare "#N" references
+set -euo pipefail
+
+: "${PR_BODY:=}"
+: "${PR_TITLE:=}"
+: "${GITHUB_REPOSITORY:=igor-ka/llm-code-execution}"
+
+HATCH='[multi-child]'
+
+if [[ "$PR_TITLE" == *"$HATCH"* ]]; then
+  echo "==> ${HATCH} found in the PR title — this PR deliberately closes more than one issue."
+  exit 0
+fi
+
+# HTML comments are stripped first, across line boundaries. PR templates conventionally ship a
+# commented-out "Closes #" placeholder, and GitHub does not link references inside them.
+strip_comments() {
+  awk '
+    {
+      line = $0; out = ""
+      while (1) {
+        if (!incomment) {
+          i = index(line, "<!--")
+          if (i == 0) { out = out line; break }
+          out = out substr(line, 1, i - 1)
+          line = substr(line, i + 4)
+          incomment = 1
+        } else {
+          j = index(line, "-->")
+          if (j == 0) { break }
+          line = substr(line, j + 3)
+          incomment = 0
+        }
+      }
+      print out
+    }'
+}
+
+# Fenced blocks are stripped next. PR bodies in this repo routinely paste issue text, plan
+# excerpts and review quotes; a "Closes #12" inside a fence is a quotation, not a commitment.
+#
+# The opening fence's character and length are remembered, so a ```-block nested inside a
+# ````-block does not toggle the state back off and leak its contents. Without that, quoting a
+# plan excerpt — this repo's plans use ````markdown blocks — would *over*-count and fail a
+# legitimate PR. Under-counting is the safe direction; over-counting is the failure mode that
+# teaches people to reach for the hatch.
+#
+# Written with substr/index rather than an interval like `{3,}`: BWK awk on macOS does not
+# support interval expressions, and developers here run macOS while CI runs Ubuntu.
+strip_fences() {
+  awk '
+    {
+      s = $0
+      sub(/^[[:space:]]+/, "", s)
+      ch = substr(s, 1, 1)
+      n = 0
+      if (ch == "`" || ch == "~") {
+        while (substr(s, n + 1, 1) == ch) n++
+      }
+      if (n >= 3) {
+        if (!infence) { infence = 1; fch = ch; flen = n }
+        else if (ch == fch && n >= flen) { infence = 0 }
+        next
+      }
+      if (!infence) print
+    }'
+}
+
+# All nine GitHub closing keywords, in the reference forms GitHub accepts. Matching only
+# "Closes"/"Fixes" would let "Resolves #64" walk straight past the gate.
+find_closers() {
+  grep -oiE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b[[:space:]]*:?[[:space:]]*(https?://(www\.)?github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/issues/[0-9]+|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+|#[0-9]+)' || true
+}
+
+# Normalise every form to "owner/repo#N" so the same issue referenced twice — once bare, once by
+# URL — counts once. awk rather than sed: the branch-on-substitution needed to stop the
+# bare-"#N" rule from rewriting an already-qualified match is spelled differently in BSD and GNU
+# sed.
+normalise() {
+  awk -v repo="$GITHUB_REPOSITORY" '
+    {
+      if (match($0, /https?:\/\/(www\.)?github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/issues\/[0-9]+$/)) {
+        s = substr($0, RSTART, RLENGTH)
+        sub(/^https?:\/\/(www\.)?github\.com\//, "", s)
+        sub(/\/issues\//, "#", s)
+        print s
+      } else if (match($0, /[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+#[0-9]+$/)) {
+        print substr($0, RSTART, RLENGTH)
+      } else if (match($0, /#[0-9]+$/)) {
+        print repo substr($0, RSTART, RLENGTH)
+      }
+    }'
+}
+
+closed="$(printf '%s\n' "$PR_BODY" | strip_comments | strip_fences | find_closers | normalise | sort -u)"
+count="$(printf '%s' "$closed" | grep -c . || true)"
+
+if [[ "$count" -le 1 ]]; then
+  if [[ "$count" -eq 0 ]]; then
+    echo "✓ this PR closes no issue — nothing to check."
+  else
+    echo "✓ this PR closes exactly one issue: ${closed}"
+  fi
+  exit 0
+fi
+
+{
+  echo
+  echo "✗ this PR would close ${count} issues:"
+  echo
+  printf '%s\n' "$closed" | sed 's/^/      /'
+  echo
+  echo "  docs/sdlc.md: a PR is \"one change, closing a child\". Batching children into one"
+  echo "  PR is what this check exists to catch — reviewer attention is the constraint, and"
+  echo "  it does not scale with diff size."
+  echo
+  echo "  Split the branch so each PR closes one child. The boundaries should already be in"
+  echo "  the plan's \"PR boundaries\" header — start there."
+  echo
+  echo "  If you are quoting another PR's body, put the quotation in a fenced block — quoted"
+  echo "  closing references inside a fence or an HTML comment are not counted."
+  echo
+  echo "  For a genuine exception, put [multi-child] in the PR title. That stays visible in"
+  echo "  the PR list rather than silently bypassing."
+  echo
+} >&2
+exit 1
