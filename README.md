@@ -235,6 +235,25 @@ regression-tested (the cross-user INV battery + planted-hole mutants, against bo
 the [ad-hoc security-testing runbook](docs/runbooks/adhoc-auth-security-testing.md) shows how to
 drive Claude Code for on-demand discovery testing of the auth gate.
 
+## Production image
+
+`Dockerfile` at the repo root builds the single artifact intended for a hosted environment: the
+SPA and the API in one container, one origin, listening on `$PORT`, running non-root, with **no
+Docker socket**. The two per-side Dockerfiles remain the dev images `docker compose` uses.
+
+```bash
+docker build \
+  --build-arg VITE_AUTH0_DOMAIN=<tenant> \
+  --build-arg VITE_AUTH0_CLIENT_ID=<client-id> \
+  --build-arg VITE_AUTH0_AUDIENCE=<api-audience> \
+  -t llm-code-execution:prod .
+```
+
+All three build args are **required** — the build fails without them. `VITE_*` values are
+inlined at build time, so an image is bound to one environment; built without the Auth0 values
+the bundle is valid, the CSP is valid and strict, every check passes, and login is silently
+broken. `VITE_API_BASE` is deliberately empty: the API is same-origin here.
+
 ## Verification
 
 Each side has a single `verify.sh` that runs everything CI runs — so local and CI can't

@@ -1,0 +1,21 @@
+# Context root for the production image (see ./Dockerfile). Docker reads .dockerignore from the
+# CONTEXT root, so frontend/.dockerignore does not apply to a repo-root build — without this file
+# the host's node_modules is copied over each stage's freshly-installed tree and the build dies on
+# esbuild's platform check (host binaries are darwin-arm64; the image is linux).
+**/node_modules
+**/dist
+**/.vite
+**/*.tsbuildinfo
+
+.git
+.github
+.claude
+docs
+security
+scripts
+*.md
+
+# Never let a real environment file into an image layer.
+.env
+.env.*
+!.env.example

@@ -219,6 +219,15 @@ cd backend  && ./verify.sh     # eslint, prettier, tsc, vitest, build, docker im
 cd frontend && ./verify.sh     # eslint, prettier, vitest, tsc -b && vite build, docker image
 ```
 
+The backend `docker` target builds **three** images: the dev backend image, the sandbox image,
+and the repo-root `Dockerfile` — the production artifact that serves the SPA and the API from
+one origin with no Docker socket. It then asserts inside that image that the production CSP
+shipped, that the policy contains no plaintext origin (which is how an image built without the
+same-origin API base shows up), and that the runtime user is not root. **A consequence worth
+stating: `Backend checks` now builds the frontend too**, so a frontend-only regression fails the
+backend job and that job is slower. That is the price of building the deployable artifact on
+every PR.
+
 The frontend `build` target also asserts that `dist/csp.txt` exists and carries a production
 `script-src`. That gate is not decoration: the Content-Security-Policy used to be attached only
 by the Vite dev and preview servers, so a static deploy of `dist/` shipped with **no CSP at
