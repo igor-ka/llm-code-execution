@@ -205,35 +205,48 @@ jobs:
           set +e
           set -uo pipefail
 
+          # Two facts, space-separated, because both are needed and one `gh` call is enough:
+          # who-kind (none | bot | human) and the login, for the log.
+          #
+          # It keys on `is_bot`, NOT on the login string. The first version compared the login
+          # against "github-actions[bot]" and never matched: `gh` renders a Bot actor as
+          # `app/github-actions` (the underlying GraphQL `Bot.login` is bare `github-actions`).
+          # That mismatch silently turned every bot-armed PR into "a human armed this, leave it
+          # alone" — reinstating the exact sticky-arming bug this step exists to prevent. Only a
+          # live run could catch it, and it did: PR #117, `enabledBy: {is_bot: true, login:
+          # "app/github-actions"}`. `is_bot` is rendering-independent.
+          #
           # `--jq '.autoMergeRequest'` prints an EMPTY string when the field is null, not the text
           # "null" (run 31432454576). Asking jq for a value it always renders non-empty keeps
           # "empty" meaning "gh itself failed".
-          state="$(gh pr view "$PR_URL" --json autoMergeRequest \
-            --jq 'if .autoMergeRequest == null then "none" else (.autoMergeRequest.enabledBy.login // "unknown") end')"
+          state="$(gh pr view "$PR_URL" --json autoMergeRequest --jq '
+            if .autoMergeRequest == null then "none -"
+            else "\(if (.autoMergeRequest.enabledBy.is_bot // false) then "bot" else "human" end) \(.autoMergeRequest.enabledBy.login // "unknown")"
+            end')"
           rc=$?
           if [[ "$rc" -ne 0 || -z "$state" ]]; then
             echo "could not read auto-merge state (gh exit ${rc}) — refusing to assume it is disarmed" >&2
             exit 1
           fi
+          kind="${state%% *}"
+          who="${state#* }"
 
-          if [[ "$state" == "none" ]]; then
+          if [[ "$kind" == "none" ]]; then
             echo "auto-merge was not armed — nothing to disarm"
             exit 0
           fi
 
-          # Quoted right-hand side: unquoted, `[bot]` is a glob character class and would also
-          # match "github-actionsb".
-          if [[ "$state" != "github-actions[bot]" ]]; then
-            echo "auto-merge was armed by '${state}', not by this workflow — leaving it alone."
-            echo "A human who arms auto-merge on an ineligible PR has read the diff; that stands."
+          if [[ "$kind" != "bot" ]]; then
+            echo "auto-merge was armed by '${who}', a human, not by this workflow — leaving it alone."
+            echo "Someone who arms auto-merge on an ineligible PR has read the diff; that stands."
             exit 0
           fi
 
           if gh pr merge --disable-auto "$PR_URL"; then
-            echo "auto-merge disarmed — this workflow armed it, and the PR no longer qualifies"
+            echo "auto-merge disarmed — armed by '${who}', and the PR no longer qualifies"
             exit 0
           fi
-          echo "FAILED to disarm auto-merge that this workflow armed on an ineligible PR" >&2
+          echo "FAILED to disarm auto-merge armed by '${who}' on an ineligible PR" >&2
           exit 1
 
       # Prints why a PR was left alone, so "why did this not merge?" is answered in the run log

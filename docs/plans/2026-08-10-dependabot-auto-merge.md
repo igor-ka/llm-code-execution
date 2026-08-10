@@ -1024,3 +1024,36 @@ and run under `bash -e` (the runner's actual shell) against a stub `gh`:
 | armed by `github-actionsb` | exit 0, treated as a human — the unquoted-`[bot]`-is-a-glob regression |
 
 All six pass. The fifth is the one that was dead code before finding 11.
+
+### Second live run — the fix worked, and exposed one more
+
+After #127 merged as `ea41038`, the three fixtures were rebased again.
+
+**`contents: write` was the answer.** #117 armed successfully:
+`{"mergeMethod":"SQUASH","enabledBy":{"is_bot":true,"login":"app/github-actions"}}`. The claim
+that had been reasoned rather than proven is now proven.
+
+**Both remaining controls held.** #120 (major) was not armed and the run exited 0 — the disarm
+step's "not armed, nothing to disarm" path, which had been failing incorrectly. #98
+(`github_actions`) produced a run in which **both** jobs report `skipped`, so the write-scoped
+`apply` job never starts for that ecosystem.
+
+**And a thirteenth defect, of exactly the kind this plan claimed a unit test could not catch.**
+
+13. **The disarm step keyed on the wrong login string.** It compared
+    `autoMergeRequest.enabledBy.login` against `github-actions[bot]`. `gh` renders a Bot actor as
+    **`app/github-actions`** — the underlying GraphQL `Bot.login` is bare `github-actions`, and
+    neither is the string the code tested. So every bot-armed PR took the "a human armed this,
+    leave it alone" branch, silently reinstating the sticky-arming bug the step exists to
+    prevent. Verified against the live payload: the old expression yields `app/github-actions`
+    and the old comparison sends it down the human branch.
+
+    This is the failure mode named in *How this change is tested* — a wrong constant, where the
+    stub test asserted the same wrong constant the implementation did and passed. The fix keys on
+    `enabledBy.is_bot`, a boolean, which is rendering-independent.
+
+    **The test was strengthened so it could have caught it.** The stub `gh` no longer returns a
+    hand-written answer; it now runs the **real jq expression from the workflow** over **real
+    captured payloads**, including the exact object `gh` returned for #117. A hand-written stub
+    can only encode what the author believes; a captured payload encodes what GitHub actually
+    sends. That distinction is the whole lesson of this defect.

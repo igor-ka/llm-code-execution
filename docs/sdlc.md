@@ -565,11 +565,19 @@ Four details in that rule are not decoration:
   signature-checks only `commits[0]`; auto-merge merges HEAD. Requiring a single commit closes the
   gap between what was inspected and what would merge. Every Dependabot PR this repository has
   seen carries exactly one commit, so the rule costs nothing.
-- **Arming is undone when a PR stops qualifying.** GitHub disables auto-merge only when someone
-  *without* write permission pushes to the head branch, and Dependabot has write. A grouped PR
-  armed while patch-only and later updated in place to carry a major would otherwise stay armed
-  and merge that major unattended, so the workflow calls `gh pr merge --disable-auto` on any
-  already-armed PR that no longer qualifies.
+- **Arming is undone when a PR stops qualifying — but only what the workflow itself armed.**
+  GitHub disables auto-merge only when someone *without* write permission pushes to the head
+  branch, and Dependabot has write. A grouped PR armed while patch-only and later updated in place
+  to carry a major would otherwise stay armed and merge that major unattended, so the workflow
+  calls `gh pr merge --disable-auto` on an already-armed PR that no longer qualifies.
+
+  It decides whose arming it is from `autoMergeRequest.enabledBy.**is_bot**`, never from the
+  login string. `allow_auto_merge` is repository-wide, so a human can read a major and arm it by
+  hand, and silently revoking that would be its own defect. The first version compared the login
+  against `github-actions[bot]` and never matched — `gh` renders a Bot actor as
+  `app/github-actions`, while the underlying GraphQL `Bot.login` is bare `github-actions`. That
+  turned every bot-armed PR into "a human did this, leave it alone", reinstating the bug the step
+  exists to prevent. Only a live run surfaced it. Key on the boolean.
 
 **What it is not.** It does not weaken any gate. Native auto-merge waits for all four required
 checks *and* for every review thread to be resolved. Copilot reviews every PR including
