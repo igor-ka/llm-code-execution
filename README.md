@@ -24,7 +24,9 @@ Browser (React) ──POST /api/execute──▶ Express (TypeScript)
 backend/
   src/
     server.ts                Express: /api/execute, /api/health, /api/config, /api/sessions*, /api/runs/:id
-    index.ts                 entrypoint (migrates the history DB, then listens on :8000)
+    index.ts                 composition root: pool + Redis + migrations, listens on $PORT,
+                             graceful SIGTERM shutdown
+    shutdown.ts              SIGTERM/SIGINT sequencer: drain, release, exit (hard deadline)
     config.ts                settings + sandbox limits (per-tenant override seam)
     schemas.ts               Zod request + response builders + internal types
     errors.ts                HttpError

@@ -121,3 +121,26 @@ describe("logFormat", () => {
     expect(loadSettings({ LOG_FORMAT: "logfmt" }).logFormat).toBe("text");
   });
 });
+
+describe("port", () => {
+  it("defaults to 8080, the Cloud Run contract", () => {
+    expect(loadSettings({}).port).toBe(8080);
+  });
+
+  it("takes PORT from the environment", () => {
+    expect(loadSettings({ PORT: "3000" }).port).toBe(3000);
+  });
+
+  it("refuses a malformed PORT rather than listening somewhere unintended", () => {
+    expect(() => loadSettings({ PORT: "80 80" })).toThrow(/PORT/);
+  });
+
+  it("refuses an out-of-range PORT, which listen() would only reject asynchronously", () => {
+    expect(() => loadSettings({ PORT: "70000" })).toThrow(/PORT/);
+  });
+
+  it("defaults the shutdown grace period inside Cloud Run's 10s window", () => {
+    expect(loadSettings({}).shutdownGraceMs).toBe(8000);
+    expect(loadSettings({ SHUTDOWN_GRACE_MS: "5000" }).shutdownGraceMs).toBe(5000);
+  });
+});
