@@ -1,10 +1,11 @@
+import { resolveApiBase } from "./apiBase";
 // Thin client for the per-user chat-history endpoints. Every call is authenticated with a
 // bearer token and reads a `{detail}` error body, mirroring api.ts. History is an
 // authenticated feature: the backend 404s these routes for anonymous callers.
 
 import type { MessageResponse, ResultResponse } from "./api";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+const API_BASE = resolveApiBase(import.meta.env.VITE_API_BASE);
 
 // A session as it appears in the list wire. `run_count` is present in the list but omitted
 // by the detail wire, so it is optional here.

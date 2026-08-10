@@ -6,6 +6,7 @@
  * call sites — mirrors the original config.py.
  */
 import { config as loadDotenv } from "dotenv";
+import { resolve } from "node:path";
 
 // Repo-root .env for local dev, matching the README's `export $(... ../.env ...)`.
 // process.env always wins (dotenv does not override) and the file is absent in
@@ -31,6 +32,7 @@ export interface Settings {
   logFormat: "json" | "text"; // "json" for Cloud Logging ingestion; "text" for humans
   port: number; // Cloud Run injects PORT; 8080 is its default contract
   shutdownGraceMs: number; // must stay UNDER the platform SIGTERM->SIGKILL window
+  publicDir: string; // absolute path to the built SPA; empty disables SPA serving (dev default)
   redisUrl: string;
   quotaBurst: number;
   quotaBurstWindowSeconds: number;
@@ -111,6 +113,9 @@ export function loadSettings(env: Env = process.env): Settings {
     // 8s, inside Cloud Run's 10s window. At exactly 10s the force-exit fires with the
     // platform kill and is decorative.
     shutdownGraceMs: posInt("SHUTDOWN_GRACE_MS", env.SHUTDOWN_GRACE_MS, 8000),
+    // resolve() because res.sendFile() rejects a relative path: left relative, the mistake
+    // surfaces as a 500 on every SPA request instead of at the boundary where it was made.
+    publicDir: env.PUBLIC_DIR ? resolve(env.PUBLIC_DIR) : "",
     // Rate limiting. Defaults are deliberately conservative: 10 requests/minute of burst and
     // 100/hour sustained per identity, and 4 concurrent sandboxes (at 256 MB and 0.5 CPU each,
     // roughly what a 4-core/8 GB dev box tolerates). All tunable — they are config, not

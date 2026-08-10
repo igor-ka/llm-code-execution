@@ -58,6 +58,9 @@ async function main(): Promise<void> {
       port: settings.port,
       historyEnabled: history !== undefined,
       authRequired: settings.authRequired,
+      // States whether this process is serving the SPA: the difference between "the image is
+      // wrong" and "the app is broken" is otherwise invisible from the logs.
+      publicDir: settings.publicDir || null,
     });
   });
 

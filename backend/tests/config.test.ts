@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { resolve } from "node:path";
 import { loadSettings, assertRedisConfigured } from "../src/config.js";
 
 describe("loadSettings", () => {
@@ -142,5 +143,19 @@ describe("port", () => {
   it("defaults the shutdown grace period inside Cloud Run's 10s window", () => {
     expect(loadSettings({}).shutdownGraceMs).toBe(8000);
     expect(loadSettings({ SHUTDOWN_GRACE_MS: "5000" }).shutdownGraceMs).toBe(5000);
+  });
+});
+
+describe("publicDir", () => {
+  it("defaults to empty, so the API-only dev topology is unchanged", () => {
+    expect(loadSettings({}).publicDir).toBe("");
+  });
+
+  it("takes PUBLIC_DIR from the environment", () => {
+    expect(loadSettings({ PUBLIC_DIR: "/app/public" }).publicDir).toBe("/app/public");
+  });
+
+  it("resolves a relative path, which res.sendFile would otherwise reject at request time", () => {
+    expect(loadSettings({ PUBLIC_DIR: "./public" }).publicDir).toBe(resolve("./public"));
   });
 });

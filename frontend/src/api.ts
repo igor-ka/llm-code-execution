@@ -1,6 +1,7 @@
+import { resolveApiBase } from "./apiBase";
 // Thin client for the backend /api/execute endpoint.
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+const API_BASE = resolveApiBase(import.meta.env.VITE_API_BASE);
 
 export type MessageResponse = {
   type: "message";

@@ -1,25 +1,51 @@
 /// <reference types="vitest/config" />
-import { defineConfig, loadEnv } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { buildCsp } from "./src/csp";
+import { resolveApiBase } from "./src/apiBase";
+
+/**
+ * Emit the production CSP alongside the bundle.
+ *
+ * Without this the policy exists only as a header set by the Vite dev/preview servers, so a
+ * static deploy of dist/ ships with no CSP whatsoever. The server that hosts dist/ reads this
+ * file and sets the header, which keeps buildCsp() the single source of truth.
+ */
+function emitCsp(policy: string): Plugin {
+  return {
+    name: "emit-csp",
+    apply: "build",
+    generateBundle() {
+      this.emitFile({ type: "asset", fileName: "csp.txt", source: `${policy}\n` });
+    },
+  };
+}
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "VITE_");
-  const cspOpts = {
-    apiBase: env.VITE_API_BASE || "http://localhost:8000",
-    auth0Domain: env.VITE_AUTH0_DOMAIN || "",
-  };
+  const auth0Domain = env.VITE_AUTH0_DOMAIN || "";
+
+  // THE SAME resolution the bundle uses (src/apiBase.ts), not a lookalike. `?? ""` here and
+  // `?? "http://localhost:8000"` in the app would agree when the variable is set and diverge
+  // when it is unset — shipping a bundle that calls localhost under a policy that forbids it,
+  // with every check still green because the policy looks strict.
+  //
+  // The production image builds with VITE_API_BASE="" (same-origin API), so connect-src reduces
+  // to 'self'; an unset value means a local build, which really does call localhost.
+  const apiBase = resolveApiBase(env.VITE_API_BASE);
+  const prodCsp = buildCsp({ apiBase, auth0Domain, dev: false });
+  const devCsp = buildCsp({ apiBase, auth0Domain, dev: true });
 
   return {
-    plugins: [react()],
-    // Dev server gets an HMR-compatible policy; `vite preview` (the production-build
-    // serving path) gets the strict one.
+    plugins: [react(), emitCsp(prodCsp)],
+    // Dev server gets an HMR-compatible policy; `vite preview` (the production-build serving
+    // path) gets the strict one.
     server: {
       port: 5173,
-      headers: { "Content-Security-Policy": buildCsp({ ...cspOpts, dev: true }) },
+      headers: { "Content-Security-Policy": devCsp },
     },
     preview: {
-      headers: { "Content-Security-Policy": buildCsp({ ...cspOpts, dev: false }) },
+      headers: { "Content-Security-Policy": prodCsp },
     },
     test: {
       environment: "jsdom",

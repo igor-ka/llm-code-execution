@@ -14,6 +14,7 @@ import type { SandboxBackend, ExecutionLimits } from "./sandbox/base.js";
 import { ExecuteRequest, messageResponse, resultResponse } from "./schemas.js";
 import { HttpError } from "./errors.js";
 import { log } from "./log.js";
+import { readCspPolicy, installCspHeader, mountSpaFallback } from "./staticSite.js";
 import { SessionNotFound, type HistoryStore } from "./history/store.js";
 import { PostgresHistoryStore } from "./history/pgStore.js";
 import { makePool } from "./history/pool.js";
@@ -51,6 +52,10 @@ export function createApp(deps: AppDeps = {}): Express {
   // cross-origin SPA cannot read it at all — the throttling UI would have no retry hint.
   app.use(cors({ origin: settings.frontendOrigin, exposedHeaders: ["Retry-After"] }));
   app.use(express.json());
+
+  // Read the policy at construction time so a broken build fails HERE, not on the first
+  // request, and install the header before any route so every response carries it.
+  if (settings.publicDir) installCspHeader(app, readCspPolicy(settings.publicDir));
 
   const requirePrincipal = deps.requirePrincipal ?? makeRequirePrincipal(settings);
 
@@ -207,6 +212,11 @@ export function createApp(deps: AppDeps = {}): Express {
   // /api/runs/:id; the router's own requireIdentity 404s when userId is null (anonymous, INV-6).
   const store = getHistory();
   if (store) app.use("/api", requirePrincipal, historyRouter(store));
+
+  // Serve the built SPA from this process when one is bundled with it (spec D9, single origin).
+  // Must sit after every API route and before the error handler: the fallback inside answers
+  // anything unmatched, so a route mounted later would never be reached.
+  if (settings.publicDir) mountSpaFallback(app, settings.publicDir);
 
   // Final error handler — converts HttpError (and JSON parse errors) to {detail}.
   app.use(

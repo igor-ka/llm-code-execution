@@ -8,7 +8,7 @@
 #   lint     eslint
 #   format   prettier --check
 #   test     vitest
-#   build    tsc -b && vite build
+#   build    tsc -b && vite build (+ assert the production CSP shipped)
 #   docker   build the frontend image
 #
 # CI invokes the individual targets as separate named steps (Install / Lint / Format /
@@ -33,7 +33,25 @@ install() { run npm ci; }
 lint()    { run npm run lint; }
 format()  { run npm run format:check; }
 test_()   { run npm run test; }
-build()   { run npm run build; }
+build() {
+  run npm run build
+  # Regression gate: the production CSP must ship with the bundle. It used to exist only as a
+  # Vite dev/preview response header, so a static deploy of dist/ silently served no CSP at all —
+  # a unit test on the policy builder cannot catch "the server forgot the header".
+  run test -f dist/csp.txt
+  # Exact directive, not a substring: the DEV policy is `script-src 'self' 'unsafe-inline'
+  # 'unsafe-eval'`, which contains "script-src 'self'" and would sail through a looser check —
+  # shipping the app with eval enabled while the gate stayed green.
+  run grep -qE "script-src 'self'\s*(;|$)" dist/csp.txt
+  # NOT `grep -qv`: that inverts per LINE, so it passes on any file with one clean line.
+  # Only unsafe-eval is searched for: `style-src 'self' 'unsafe-inline'` is legitimate in the
+  # production policy (React inline style objects), and the exact script-src check above already
+  # guarantees no inline script is permitted.
+  if grep -q "unsafe-eval" dist/csp.txt; then
+    echo "dist/csp.txt permits unsafe-eval — that is the DEV policy, not the production one" >&2
+    exit 1
+  fi
+}
 docker_() { run docker build -t llm-code-execution-frontend:verify .; }
 
 all() {
