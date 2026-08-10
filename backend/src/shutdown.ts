@@ -50,7 +50,13 @@ export interface ShutdownOptions {
    */
   graceMs?: number;
   exit?: (code: number) => void;
-  log?: (message: string, fields?: Fields) => void;
+  /**
+   * Severity is part of the contract, not decoration. `cleanup failed` and `grace period
+   * expired` are the two events worth alerting on; emitted at INFO they are invisible to any
+   * monitor filtering on severity>=ERROR, which is the only reason the structured logger
+   * exists.
+   */
+  log?: (level: "info" | "error", message: string, fields?: Fields) => void;
 }
 
 export function makeShutdown({
@@ -67,12 +73,12 @@ export function makeShutdown({
     // Re-entering would double-run cleanup and race two exits.
     if (shuttingDown) return;
     shuttingDown = true;
-    log("shutdown: draining", { signal, graceMs });
+    log("info", "shutdown: draining", { signal, graceMs });
 
     // Belt and braces: if draining stalls, exit under our own power with a non-zero code rather
     // than waiting to be SIGKILLed. unref() so this timer can never hold the loop open by itself.
     const deadline = setTimeout(() => {
-      log("shutdown: grace period expired, forcing exit", { signal });
+      log("error", "shutdown: grace period expired, forcing exit", { signal, graceMs });
       exit(1);
     }, graceMs);
     if (typeof deadline.unref === "function") deadline.unref();
@@ -82,12 +88,12 @@ export function makeShutdown({
         try {
           await cleanup?.();
         } catch (err) {
-          log("shutdown: cleanup failed", {
+          log("error", "shutdown: cleanup failed", {
             err: err instanceof Error ? err.message : String(err),
           });
         }
         clearTimeout(deadline);
-        log("shutdown: complete", { signal });
+        log("info", "shutdown: complete", { signal });
         exit(0);
       })();
     });

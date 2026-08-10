@@ -79,7 +79,7 @@ async function main(): Promise<void> {
       // entirely, leaving Postgres connections to be severed by process.exit instead of drained.
       await Promise.allSettled([quota.close(), pool?.end()]);
     },
-    log: (message, fields) => log.info(message, fields),
+    log: (level, message, fields) => log[level](message, fields),
   });
 }
 
