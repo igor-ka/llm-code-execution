@@ -5,19 +5,26 @@ name: Dependabot auto-merge
 #
 # This is NOT a check and must never be added to the "Protect main" ruleset's required status
 # checks. The four gates (Backend checks, Frontend checks, SDLC docs, PR shape) still decide
-# whether the PR is mergeable; this job only presses the button in advance. It is therefore also
-# not subject to the "every CI check has a verify.sh equivalent" rule — it gates nothing.
+# whether the PR is mergeable; this workflow only presses the button in advance. It is therefore
+# also not subject to the "every CI check has a verify.sh equivalent" rule — it gates nothing.
 #
 # Why `pull_request` and NOT `pull_request_target`: pull_request_target runs in the base repo's
 # context with a writable token, which is the standard way to turn a dependency bot into a
 # code-execution path. It is not needed here — Dependabot's branches live in this repository, so
-# a plain `pull_request` run can be granted write via the `permissions:` block below.
+# a plain `pull_request` run can be granted write via a `permissions:` block.
 #
-# Why there is no `actions/checkout` step: this job holds the only writable GITHUB_TOKEN in the
-# repository's CI. Checking out the head ref would put code from the PR branch inside that job.
-# Every input this job needs arrives as event metadata or as an action output, so it never needs
-# a working tree. If a future change here needs the repository, check out
+# Why there is no `actions/checkout` step anywhere: `apply` below holds the only writable
+# GITHUB_TOKEN in this repository's CI. Checking out the head ref would put code from the PR
+# branch inside it. Every input either job needs arrives as event metadata or as an action
+# output, so neither needs a working tree. If a future change needs the repository, check out
 # `${{ github.event.pull_request.base.sha }}`, never the head.
+#
+# WHY TWO JOBS. `gate` runs the one third-party action under a read-only token and publishes a
+# verdict; `apply` holds the write scope and runs nothing but `gh`. They are split because
+# `contents: write` turned out to be mandatory (see `apply`), and in one job that scope would be
+# handed to `dependabot/fetch-metadata` — making the SHA pin the only thing standing between a
+# compromised action release and a push to `main`. The split turns a supply-chain assumption into
+# a scope boundary. The SHA pin stays, as defence in depth rather than the load-bearing control.
 
 on:
   pull_request:
@@ -39,49 +46,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  auto-merge:
-    name: Dependabot auto-merge
+  gate:
+    name: Dependabot auto-merge (gate)
     runs-on: ubuntu-latest
     # `github.repository` keeps this inert in forks. `user.login` is set by GitHub from the
     # authenticated actor and cannot be forged by a PR author.
     #
     # The branch-prefix test is the ecosystem allow-list, hoisted to where it runs BEFORE any
-    # step does. It has to be here, not in the gate below: for `pull_request` the workflow file
-    # is read from the merge ref, so a Dependabot PR that bumps this file's own
-    # `fetch-metadata` pin would run the *replacement* action — with this job's writable token —
-    # and only afterwards reach a gate that rejects the `github_actions` ecosystem. Rejecting on
-    # metadata the action produces is too late by construction. `github.head_ref` is event data,
-    # available before the first step, and Dependabot always names branches
-    # `dependabot/<ecosystem>/…`. The jq rule below repeats the check as defence in depth.
+    # step does. It has to be here, not in the jq rules below: for `pull_request` the workflow
+    # file is read from the merge ref, so a Dependabot PR that bumps this file's own
+    # `fetch-metadata` pin would run the *replacement* action, and only afterwards reach a rule
+    # that rejects the `github_actions` ecosystem. Rejecting on metadata the action itself
+    # produces is too late by construction. `github.head_ref` is event data, available before the
+    # first step, and Dependabot always names branches `dependabot/<ecosystem>/…`. Verified live:
+    # PR #98 (`dependabot/github_actions/…`) produced no run at all.
     if: >-
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.repository == 'igor-ka/llm-code-execution' &&
       startsWith(github.head_ref, 'dependabot/npm_and_yarn/')
-    # Declared at job level, not workflow level, so the scope is visibly attached to the only job
-    # that needs it. The repository default is `read`; a workflow may request more, and a PR from
-    # a fork is capped at read regardless of what is written here.
-    #
-    # `contents: write` is required, and this is settled by evidence rather than reasoning. It was
-    # shipped without it on the argument that `gh pr merge --auto` only issues the GraphQL
-    # `enablePullRequestAutoMerge` mutation and never merges anything itself. The first real run
-    # disproved that: run 31432435114 on PR #117 failed with
-    #
-    #   GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)
-    #
-    # and run 31432454576 failed the same way on `disablePullRequestAutoMerge`. Both auto-merge
-    # mutations are gated on the `contents` scope, not `pull-requests`. GitHub's documented example
-    # carries both for this reason. Do not narrow this again without a run to point at.
-    #
-    # What keeps the scope safe is everything else in this file: no checkout, no repository code,
-    # one third-party action pinned to a full SHA, and the ecosystem allow-list in the `if:` above
-    # that stops a bump to that very pin from ever executing here.
+    # Read-only. This is the job that runs third-party code.
     permissions:
-      contents: write
-      pull-requests: write
+      pull-requests: read
+    outputs:
+      verdict: ${{ steps.gate.outputs.verdict }}
     steps:
       # Pinned to the full commit SHA for v3.1.0, not @v3 — a moving tag is a supply-chain
-      # rewrite waiting to happen, and this step runs in the job holding write access.
-      # `alert-lookup` and `compat-lookup` stay off: both require a PAT, and neither is used.
+      # rewrite waiting to happen. `alert-lookup` and `compat-lookup` stay off: both require a
+      # PAT, and neither is used.
       - name: Fetch Dependabot metadata
         id: metadata
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
@@ -97,14 +88,7 @@ jobs:
       #          commit the gate never examined. Every Dependabot PR this repository has seen
       #          carries exactly one commit, so requiring that closes the gap for free.
       #
-      # Rule 2 — an allow-list of ecosystems, not a deny-list. Only `npm_and_yarn` auto-merges.
-      #          `github_actions` must not: this workflow pins its own action by SHA with the
-      #          version in a trailing comment, and Dependabot bumps SHA pins by that comment, so
-      #          a new third-party action SHA would arrive as a *patch* and merge unread — and
-      #          nothing else would catch it (`SDLC docs` exits 0 for dependabot[bot], and no
-      #          verify.sh reads workflow files). An allow-list also fails closed on ecosystems
-      #          added later: `docker` is already proposed in #110, where a base-image digest bump
-      #          has exactly the same "nobody read it" property.
+      # Rule 2 — the ecosystem allow-list again, as defence in depth behind the job-level `if:`.
       #
       # Rule 3 — every dependency must declare patch or minor. Why not
       #          `steps.metadata.outputs.update-type`, which would be one line: on SECURITY
@@ -122,8 +106,8 @@ jobs:
       #
       # An empty `DEPS_JSON` is rejected explicitly: jq reads no values from empty input and exits
       # 0, which would leave `verdict` blank rather than failing. Malformed input does exit
-      # non-zero, and `set -euo pipefail` turns that into a failed step. A red job here is the
-      # intended outcome: it is not a required check, so it blocks nothing, and it is visible.
+      # non-zero, and `set -euo pipefail` turns that into a failed step. A failure here is safe by
+      # construction — `apply` treats an unknown verdict as ineligible, never as eligible.
       - name: Decide whether this PR may auto-merge
         id: gate
         env:
@@ -158,6 +142,32 @@ jobs:
               else "  (dependency metadata was not a JSON array)"
             end'
 
+  apply:
+    name: Dependabot auto-merge
+    needs: gate
+    runs-on: ubuntu-latest
+    # `!cancelled()` rather than the implicit `success()`: if `gate` FAILS, its verdict is empty,
+    # which is not 'eligible', and the disarm branch below must still run. Skipping on failure
+    # would make the only mechanism that un-arms a PR fail open. `needs.gate.result != 'skipped'`
+    # keeps this off PRs that were never Dependabot npm bumps in the first place.
+    if: ${{ !cancelled() && needs.gate.result != 'skipped' }}
+    # This job runs no third-party code — only `gh`, preinstalled on the runner.
+    #
+    # `contents: write` is required. It was first shipped omitted, on the argument that
+    # `gh pr merge --auto` only issues the GraphQL `enablePullRequestAutoMerge` mutation and never
+    # merges anything itself. The first real run disproved that: run 31432435114 on PR #117 failed
+    # with
+    #
+    #   GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)
+    #
+    # and run 31432454576 failed the same way on `disablePullRequestAutoMerge`. Those runs prove
+    # `pull-requests: write` alone is insufficient; that `contents: write` is what closes the gap
+    # is GitHub's documented example plus the absence of any other candidate scope, and the next
+    # live run is what confirms it. Do not narrow this again without a run to point at.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
       # `--squash`, not `--merge`: the ruleset allows only squash and rebase, and
       # required_linear_history is on. GitHub's own documented example uses `--merge` and would
       # fail here.
@@ -165,56 +175,75 @@ jobs:
       # No `gh pr review --approve`: required_approving_review_count is 0, and the repository
       # sets can_approve_pull_request_reviews: false, so Actions could not approve anyway.
       - name: Arm auto-merge
-        if: steps.gate.outputs.verdict == 'eligible'
+        if: needs.gate.outputs.verdict == 'eligible'
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh pr merge --auto --squash "$PR_URL"
 
-      # Arming is sticky, so ineligibility has to be acted on, not just logged. GitHub disables
-      # auto-merge only when someone WITHOUT write permission pushes to the head branch —
-      # Dependabot has write. So a grouped PR that is armed while patch-only, and later updated in
-      # place to carry a major, would stay armed and merge that major unattended. This is the step
-      # that prevents it.
+      # Arming is sticky, so ineligibility has to be acted on, not just logged: GitHub disables
+      # auto-merge only when someone WITHOUT write permission pushes to the head branch, and
+      # Dependabot has write. A grouped PR armed while patch-only and later updated in place to
+      # carry a major would otherwise stay armed and merge that major unattended.
       #
-      # Attempted unconditionally rather than gated on `github.event.pull_request.auto_merge`:
-      # that payload field is a snapshot taken when the event fired, and being wrong about it in
-      # the "already armed" direction is the failure this step exists to prevent. `--disable-auto`
-      # errors on a PR that was never armed, so the fallback re-reads the live state and only
-      # passes if auto-merge really is off.
+      # The state is READ FIRST and acted on second, for two reasons. It distinguishes auto-merge
+      # this workflow armed from auto-merge a human armed after reading the diff — revoking a
+      # deliberate human decision would be its own defect, and `allow_auto_merge` is repo-wide, so
+      # a human arming a major is a real scenario. And it means a failing `--disable-auto` is
+      # always a hard failure, instead of being masked by a "was not armed anyway" fallback that
+      # would have swallowed exactly the token-scope regression this file already hit once.
+      #
+      # `set +e` is not redundant: GitHub invokes steps as `bash -e {0}`, so errexit is ON before
+      # the script starts and `set -uo pipefail` does not clear it. Without this, the `gh` failure
+      # paths below are unreachable — the script would die at the assignment.
       - name: Disarm auto-merge if it is no longer eligible
-        if: steps.gate.outputs.verdict != 'eligible'
+        if: ${{ !cancelled() && needs.gate.outputs.verdict != 'eligible' }}
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set +e
           set -uo pipefail
-          if gh pr merge --disable-auto "$PR_URL"; then
-            echo "auto-merge disarmed"
-            exit 0
-          fi
+
           # `--jq '.autoMergeRequest'` prints an EMPTY string when the field is null, not the text
-          # "null" — so comparing against "null" never matches and the not-armed case reported a
-          # false failure (run 31432454576 on PR #120). Ask jq for the predicate instead, which
-          # always yields a non-empty answer; an empty value now means `gh` itself failed, and
-          # that falls through to the loud path below where it belongs.
-          armed="$(gh pr view "$PR_URL" --json autoMergeRequest \
-            --jq 'if .autoMergeRequest == null then "no" else "yes" end')"
-          if [[ "$armed" == "no" ]]; then
+          # "null" (run 31432454576). Asking jq for a value it always renders non-empty keeps
+          # "empty" meaning "gh itself failed".
+          state="$(gh pr view "$PR_URL" --json autoMergeRequest \
+            --jq 'if .autoMergeRequest == null then "none" else (.autoMergeRequest.enabledBy.login // "unknown") end')"
+          rc=$?
+          if [[ "$rc" -ne 0 || -z "$state" ]]; then
+            echo "could not read auto-merge state (gh exit ${rc}) — refusing to assume it is disarmed" >&2
+            exit 1
+          fi
+
+          if [[ "$state" == "none" ]]; then
             echo "auto-merge was not armed — nothing to disarm"
             exit 0
           fi
-          echo "FAILED to disarm auto-merge on an ineligible PR (armed=${armed:-<unreadable>})" >&2
+
+          # Quoted right-hand side: unquoted, `[bot]` is a glob character class and would also
+          # match "github-actionsb".
+          if [[ "$state" != "github-actions[bot]" ]]; then
+            echo "auto-merge was armed by '${state}', not by this workflow — leaving it alone."
+            echo "A human who arms auto-merge on an ineligible PR has read the diff; that stands."
+            exit 0
+          fi
+
+          if gh pr merge --disable-auto "$PR_URL"; then
+            echo "auto-merge disarmed — this workflow armed it, and the PR no longer qualifies"
+            exit 0
+          fi
+          echo "FAILED to disarm auto-merge that this workflow armed on an ineligible PR" >&2
           exit 1
 
       # Prints why a PR was left alone, so "why did this not merge?" is answered in the run log
-      # rather than by re-deriving the rule. Majors are the common case here.
+      # rather than by re-deriving the rule. Majors are the common case here. `!cancelled()` for
+      # the same reason as the disarm step: a failed `gate` is exactly when an explanation is
+      # most useful.
       - name: Explain why auto-merge was not armed
-        if: steps.gate.outputs.verdict != 'eligible'
+        if: ${{ !cancelled() && needs.gate.outputs.verdict != 'eligible' }}
         env:
-          VERDICT: ${{ steps.gate.outputs.verdict }}
-          DEPS: ${{ steps.metadata.outputs.dependency-names }}
+          VERDICT: ${{ needs.gate.outputs.verdict }}
         run: |
-          echo "Auto-merge not armed — ${VERDICT}."
-          echo "Dependencies: ${DEPS}"
+          echo "Auto-merge not armed — ${VERDICT:-gate did not produce a verdict}."
           echo "Merge this one by hand after reading the diff."

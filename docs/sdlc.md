@@ -588,17 +588,30 @@ to a merge queue, so adopting one means re-authenticating this workflow with a P
 token.
 
 **Security posture — different from every other job here.** `SDLC docs` and `PR shape` run
-scripts from the PR branch under a read-only token. This one inverts that: it holds
-`contents: write` and `pull-requests: write`, and so it checks nothing out and runs no repository
-code. Its only third-party action is pinned to a full commit SHA. It uses `pull_request`, never
-`pull_request_target`. Keep all four of those properties together — each one is load-bearing only
-because the others hold.
+scripts from the PR branch under a read-only token. This workflow inverts that: it holds
+`contents: write`, and so it checks nothing out and runs no repository code. It uses
+`pull_request`, never `pull_request_target`.
+
+**It is two jobs, and the split is the point.** `gate` runs the one third-party action —
+`dependabot/fetch-metadata`, pinned to a full commit SHA — under `pull-requests: read`, and
+publishes a verdict as a job output. `apply` holds `contents: write` and runs nothing but `gh`.
+In a single job the write scope would be handed to the third-party action, leaving the SHA pin as
+the only thing between a compromised release and a push to `main`. The split turns that
+supply-chain assumption into a scope boundary; the pin stays as defence in depth.
 
 `contents: write` was first shipped omitted, on the reasoning that `gh pr merge --auto` only
 *enables* auto-merge and GitHub performs the merge later. The first real run disproved it:
 `Resource not accessible by integration (enablePullRequestAutoMerge)`, and the same on
-`disablePullRequestAutoMerge`. Both mutations are gated on `contents`, not `pull-requests`. Do not
-narrow the scope again without a run to point at.
+`disablePullRequestAutoMerge`. Those runs prove `pull-requests: write` alone is insufficient; that
+`contents` is the scope that closes it comes from GitHub's documented example. Do not narrow it
+again without a run to point at.
+
+**Two `if:` details that are load-bearing, not style.** A step or job `if:` without a status
+function is implicitly ANDed with `success()`, so the disarm path carries `!cancelled()` — if
+`gate` fails, its verdict is empty, which is not `eligible`, and the one mechanism that un-arms a
+PR must still run. And GitHub invokes `run:` steps as `bash -e {0}`, so `set -uo pipefail` does
+**not** clear errexit; the disarm step says `set +e` explicitly because it handles its own `gh`
+failures.
 
 ---
 

@@ -933,7 +933,9 @@ preceding commit — the deny-list-not-fail-closed point (a missing or null `pac
 fails the `!= "npm_and_yarn"` test) and the missing disarm path.
 
 Also applied: a paragraph in `README.md`'s CI section noting that a fourth pull-request workflow
-exists and gates nothing.
+exists and gates nothing. The reviewer flagged this as a judgment call under the documentation
+rule in `CLAUDE.md`; a workflow that merges to `main` is close enough to "security posture" to
+name.
 
 ---
 
@@ -976,6 +978,49 @@ the outcome was "auto-merge not armed".
 
 **Still unproven, honestly:** no PR has auto-merged yet, so #94's "merges with no human
 interaction" criterion is not yet met — it is blocked on defect 1, not on the design. Task 7 Steps
-4–5, 7b and 8 are re-run after the follow-up lands. The reviewer flagged this as a judgment call under the documentation
-rule in `CLAUDE.md`; a workflow that merges to `main` is close enough to "security posture" to
-name.
+4–5, 7b and 8 are re-run after the follow-up lands.
+
+### Review of the follow-up (PR #127)
+
+`security-review` found nothing. `code-review` found two more real defects and one design
+consequence of restoring `contents: write` that the follow-up itself had introduced:
+
+10. **The disarm step failed open.** A step `if:` without a status function is implicitly ANDed
+    with `success()`, so a failure in `Fetch Dependabot metadata` or in the gate skipped the
+    disarm entirely — leaving an armed PR armed. Confirmed in run 31432454576, where the `Explain`
+    step never appeared after the disarm step failed. Both non-eligible steps now carry
+    `!cancelled()`, and an unknown verdict takes the disarm path rather than the skip.
+11. **`set -uo pipefail` never cleared errexit.** GitHub invokes steps as `bash -e {0}`, so
+    errexit is already on and `set -u -o pipefail` does not turn it off. The `gh`-failure branches
+    added in this very PR were unreachable — the script died at the assignment. The comment
+    claiming otherwise was wrong in exactly the way the PR was correcting elsewhere. Fixed with an
+    explicit `set +e`, and covered by the stub test below.
+12. **Restoring `contents: write` made `--disable-auto` work for the first time — including
+    against humans.** `allow_auto_merge` is repository-wide, so a maintainer can read a major and
+    arm auto-merge by hand. The next Dependabot rebase would have silently revoked that decision.
+    The step now reads `autoMergeRequest.enabledBy.login` first and only disarms what
+    `github-actions[bot]` armed.
+
+**One architectural change, reversible if you disagree.** `code-review` pointed out that with
+`contents: write` restored, the single job hands a main-writable token to
+`dependabot/fetch-metadata` — making the SHA pin the only control rather than defence in depth.
+The workflow is now two jobs: `gate` (third-party action, `pull-requests: read`, publishes a
+verdict) and `apply` (`contents: write`, runs only `gh`). This is *not* the two-job design
+rejected during planning — that one required a checkout to run a repository script, and this one
+still checks nothing out. The rejection reasoning does not carry over.
+
+**The shell logic now has a test.** `test-driven-development` applies to a bug fix, and finding 11
+is exactly the kind a test catches. The disarm script cannot move to `scripts/` — that would need
+a checkout in the privileged job — so instead it is **extracted verbatim from the workflow YAML**
+and run under `bash -e` (the runner's actual shell) against a stub `gh`:
+
+| Case | Expected |
+| --- | --- |
+| not armed | exit 0, "nothing to disarm" |
+| armed by a human | exit 0, "leaving it alone" |
+| armed by the bot, disarm succeeds | exit 0, "auto-merge disarmed" |
+| armed by the bot, disarm fails | **exit 1**, loud |
+| `gh pr view` fails | **exit 1**, "refusing to assume it is disarmed" |
+| armed by `github-actionsb` | exit 0, treated as a human — the unquoted-`[bot]`-is-a-glob regression |
+
+All six pass. The fifth is the one that was dead code before finding 11.
