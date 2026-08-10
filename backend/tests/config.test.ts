@@ -107,3 +107,17 @@ describe("rate-limit setting validation", () => {
     expect(() => loadSettings({ [key]: value })).toThrow(new RegExp(key));
   });
 });
+
+describe("logFormat", () => {
+  it("defaults to text", () => {
+    expect(loadSettings({}).logFormat).toBe("text");
+  });
+
+  it("is json when LOG_FORMAT=json", () => {
+    expect(loadSettings({ LOG_FORMAT: "json" }).logFormat).toBe("json");
+  });
+
+  it("falls back to text for an unrecognized value", () => {
+    expect(loadSettings({ LOG_FORMAT: "logfmt" }).logFormat).toBe("text");
+  });
+});

@@ -28,6 +28,7 @@ export interface Settings {
   oidcJwksUrl: string;
   databaseUrl: string;
   historyEnabled: boolean; // convenience: authRequired && databaseUrl set
+  logFormat: "json" | "text"; // "json" for Cloud Logging ingestion; "text" for humans
   redisUrl: string;
   quotaBurst: number;
   quotaBurstWindowSeconds: number;
@@ -90,6 +91,7 @@ export function loadSettings(env: Env = process.env): Settings {
     // History is an authenticated feature: it exists only when auth is on AND a DB is
     // configured. Anonymous/local mode (no DATABASE_URL) boots with history disabled.
     historyEnabled: authRequired && databaseUrl !== "",
+    logFormat: str(env.LOG_FORMAT, "text") === "json" ? "json" : "text",
     // Rate limiting. Defaults are deliberately conservative: 10 requests/minute of burst and
     // 100/hour sustained per identity, and 4 concurrent sandboxes (at 256 MB and 0.5 CPU each,
     // roughly what a 4-core/8 GB dev box tolerates). All tunable — they are config, not

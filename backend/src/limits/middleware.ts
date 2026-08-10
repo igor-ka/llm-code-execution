@@ -13,6 +13,7 @@
  */
 import type { RequestHandler } from "express";
 import type { Principal } from "../auth.js";
+import { log } from "../log.js";
 import type { QuotaStore, QuotaLimits } from "./quota.js";
 import { quotaKey } from "./quota.js";
 import { HttpError } from "../errors.js";
@@ -30,10 +31,7 @@ export function makeQuotaMiddleware(store: QuotaStore, limits: QuotaLimits): Req
         // Anthropic spend for its duration. That is precisely why this logs at error level:
         // S9 treats silence here as a defect, because this line is the only thing standing
         // between a Redis outage and an unbounded bill.
-        console.error(
-          "[quota] store unavailable — FAILING OPEN, requests are unmetered:",
-          err instanceof Error ? err.message : err,
-        );
+        log.error("quota store unavailable — FAILING OPEN, requests are unmetered", { err });
         next();
         return;
       }
