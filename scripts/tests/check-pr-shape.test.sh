@@ -90,6 +90,23 @@ Closes #66
 case_ "a closer in an HTML comment is ignored" 0 "feat: thing" \
   "Closes #64 <!-- Closes #65 -->"
 
+# Regression: comment stripping is stateful across lines, so running it before fence stripping
+# let a literal "<!--" inside an HTML snippet swallow the rest of the body and pass anything.
+case_ "an HTML comment marker inside a fence does not disable the check" 1 "feat: thing" \
+  'Closes #64
+
+```html
+<!-- a comment example
+```
+
+Closes #65'
+
+case_ "a closer in an inline code span is ignored" 0 "feat: thing" \
+  'Closes #64 and the doc says `Closes #65`'
+
+case_ "a closer in a double-backtick span is ignored" 0 "feat: thing" \
+  'Closes #64 and the doc says ``Closes #65`` verbatim'
+
 case_ "a multi-line HTML comment is ignored" 0 "feat: thing" \
   "Closes #64
 

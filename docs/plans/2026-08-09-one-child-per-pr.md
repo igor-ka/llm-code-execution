@@ -17,6 +17,13 @@ code; the blast radius is the development process itself.
 **Issue:** [#72](https://github.com/igor-ka/llm-code-execution/issues/72) — read its **Resolved**
 section first; it records why there is no size gate, no stacked PRs, and no `[no-issue]` marker.
 
+> **Post-implementation note.** `code-review` found four issues that changed the shipped script
+> after this plan was written: quotation stripping now runs fences → code spans → HTML comments
+> (the original order let a `<!--` inside a fenced snippet swallow the body and pass anything),
+> inline code spans are stripped, and the suite is 20 cases rather than 17. The PR description
+> records what was applied and what was pushed back on. This document is the pre-implementation
+> record and has not been rewritten.
+
 **PR boundaries:** One PR, closing #72. Every task below touches `docs/sdlc.md`, so splitting
 would mean writing the same contract update twice. A single PR closing exactly one issue is also
 the rule demonstrating itself on its own first use.

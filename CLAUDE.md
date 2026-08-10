@@ -14,7 +14,7 @@ and layout.
 
 `docs/sdlc.md` is the full process — phases, gates, how it meets CI, and a worked example.
 **It is a contract:** if you change `.claude/skills/**`, either `verify.sh`,
-`.github/workflows/**`, or `scripts/check-sdlc-sync.sh`, update `docs/sdlc.md` in the same PR.
+`.github/workflows/**`, or anything in `scripts/`, update `docs/sdlc.md` in the same PR.
 The `SDLC docs` CI job enforces this; `[skip-sdlc-sync]` in the PR title is the escape hatch
 for a genuine no-op.
 

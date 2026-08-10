@@ -19,8 +19,10 @@ name: PR shape
 # command in docs/sdlc.md — the same file, run both places, so the two cannot drift.
 #
 # The job `name:` is a contract like the others (see ci.yml). It is a new name, so no existing
-# required check is affected; it only blocks merges once "PR shape" is added to the
-# "Protect main" ruleset's required status checks.
+# required check is affected — and a job that only reports is not a gate, which is how
+# `SDLC docs` sat un-enforced from #53 until 2026-08-09. Adding "PR shape" to the "Protect main"
+# ruleset's required status checks is therefore part of landing this change, not a follow-up:
+# see Task 7 of docs/plans/2026-08-09-one-child-per-pr.md for the command and its rollback.
 
 on:
   pull_request:

@@ -24,8 +24,11 @@ if [[ "$PR_TITLE" == *"$HATCH"* ]]; then
   exit 0
 fi
 
-# HTML comments are stripped first, across line boundaries. PR templates conventionally ship a
-# commented-out "Closes #" placeholder, and GitHub does not link references inside them.
+# Quotations are stripped in three passes, and the ORDER IS LOAD-BEARING:
+#   fences → code spans → HTML comments
+# Comment stripping must run last because it is stateful across lines. Run first, a literal
+# "<!--" inside a fenced HTML snippet opens comment state and swallows the rest of the body —
+# every closing reference after it disappears and the gate silently passes anything.
 strip_comments() {
   awk '
     {
@@ -48,8 +51,21 @@ strip_comments() {
     }'
 }
 
-# Fenced blocks are stripped next. PR bodies in this repo routinely paste issue text, plan
+# Inline code spans, run once fences are gone. A body discussing this very check will write
+# `Closes #65` inline, and GitHub does not link that — counting it would fail a legitimate PR,
+# and the failure message's advice ("put the quotation in a fence") does not apply to a span.
+# Double-backtick spans go first so their contents are not exposed by the single-backtick pass.
+strip_code_spans() {
+  sed -e 's/``[^`]*``//g' -e 's/`[^`]*`//g'
+}
+
+# Fenced blocks are stripped first. PR bodies in this repo routinely paste issue text, plan
 # excerpts and review quotes; a "Closes #12" inside a fence is a quotation, not a commitment.
+#
+# Known limitation: 4-space-indented code blocks are not recognised, so a closing reference
+# inside one is still counted. Deliberate — whether an indented line is a code block or a list
+# continuation depends on what precedes it, and a cheap version would drop closers written as
+# nested list items instead. GitHub's editor produces fences, not indented blocks.
 #
 # The opening fence's character and length are remembered, so a ```-block nested inside a
 # ````-block does not toggle the state back off and leak its contents. Without that, quoting a
@@ -104,7 +120,7 @@ normalise() {
     }'
 }
 
-closed="$(printf '%s\n' "$PR_BODY" | strip_comments | strip_fences | find_closers | normalise | sort -u)"
+closed="$(printf '%s\n' "$PR_BODY" | strip_fences | strip_code_spans | strip_comments | find_closers | normalise | sort -u)"
 count="$(printf '%s' "$closed" | grep -c . || true)"
 
 if [[ "$count" -le 1 ]]; then
