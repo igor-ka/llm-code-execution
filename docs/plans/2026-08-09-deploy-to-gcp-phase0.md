@@ -14,17 +14,16 @@ and refuses to serve the SPA without it. A repo-root `Dockerfile` combines the t
 **Tech Stack:** TypeScript, Node 22, Express 5, `pg`, `redis`, Vitest + supertest (backend);
 React, Vite, Vitest (frontend); Docker multi-stage build.
 
-**PR boundaries:** six PRs, one child issue each. Child issues are filed once this plan is
-approved (`docs/sdlc.md`: children come after the plan), one per row, in this order:
+**PR boundaries:** six PRs, one child issue each, in this order:
 
-| PR | Deliverable | Depends on |
-| --- | --- | --- |
-| 1 | Structured logging (`log.ts`), adopted at every non-CLI `console` site | — |
-| 2 | Advisory-locked migration runner | — |
-| 3 | Composition root owns pool + Redis; graceful `SIGTERM` shutdown; `PORT` from env | PR 1 |
-| 4 | The build emits the production CSP; the backend serves the SPA under it | PR 1, PR 3 |
-| 5 | Single production image (SPA + API, one origin) | PR 3, PR 4 |
-| 6 | ADR-0004 — the hosting decision | — |
+| PR | Deliverable | Closes | Depends on |
+| --- | --- | --- | --- |
+| 1 | Structured logging (`log.ts`), adopted at every non-CLI `console` site | #83 | — |
+| 2 | Advisory-locked migration runner | #84 | — |
+| 3 | Composition root owns pool + Redis; graceful `SIGTERM` shutdown; `PORT` from env | #85 | PR 1 |
+| 4 | The build emits the production CSP; the backend serves the SPA under it | #86 | PR 1, PR 3 |
+| 5 | Single production image (SPA + API, one origin) | #87 | PR 3, PR 4 |
+| 6 | ADR-0004 — the hosting decision | #88 | — |
 
 PRs 1, 2 and 6 are independent and can land in any order. **PR 4 depends on 1 and 3** for reasons
 that are easy to miss: Step 11 locates the error handler by the log line PR 1 introduces, and
@@ -33,8 +32,8 @@ and "serve under the policy" are separable commits: emitting a file nobody reads
 deliverable, and splitting them would leave a merged PR whose only effect is a build artifact with
 no consumer.
 
-**Before filing the child issues, rebase onto `main`.** This branch was cut before #80 landed, so
-it does not yet carry the `PR shape` workflow that enforces the one-child rule at merge time.
+This branch was rebased onto `main` after #80 landed, so the `PR shape` gate that enforces the
+one-child rule at merge time is live for every PR below.
 
 ---
 
