@@ -73,6 +73,12 @@ refutes "a human author is not exempt" "chore(deps): mimic dependabot[bot]" "igo
 
 refutes "a lookalike actor is not exempt" "chore(deps): bump something" "dependabot"
 
+# This case pins the QUOTING of the comparison, not the comparison. In [[ x == y ]] the
+# right-hand side is a glob unless quoted, so an unquoted `== dependabot[bot]` would read
+# `[bot]` as a character class matching one of b/o/t — making `dependabott` (a registerable
+# GitHub username) exempt from a required check. Correct today; this is what keeps it correct.
+refutes "a glob-collision actor is not exempt" "chore(deps): bump something" "dependabott"
+
 echo
 if [[ "$fail" -gt 0 ]]; then
   echo "✗ ${fail} failed, ${pass} passed"
