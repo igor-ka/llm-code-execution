@@ -98,19 +98,37 @@ dollar of actual spend. Both are cheap and both are needed.
 documents the trap: a workflow-level path filter makes a required check never report, which hangs
 merges forever. The job is a few seconds; it runs unconditionally.
 
-## Prerequisites — done once, by hand, before PR 2
+## Prerequisites
 
-PR 1 is entirely offline and needs none of this. **PR 2 onward requires a live project**, which
-starts the 90-day trial clock (D2).
+**Before PR 1** — PR 1 needs only Terraform installed and network access to the provider registry.
+No GCP account, no credentials.
 
-1. Install the tools (neither is present on this machine — verified 2026-08-10):
-   `brew install terraform google-cloud-sdk`
-2. Create the Google Cloud account and activate the $300/90-day trial. **Write the activation date
+1. `brew install terraform` (not present on this machine — verified 2026-08-10).
+
+**Before PR 2** — everything below stands up the live project, which starts the 90-day trial
+clock (D2).
+
+2. `brew install google-cloud-sdk`.
+3. Create the Google Cloud account and activate the $300/90-day trial. **Write the activation date
    down** — it is the input to the day-91 teardown in PR 6.
-3. Create the project and note its ID (used as `var.project_id`; the state bucket derives from it):
+4. Create the project and note its ID (used as `var.project_id`; the state bucket derives from it):
    `gcloud projects create llm-code-exec-<suffix> --name="LLM code execution"`
-4. Link billing: `gcloud billing projects link <project-id> --billing-account=<ACCOUNT_ID>`
-5. `gcloud auth login` and `gcloud auth application-default login` — Terraform reads the latter.
+5. Set it as the active project — `gcloud config set project <project-id>`. Several later steps
+   (`gcloud secrets versions add`, the teardown checks) take no `--project` flag and read this.
+6. Link billing: `gcloud billing projects link <project-id> --billing-account=<ACCOUNT_ID>`
+7. Enable the two APIs Terraform needs *before* it can enable anything else:
+
+```bash
+gcloud services enable cloudresourcemanager.googleapis.com serviceusage.googleapis.com \
+  --project <project-id>
+```
+
+   This is not redundant with `infra/apis.tf`. `data "google_project" "this"` is read at **plan**
+   time, before any resource in `apis.tf` is created, and `user_project_override` bills that read
+   to the new project — so a project without Cloud Resource Manager fails the plan with a 403 that
+   `apis.tf` can never get far enough to fix. Idempotent, so it costs nothing if they were already
+   on.
+8. `gcloud auth login` and `gcloud auth application-default login` — Terraform reads the latter.
 
 ---
 
@@ -218,9 +236,10 @@ provider "google" {
 # budget filters (budget.tf) are both defined in terms of the number. Declared here rather than in
 # whichever file first needed it, so neither of those files owns a dependency the other has.
 #
-# Read at plan time via cloudresourcemanager.googleapis.com, which is enabled by default on a
-# project created with `gcloud projects create`. `terraform validate` never reads it, which is why
-# CI needs no credentials.
+# Read at plan time via cloudresourcemanager.googleapis.com, which is enabled by hand in the
+# plan's Prerequisites — because this data source is read BEFORE apis.tf can enable anything, and
+# user_project_override bills the read to this project. `terraform validate` never reads it, which
+# is why CI needs no credentials.
 data "google_project" "this" {
   project_id = var.project_id
 }
@@ -755,9 +774,14 @@ if [[ -z "$WATCHED_RE" ]]; then
   bad "WATCHED_RE extraction" "could not parse WATCHED_RE out of $SCRIPT" ""
 fi
 
+# Herestrings, not pipes, for the same reason check-sdlc-sync.sh:78-81 already documents: `grep -q`
+# exits on first match, the writer takes SIGPIPE and returns 141, and this file's `pipefail`
+# (line 17) makes 141 the pipeline's status. In `unwatched()` that inverts to a pass — a gate that
+# cannot fail. The repo has paid for this lesson once already.
+
 # watched <name> <path> — the path must be governed by the SDLC contract.
 watched() {
-  if printf '%s\n' "$2" | grep -Eq "$WATCHED_RE"; then
+  if grep -Eq "$WATCHED_RE" <<<"$2"; then
     ok "$1"
   else
     bad "$1" "expected '$2' to be watched" ""
@@ -766,7 +790,7 @@ watched() {
 
 # unwatched <name> <path> — the path must NOT drag docs/sdlc.md into every change.
 unwatched() {
-  if printf '%s\n' "$2" | grep -Eq "$WATCHED_RE"; then
+  if grep -Eq "$WATCHED_RE" <<<"$2"; then
     bad "$1" "expected '$2' NOT to be watched" ""
   else
     ok "$1"
@@ -793,10 +817,23 @@ unwatched "backend source is not watched"       "backend/src/log.ts"
 ./scripts/tests/check-sdlc-sync.test.sh
 ```
 
-Expected: the two `infra/` watched cases FAIL (`✗ infra/verify.sh is watched`,
-`✗ infra/tests/ is watched`) and every other new case passes — which is the point: the six
-passing cases prove the extraction and the matcher work, so the two failures are about the regex
-and not about the harness.
+Expected, exactly (this was run against today's `check-sdlc-sync.sh` while writing the plan, so
+it is observed output rather than a prediction):
+
+```
+  ✓ backend/verify.sh is watched
+  ✓ frontend/verify.sh is watched
+  ✗ infra/verify.sh is watched — expected 'infra/verify.sh' to be watched
+  ✗ infra/tests/ is watched — expected 'infra/tests/gates.test.sh' to be watched
+  ✓ workflows are watched
+  ✓ scripts/ is watched
+  ✓ infra/*.tf is not watched
+  ✓ infra/bootstrap.sh is not watched
+  ✓ backend source is not watched
+```
+
+Seven passes and two failures is the point: the passes prove the extraction and the matcher work,
+so the two failures are about the regex and not about the harness.
 
 - [ ] **Step 3: Extend the watched paths**
 
@@ -812,9 +849,15 @@ WATCHED_RE='^(\.claude/skills/|\.github/workflows/|scripts/|infra/tests/|backend
 ./scripts/tests/check-sdlc-sync.test.sh
 ```
 
-Expected: every case passes.
+Expected: every case passes — the nine above plus the suite's pre-existing early-exit cases.
+(The nine were verified against this exact regex while the plan was written.)
 
-- [ ] **Step 5: Update `docs/sdlc.md`** — three places, each required by the contract:
+- [ ] **Step 5: Update `docs/sdlc.md`** — four places, each required by the contract. The
+  watched-path list is stated in four documents and all four drift together; grep
+  `either \`verify.sh\`` across the repo before declaring this step done.
+
+0. **The opening contract statement, `docs/sdlc.md:5-9`**: "either `verify.sh`" becomes "any of
+   the three `verify.sh` scripts", and `infra/tests/` joins that sentence's list.
 
 1. **"Changing this SDLC" → the watched-paths list**: `backend/verify.sh` or `frontend/verify.sh`
    becomes `backend/verify.sh`, `frontend/verify.sh` or `infra/verify.sh`, and add
@@ -842,16 +885,30 @@ test that proves it *fails* on bad input, which is the property Phase 0 learned 
    sentence, which becomes *"The ruleset requires `Backend checks`, `Frontend checks`, `SDLC
    docs`, `PR shape` and `Terraform checks` by name."*
 
-- [ ] **Step 6: Update `README.md`** — two places:
+- [ ] **Step 6: Update `README.md`** — four places:
 
 - **Layout** (near `README.md:47`): add the `infra/` entry with its `verify.sh`.
 - **Verification** (`README.md:261`): "Each side has a single `verify.sh`" becomes three, with the
   infra one and the same "no plan, no credentials" note as above, compressed to two sentences.
+- **`README.md:271`**: "Both accept `SKIP_INSTALL=1` … and `SKIP_DOCKER=1`" becomes "The backend
+  and frontend scripts accept …" — the infra script accepts neither.
+- **`README.md:275`**: the `SDLC docs` watched-path list — "either `verify.sh`, `scripts/**`, or
+  `.github/workflows/**`" becomes "any of the three `verify.sh` scripts, `infra/tests/**`,
+  `scripts/**`, or `.github/workflows/**`".
 
-- [ ] **Step 7: Update `CLAUDE.md`** — the "Checks before pushing" list gains
-  `- Infra: cd infra && ./verify.sh`, and the skill routing table gains a row:
-  *"Touching `infra/**` → `security-and-hardening` (threat-model first)"*. Infrastructure defines
-  the blast radius of everything else; it belongs in the same row as `sandbox/**`.
+- [ ] **Step 7: Update `CLAUDE.md`** — five places:
+
+- **"Checks before pushing"** (`CLAUDE.md:40`): add `- Infra: cd infra && ./verify.sh`.
+- **`CLAUDE.md:45`**: "Both accept `SKIP_INSTALL=1` and `SKIP_DOCKER=1`" becomes "The backend and
+  frontend scripts accept `SKIP_INSTALL=1` and `SKIP_DOCKER=1`."
+- **`CLAUDE.md:16`**: the SDLC-sync contract's "either `verify.sh`" becomes "any of the three
+  `verify.sh` scripts".
+- **`CLAUDE.md:102`**: the required-check list `(Backend checks, Frontend checks, SDLC docs, PR
+  shape)` gains `Terraform checks`. Task 6 adds it to the live ruleset; leaving this line stale
+  breaks the repo's own "CI job names are a contract" section on the day it starts mattering.
+- **The skill routing table**: add a row — *"Touching `infra/**` → `security-and-hardening`
+  (threat-model first)"*. Infrastructure defines the blast radius of everything else; it belongs
+  in the same row as `sandbox/**`.
 
 - [ ] **Step 8: Verify the whole repo**
 
@@ -881,7 +938,15 @@ gh pr create --title "feat(infra): the Terraform root and the check that guards 
   contract in `CLAUDE.md` is that the ruleset changes as part of the same change — not that the
   API call precedes the merge.
 
-- [ ] **Step 2: Add the required check**
+- [ ] **Step 2: Back up the ruleset first.** This is a blind `PUT` over the branch protection on
+  `main`. A bad transform does not error — it silently replaces the rules, and there is no undo
+  without a copy of what was there.
+
+```bash
+gh api repos/igor-ka/llm-code-execution/rulesets/17055903 > ~/ruleset-backup.json
+```
+
+- [ ] **Step 3: Add the required check**
 
 ```bash
 gh api repos/igor-ka/llm-code-execution/rulesets/17055903 \
@@ -894,10 +959,9 @@ gh api repos/igor-ka/llm-code-execution/rulesets/17055903 \
 
 gh api --method PUT repos/igor-ka/llm-code-execution/rulesets/17055903 \
   --input ~/ruleset-with-terraform.json
-rm ~/ruleset-with-terraform.json
 ```
 
-- [ ] **Step 3: Confirm**
+- [ ] **Step 4: Confirm, then clean up**
 
 ```bash
 gh api repos/igor-ka/llm-code-execution/rulesets/17055903 \
@@ -906,6 +970,15 @@ gh api repos/igor-ka/llm-code-execution/rulesets/17055903 \
 
 Expected: five lines — `Backend checks`, `Frontend checks`, `SDLC docs`, `PR shape`,
 `Terraform checks`.
+
+Only once those five print, remove the working files:
+
+```bash
+rm ~/ruleset-with-terraform.json ~/ruleset-backup.json
+```
+
+To restore if anything went wrong:
+`gh api --method PUT repos/igor-ka/llm-code-execution/rulesets/17055903 --input ~/ruleset-backup.json`
 
 ---
 
@@ -1275,6 +1348,10 @@ locals {
     "redis-url"         = "REDIS_URL — Upstash connection string; the backend refuses to boot without it"
     "oidc-audience"     = "OIDC_AUDIENCE — Auth0 API identifier"
     "oidc-issuer"       = "OIDC_ISSUER — Auth0 tenant issuer URL, with its trailing slash"
+    # Not derived from the issuer anywhere in the backend: config.ts:106 reads OIDC_JWKS_URL with
+    # an empty default and auth.ts:74 hands it straight to jwksFor(). Omit this container and a
+    # Phase 2 deploy wired from this list verifies exactly zero tokens.
+    "oidc-jwks-url" = "OIDC_JWKS_URL — Auth0 JWKS endpoint"
   }
 }
 
@@ -1337,11 +1414,14 @@ believing the gate works and knowing it does.
 ./verify.sh && terraform apply && cd ..
 ```
 
-Expected: five secrets and five IAM members created.
+Expected: six secrets and six IAM members created.
 
 - [ ] **Step 4: Populate the payloads and confirm they are not in state**
 
 ```bash
+# The key already lives in the repo-root .env that local dev uses; read it from there rather than
+# retyping it. `set -a` exports what the file assigns so the subshell below can see it.
+set -a && . ./.env && set +a
 printf '%s' "$ANTHROPIC_API_KEY" | gcloud secrets versions add anthropic-api-key --data-file=-
 cd infra && terraform state pull | grep -c "sk-ant" ; cd ..
 ```
@@ -1351,8 +1431,11 @@ because a trailing newline becomes part of the secret and produces an API key th
 authentication for reasons nothing will explain.
 
 - [ ] **Step 5: Extend the bootstrap runbook** — replace section 7's forward reference with the
-  real `gcloud secrets versions add` commands for all five secrets, the `printf` warning, and the
-  note that `terraform destroy` deletes them.
+  real `gcloud secrets versions add` commands, the `printf` warning, and the note that
+  `terraform destroy` deletes them. **Which of the six can actually be populated now is a
+  Phase 1 scope question — see the Plan review log.** `anthropic-api-key` and the three `oidc-*`
+  values exist today; `database-url` needs Cloud SQL (D5, Phase 2) and `redis-url` needs an
+  Upstash instance no phase has yet provisioned (D8).
 
 - [ ] **Step 6: Commit and open the PR**
 
@@ -1778,4 +1861,48 @@ weak attribute condition is the single highest-consequence defect available in t
 
 ## Plan review log
 
-_To be filled in after the staff-engineer review, before implementation._
+Staff-engineer review 2026-08-10 — **applied without asking** (mechanical; each verified against
+the codebase before transcribing):
+
+- **Prerequisites**: split into "before PR 1" (Terraform only) and "before PR 2" (everything GCP).
+  The old text claimed PR 1 was "entirely offline" while Task 3 runs `terraform init` and
+  `providers lock`.
+- **Prerequisites step 5**: added `gcloud config set project <project-id>`. Task 12 Step 4 calls
+  `gcloud secrets versions add` with no `--project` while Task 16 Step 5 passes one — inconsistent,
+  and the former errors on a fresh machine.
+- **Prerequisites step 7 + `infra/providers.tf` comment**: added an explicit
+  `gcloud services enable cloudresourcemanager.googleapis.com serviceusage.googleapis.com`, and
+  corrected the comment that claimed Cloud Resource Manager is enabled by default. `data
+  "google_project" "this"` is read at plan time, before `apis.tf` can enable anything, and
+  `user_project_override` bills that read to the new project.
+- **Task 12 Step 1**: added the sixth secret, `oidc-jwks-url`. `config.ts:106` reads
+  `OIDC_JWKS_URL` with an empty default and `auth.ts:74` passes it straight to `jwksFor()` — it is
+  derived from nothing, so five containers would have left Phase 2 verifying zero tokens. Expected
+  counts in Steps 3 and 5 updated from five to six.
+- **Task 5 Step 1**: `watched()` / `unwatched()` now use a herestring instead of
+  `printf … | grep -q`. Under this suite's `pipefail`, `grep -q` exits early, the writer takes
+  SIGPIPE and returns 141, and `unwatched()` would pass vacuously —
+  `check-sdlc-sync.sh:78-81` already documents and fixes the identical trap.
+- **Task 5 Step 5**: added a fourth `docs/sdlc.md` location (`:5-9`, the opening contract
+  statement). The watched-path list is stated in four documents and all four drift together.
+- **Task 5 Step 6**: added `README.md:271` ("Both accept `SKIP_INSTALL=1`…") and `README.md:275`
+  (the `SDLC docs` watched-path list) to the edits.
+- **Task 5 Step 7**: added `CLAUDE.md:16`, `:45`, and `:102`. The last matters most — Task 6 adds
+  `Terraform checks` to the live ruleset, and `CLAUDE.md:102` enumerates the required checks, so
+  leaving it stale breaks the repo's own "CI job names are a contract" section.
+- **Task 6**: back up the ruleset before the blind `PUT`, and move the `rm` after the confirmation
+  step. Added the restore command.
+
+Also verified while applying, and left alone because the review confirmed them correct: the
+provider and Terraform version pins, `deletion_protection` on `google_secret_manager_secret`,
+the `repository`/`service_account_id` attribute choices, the numeric GitHub IDs, the ruleset ID
+and the jq projection, and the WIF attribute condition (attacked from six angles — owner rename,
+repo rename, a tag named `main`, topic branches, fork PRs, default audience — and it fails closed
+on all of them).
+
+**Escalated to the user — not applied.** Four judgment findings, listed in the handover, on: the
+soft-delete of workload identity pools defeating Task 16's destroy/rebuild proof; the credit-burn
+budget defaulting to a *monthly* period and therefore never firing; the Artifact Registry cleanup
+policy never deleting a tagged image; and which of the six secrets Phase 1 can populate when
+`database-url` and `redis-url` have no value until Phase 2. **Implementation does not start until
+these are decided.**
