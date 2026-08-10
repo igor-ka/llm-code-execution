@@ -63,21 +63,32 @@ docker_() {
     --build-arg VITE_AUTH0_CLIENT_ID=verify \
     --build-arg VITE_AUTH0_AUDIENCE=https://verify.invalid/api \
     -t llm-code-execution:verify ..
+  # NOTE the `if …; then exit 1; fi` form. `! grep -q …` under `set -e` does NOT abort: POSIX
+  # exempts a command whose return value is inverted with `!` from errexit, so the negated
+  # assertions silently passed on a bad image. frontend/verify.sh uses the same explicit form for
+  # the same reason.
   run docker run --rm llm-code-execution:verify sh -c '
     set -e
     # The CSP must have shipped, and must be the PRODUCTION policy.
     grep -qE "script-src '"'"'self'"'"'\s*(;|$)" /app/public/csp.txt
-    ! grep -q "unsafe-eval" /app/public/csp.txt
+    if grep -q "unsafe-eval" /app/public/csp.txt; then
+      echo "csp.txt permits unsafe-eval — that is the DEV policy" >&2; exit 1
+    fi
 
-    # No PLAINTEXT origin may appear in the policy. connect-src is generated from the same
-    # resolveApiBase() the bundle uses, so a VITE_API_BASE left at the localhost fallback shows up
-    # here as http://localhost:8000 — this is the check that catches an image built without the
-    # same-origin API base.
+    # No PLAINTEXT origin in the policy. connect-src is generated from the same resolveApiBase()
+    # the bundle uses, so a VITE_API_BASE left at the localhost fallback shows up here.
     #
-    # NOTE: do NOT grep the bundle for localhost. resolveApiBase() contains that string as its
-    # fallback LITERAL, so it is present in every build by construction, whether or not it is the
-    # value in use. The policy reflects the RESOLVED value; the bundle does not.
-    ! grep -q "http://" /app/public/csp.txt
+    # Scope of what this proves: THIS build passes no VITE_API_BASE, so it exercises the ARG
+    # default (""). It therefore guards the default and the policy builder, not a real deploy
+    # that passes a plaintext base — that one is caught by the same assertion run against the
+    # image you actually ship.
+    #
+    # Do NOT grep the bundle for localhost instead: resolveApiBase() carries that string as its
+    # fallback LITERAL, so it is present in every build by construction whether or not it is in
+    # use. The policy reflects the RESOLVED value; the bundle does not.
+    if grep -q "http://" /app/public/csp.txt; then
+      echo "csp.txt names a plaintext http:// origin" >&2; exit 1
+    fi
 
     # Never root.
     [ "$(id -u)" != "0" ]

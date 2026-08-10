@@ -15,7 +15,11 @@ security
 scripts
 *.md
 
-# Never let a real environment file into an image layer.
-.env
-.env.*
-!.env.example
+# Never let a real environment file into an image layer. The `**/` prefixes are load-bearing:
+# a bare `.env` matches ONLY the context root, so frontend/.env.local — which README tells every
+# developer to create with their real Auth0 values — would be copied by `COPY frontend/ ./` into
+# the frontend stage's layer. The final image would not carry it, but `--target frontend`,
+# `docker history` and any exported BuildKit cache would.
+**/.env
+**/.env.*
+!**/.env.example

@@ -48,7 +48,9 @@ backend/
 frontend/                    React + Vite UI
   src/                       App.tsx, api.ts, history.ts, components/ (HistorySidebar, SessionView, RunResult)
   verify.sh                  one-command checks (lint + format + vitest + build + docker)
-docker-compose.yml           backend + frontend + postgres + redis + one-shot sandbox-image build
+docker-compose.yml           local dev topology: backend + frontend + postgres + redis + one-shot sandbox-image build
+Dockerfile                   PRODUCTION image: SPA + API in one container, one origin, non-root, no Docker socket
+.dockerignore                build context for the production image (the repo root is that context)
 ```
 
 ## Prerequisites
@@ -260,7 +262,9 @@ Each side has a single `verify.sh` that runs everything CI runs — so local and
 drift (CI invokes the same scripts).
 
 - **Backend:** `cd backend && ./verify.sh` — installs deps, runs ESLint + Prettier + Vitest,
-  type-checks/builds (`tsc`), and builds the backend and sandbox Docker images.
+  type-checks/builds (`tsc`), and builds three Docker images: the dev backend image, the sandbox
+  image, and the repo-root production image — then asserts inside that image that the production
+  CSP shipped, that the policy names no plaintext origin, and that the runtime user is not root.
 - **Frontend:** `cd frontend && ./verify.sh` — installs deps, runs ESLint + Prettier +
   Vitest, type-checks/builds, and builds the frontend Docker image.
 

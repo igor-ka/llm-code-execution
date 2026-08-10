@@ -28,9 +28,11 @@ ENV VITE_API_BASE=$VITE_API_BASE \
 # Auth0 return a JWT the backend can verify instead of an opaque token. Built empty, the bundle is
 # valid, the policy is valid and strict, every check passes — and login is broken. staticSite.ts
 # makes a MISSING policy fatal but cannot detect a WRONG one, so this is the only catchable point.
+# printenv, not `eval "val=\$$v"`: eval expands the value unquoted, so an audience containing a
+# space dies with an opaque "not found" instead of the intended message, and one containing `;` or
+# backticks would execute at build time.
 RUN for v in VITE_AUTH0_DOMAIN VITE_AUTH0_CLIENT_ID VITE_AUTH0_AUDIENCE; do \
-      eval "val=\$$v"; \
-      [ -n "$val" ] || { echo "$v is required: pass --build-arg $v=<value>"; exit 1; }; \
+      [ -n "$(printenv "$v")" ] || { echo "$v is required: pass --build-arg $v=<value>"; exit 1; }; \
     done
 RUN npm run build
 
