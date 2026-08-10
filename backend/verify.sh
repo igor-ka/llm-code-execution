@@ -90,10 +90,32 @@ docker_() {
       echo "csp.txt names a plaintext http:// origin" >&2; exit 1
     fi
 
+    # The Auth0 origin must have REACHED the policy. Without this, a regression in the
+    # ARG -> ENV -> buildCsp wiring leaves every other assertion green while the deployed app
+    # blocks its own login: the policy is still valid, still strict, and missing frame-src /
+    # connect-src for the tenant. The Dockerfile guard only proves the value was non-EMPTY.
+    if ! grep -q "verify.invalid" /app/public/csp.txt; then
+      echo "csp.txt does not name the Auth0 origin that was passed as a build arg" >&2; exit 1
+    fi
+
     # Never root.
     [ "$(id -u)" != "0" ]
     echo "production image assertions passed"
   '
+  # Negative test: the Dockerfile MUST reject an empty VITE_AUTH0_* value. CI always supplies all
+  # three, so without this the guard could be deleted and every check would stay green — the
+  # classic gate that does not gate. Runs after the positive build, so the npm ci layer is warm
+  # and this costs seconds. Omitting the audience exercises the ARG default ("").
+  echo
+  echo "==> docker build (negative: VITE_AUTH0_AUDIENCE omitted, MUST fail)"
+  if docker build -f ../Dockerfile \
+      --build-arg VITE_AUTH0_DOMAIN=verify.invalid \
+      --build-arg VITE_AUTH0_CLIENT_ID=verify \
+      -t llm-code-execution:argcheck .. >/dev/null 2>&1; then
+    echo "Dockerfile built with VITE_AUTH0_AUDIENCE empty — the build-arg guard is not enforcing" >&2
+    exit 1
+  fi
+  echo "    rejected as expected"
 }
 
 all() {
