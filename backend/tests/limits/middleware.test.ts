@@ -81,7 +81,9 @@ describe("quota middleware", () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     await request(app(broken)).post("/api/execute").send({ prompt: "1" }).expect(200);
     expect(spy).toHaveBeenCalled(); // silence would violate S9
-    expect(String(spy.mock.calls[0]?.[0])).toContain("FAILING OPEN");
+    // Joined, not calls[0]: every severity shares this stream now, so any log line added
+    // elsewhere in the request path would otherwise break this assertion in an unrelated PR.
+    expect(spy.mock.calls.flat().join("\n")).toContain("FAILING OPEN");
     spy.mockRestore();
   });
 
