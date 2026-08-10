@@ -579,6 +579,14 @@ Four details in that rule are not decoration:
   turned every bot-armed PR into "a human did this, leave it alone", reinstating the bug the step
   exists to prevent. Only a live run surfaced it. Key on the boolean.
 
+**An auto-merge does not re-run `CI` on `main`.** Events triggered by `GITHUB_TOKEN` do not start
+new workflow runs, and auto-merge armed by this workflow merges as `app/github-actions`. Confirmed
+on the first unattended merge: `8211ee8` (PR #117) has no `push`-side CI run, while every
+human-merged commit around it does. That is harmless here — `strict_required_status_checks_policy`
+means the PR's own checks already ran against exactly this base — but it does mean the `main`
+history has gaps in its push-side runs, and anything built later that keys off "CI ran on main"
+must not assume otherwise.
+
 **What it is not.** It does not weaken any gate. Native auto-merge waits for all four required
 checks *and* for every review thread to be resolved. Copilot reviews every PR including
 Dependabot's, so a single inline comment parks the merge until someone answers it. That is the

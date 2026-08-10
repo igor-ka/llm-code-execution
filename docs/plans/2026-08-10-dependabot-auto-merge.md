@@ -1057,3 +1057,25 @@ step's "not armed, nothing to disarm" path, which had been failing incorrectly. 
     captured payloads**, including the exact object `gh` returned for #117. A hand-written stub
     can only encode what the author believes; a captured payload encodes what GitHub actually
     sends. That distinction is the whole lesson of this defect.
+
+### #94's acceptance criteria — final status
+
+| Criterion | Status |
+| --- | --- |
+| `required_review_thread_resolution` question answered and recorded | ✅ in the issue body, 2026-08-10 |
+| `allow_auto_merge` enabled on the repository | ✅ Task 1 |
+| Workflow arms auto-merge for `dependabot[bot]` patch/minor only | ✅ #126, corrected by #127 and #128 |
+| `--squash`; `fetch-metadata` pinned to a full SHA; no `pull_request_target` | ✅ |
+| **A real patch or minor Dependabot PR merges with no human interaction** | ✅ **PR #117 merged as `8211ee8` at 21:36:05 by `app/github-actions`** |
+| A real **major** Dependabot PR is confirmed *not* to auto-merge | ✅ #120, `not-eligible: at least one dependency is not patch or minor` |
+| `docs/sdlc.md` updated in the same PR | ✅ |
+
+**Task 7 Step 8, answered.** The auto-merge produced **no `push`-side `CI` run on `main`** —
+`8211ee8` has none, while every human-merged commit around it does. This confirms the documented
+rule that `GITHUB_TOKEN`-triggered events do not start new workflow runs. Recorded in
+`docs/sdlc.md` rather than left as folklore.
+
+**Task 7 Step 7b (the eligible → ineligible disarm transition) has still not been exercised
+live.** No open PR has made that transition. The path is covered by the stub test against a real
+captured payload, and its failure mode is loud, but it has not run in production — stated here as
+a known gap rather than claimed as verified.
