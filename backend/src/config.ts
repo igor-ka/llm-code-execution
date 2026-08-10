@@ -30,6 +30,7 @@ export interface Settings {
   historyEnabled: boolean; // convenience: authRequired && databaseUrl set
   logFormat: "json" | "text"; // "json" for Cloud Logging ingestion; "text" for humans
   port: number; // Cloud Run injects PORT; 8080 is its default contract
+  shutdownGraceMs: number; // must stay UNDER the platform SIGTERM->SIGKILL window
   redisUrl: string;
   quotaBurst: number;
   quotaBurstWindowSeconds: number;
@@ -71,6 +72,19 @@ const posInt = (name: string, v: string | undefined, dflt: number): number => {
 const bool = (v: string | undefined, dflt: boolean): boolean =>
   v === undefined ? dflt : !["", "false", "0", "no", "off"].includes(v.toLowerCase());
 
+/**
+ * A positive integer that is also a legal TCP port. posInt alone accepts 70000, which passes
+ * config and then fails asynchronously inside listen() — where it escapes the fatal-log path
+ * entirely and surfaces as a raw ERR_SOCKET_BAD_PORT stack.
+ */
+const tcpPort = (name: string, v: string | undefined, dflt: number): number => {
+  const n = posInt(name, v, dflt);
+  if (n > 65535) {
+    throw new Error(`${name} must be a valid TCP port (1-65535), got ${JSON.stringify(v)}`);
+  }
+  return n;
+};
+
 export function loadSettings(env: Env = process.env): Settings {
   const databaseUrl = str(env.DATABASE_URL, "");
   const authRequired = bool(env.AUTH_REQUIRED, true);
@@ -93,7 +107,10 @@ export function loadSettings(env: Env = process.env): Settings {
     // configured. Anonymous/local mode (no DATABASE_URL) boots with history disabled.
     historyEnabled: authRequired && databaseUrl !== "",
     logFormat: str(env.LOG_FORMAT, "text") === "json" ? "json" : "text",
-    port: posInt("PORT", env.PORT, 8080),
+    port: tcpPort("PORT", env.PORT, 8080),
+    // 8s, inside Cloud Run's 10s window. At exactly 10s the force-exit fires with the
+    // platform kill and is decorative.
+    shutdownGraceMs: posInt("SHUTDOWN_GRACE_MS", env.SHUTDOWN_GRACE_MS, 8000),
     // Rate limiting. Defaults are deliberately conservative: 10 requests/minute of burst and
     // 100/hour sustained per identity, and 4 concurrent sandboxes (at 256 MB and 0.5 CPU each,
     // roughly what a 4-core/8 GB dev box tolerates). All tunable — they are config, not

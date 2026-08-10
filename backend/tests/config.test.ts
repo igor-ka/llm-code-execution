@@ -134,4 +134,13 @@ describe("port", () => {
   it("refuses a malformed PORT rather than listening somewhere unintended", () => {
     expect(() => loadSettings({ PORT: "80 80" })).toThrow(/PORT/);
   });
+
+  it("refuses an out-of-range PORT, which listen() would only reject asynchronously", () => {
+    expect(() => loadSettings({ PORT: "70000" })).toThrow(/PORT/);
+  });
+
+  it("defaults the shutdown grace period inside Cloud Run's 10s window", () => {
+    expect(loadSettings({}).shutdownGraceMs).toBe(8000);
+    expect(loadSettings({ SHUTDOWN_GRACE_MS: "5000" }).shutdownGraceMs).toBe(5000);
+  });
 });

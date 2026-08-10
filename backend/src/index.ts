@@ -6,7 +6,7 @@ import { migrate } from "./history/migrate.js";
 import { PostgresHistoryStore } from "./history/pgStore.js";
 import type { HistoryStore } from "./history/store.js";
 import { RedisQuotaStore } from "./limits/redisQuota.js";
-import { makeShutdown } from "./shutdown.js";
+import { makeShutdown, exitAfterFlush } from "./shutdown.js";
 import { log, configureLogger } from "./log.js";
 
 /**
@@ -20,6 +20,20 @@ async function main(): Promise<void> {
   // The composition root decides the log format, so settings stay the single source of truth
   // and log.ts never has to import config.ts (which loads dotenv) and create a cycle.
   configureLogger(settings.logFormat);
+
+  // Signal handlers go on BEFORE the async startup work, not after listen(). migrate() can block
+  // for up to the advisory lock's lock_timeout, and a SIGTERM arriving in that window would
+  // otherwise get the default disposition: killed abruptly, no log, indistinguishable from a
+  // crash. Until the server exists there is nothing to drain, so we just leave cleanly.
+  let shutdown = (signal: string): void => {
+    log.info("shutdown: signalled during startup, exiting before the server was listening", {
+      signal,
+    });
+    exitAfterFlush(0);
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+
   // Fail fast rather than serve traffic with the budget control absent (ADR-0003 D6).
   // Deliberately here and not in createApp: createApp is the seam every backend test builds on,
   // so a hard Redis dependency there would become a hard dependency of every unit test (S10).
@@ -47,19 +61,29 @@ async function main(): Promise<void> {
     });
   });
 
-  const shutdown = makeShutdown({
+  // listen() reports failures asynchronously via 'error' (EADDRINUSE, EACCES on a privileged
+  // port). By then main()'s promise has resolved, so main().catch below would never see it and
+  // Node's default for an unhandled 'error' event is to rethrow — a raw stack instead of the
+  // structured fatal line.
+  server.on("error", (err) => {
+    log.error("fatal: server error", { err, port: settings.port });
+    exitAfterFlush(1);
+  });
+
+  shutdown = makeShutdown({
     server,
+    graceMs: settings.shutdownGraceMs,
     cleanup: async () => {
-      await quota.close();
-      await pool?.end();
+      // allSettled, not sequential awaits: during a platform shutdown Redis is often going down
+      // with us, so quota.close() can reject — and a sequential await would skip pool.end()
+      // entirely, leaving Postgres connections to be severed by process.exit instead of drained.
+      await Promise.allSettled([quota.close(), pool?.end()]);
     },
     log: (message, fields) => log.info(message, fields),
   });
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 main().catch((err) => {
   log.error("fatal: backend failed to start", { err });
-  process.exit(1);
+  exitAfterFlush(1);
 });

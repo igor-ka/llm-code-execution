@@ -16,6 +16,20 @@ export interface ClosableServer {
   close(cb?: (err?: Error) => void): unknown;
 }
 
+/**
+ * Exit without truncating the logs that explain why.
+ *
+ * Under a container runtime stdout is a PIPE, which makes writes asynchronous — and
+ * `process.exit()` does not flush what is still buffered. Exiting directly after a log call can
+ * therefore drop the last line, which is exactly the line you need: "shutdown: complete", or
+ * worse, "fatal: backend failed to start", leaving an exit-1 container with empty logs.
+ *
+ * Writing an empty string queues the callback behind whatever is already in the buffer.
+ */
+export function exitAfterFlush(code: number): void {
+  process.stdout.write("", () => process.exit(code));
+}
+
 export interface ShutdownOptions {
   server: ClosableServer;
   /** Release external resources. Errors are logged, never fatal. */
@@ -26,6 +40,13 @@ export interface ShutdownOptions {
    * Deliberately UNDER the platform's own SIGTERM→SIGKILL window (Cloud Run's is 10s). At
    * exactly 10s this timer and the kill fire together and the force-exit never helps — the
    * process still dies looking like a crash, which is the outcome it exists to prevent.
+   *
+   * **A long `/api/execute` cannot finish inside this window and is not meant to.** Judge +
+   * generate are unbounded LLM round trips and the sandbox adds up to `SANDBOX_TIMEOUT_SECONDS`
+   * on top. Such a request is doomed either way — the platform kills the instance at 10s
+   * regardless — so the choice is only whether we exit under our own power with a log line
+   * saying so, or get SIGKILLed silently. The former is strictly more diagnosable. Tune with
+   * `SHUTDOWN_GRACE_MS` if the platform's window ever differs.
    */
   graceMs?: number;
   exit?: (code: number) => void;
@@ -36,7 +57,7 @@ export function makeShutdown({
   server,
   cleanup,
   graceMs = 8_000,
-  exit = (code) => process.exit(code),
+  exit = exitAfterFlush,
   log = () => {},
 }: ShutdownOptions): (signal: string) => void {
   let shuttingDown = false;
