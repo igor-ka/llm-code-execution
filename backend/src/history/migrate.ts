@@ -26,6 +26,16 @@ const MIGRATION_LOCK_KEY = 8410572301199;
  * A timeout converts that silent hang into a diagnosable crash with a real Postgres error. The
  * tradeoff is accepted deliberately: a genuinely slow migration running on another instance can
  * make this one crash and retry, which is noisy but visible — and these migrations are small.
+ *
+ * **It is a `SET`, not a `SET LOCAL`, and that is deliberate — do not `RESET` it after the lock
+ * is acquired.** The bound therefore also caps how long a *migration* waits for a table lock,
+ * which is the more valuable half once a migration alters an existing table. Postgres lock
+ * queues are FIFO and a waiting `ACCESS EXCLUSIVE` request blocks everything queued behind it,
+ * so an `ALTER TABLE sessions` waiting on one long-running query from the previous revision
+ * would stall every new read of that table — including the traffic that revision is still
+ * serving. Failing this deploy after 30s is strictly better than taking live reads down until
+ * the lock frees. The reading that this only bounds `pg_advisory_lock` is a natural one and the
+ * "fix" it suggests is a regression; hence this paragraph.
  */
 const LOCK_TIMEOUT = "30s";
 
@@ -47,7 +57,18 @@ async function applyPending(client: PoolClient): Promise<void> {
       await client.query("INSERT INTO schema_migrations (name) VALUES ($1)", [name]);
       await client.query("COMMIT");
     } catch (e) {
-      await client.query("ROLLBACK");
+      // Best-effort, and guarded on purpose. If the CONNECTION is what broke, ROLLBACK rejects
+      // too, and an unguarded `await` here would propagate that rejection instead of `e` — the
+      // operator then sees "Connection terminated unexpectedly" with no clue which migration
+      // failed. This runs before listen(), on the single client holding the advisory lock, so
+      // `e` is the entire diagnostic for a failed boot. Losing it to a secondary failure is the
+      // difference between a named bad migration and a mystery crash loop.
+      await client.query("ROLLBACK").catch((rollbackErr: unknown) => {
+        log.warn("migration rollback failed; surfacing the original migration error", {
+          migration: name,
+          err: rollbackErr,
+        });
+      });
       throw e;
     }
   }
