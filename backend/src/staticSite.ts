@@ -12,7 +12,19 @@
  */
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
+
+/**
+ * The request path, collapsed so guards below cannot be walked around.
+ *
+ * `//csp.txt` and `//api/whatever` do not match a naive `=== "/csp.txt"` or
+ * `startsWith("/api/")`, but `express.static` and `res.sendFile` normalize internally and serve
+ * them anyway — so the raw policy leaks and unmatched API paths answer with the SPA. Lowercased
+ * because a case-insensitive filesystem serves `/CSP.txt` from the same file.
+ */
+function guardPath(path: string): string {
+  return posix.normalize(path).toLowerCase();
+}
 
 /** Read the policy the build emitted. Throws if it is missing or obviously not a prod policy. */
 export function readCspPolicy(publicDir: string): string {
@@ -27,8 +39,15 @@ export function readCspPolicy(publicDir: string): string {
     );
   }
   const policy = raw.trim();
-  if (!policy.includes("script-src 'self'")) {
-    throw new Error(`${file} does not contain a production script-src; refusing to serve`);
+  // Not `includes("script-src 'self'")`: the DEV policy is `script-src 'self' 'unsafe-inline'
+  // 'unsafe-eval'`, which contains that substring. A dev policy passing this guard is exactly
+  // the regression it exists to prevent — the SPA served with eval enabled, looking fine.
+  const scriptSrc = /(?:^|;)\s*script-src\s+([^;]+)/.exec(policy)?.[1]?.trim();
+  if (scriptSrc !== "'self'") {
+    throw new Error(
+      `${file} has script-src ${JSON.stringify(scriptSrc ?? null)}, expected exactly "'self'" — ` +
+        `refusing to serve the app under a non-production policy`,
+    );
   }
   return policy;
 }
@@ -50,7 +69,7 @@ export function mountStaticSite(app: Express, publicDir: string): void {
   app.use((req: Request, res: Response, next: NextFunction) => {
     // csp.txt is server configuration, not a public asset. Skipping it here lets the request
     // fall through to the SPA fallback rather than handing the policy to anyone who asks.
-    if (req.path === "/csp.txt") return next();
+    if (guardPath(req.path) === "/csp.txt") return next();
     return serveAssets(req, res, next);
   });
 
@@ -58,11 +77,16 @@ export function mountStaticSite(app: Express, publicDir: string): void {
   app.use((req: Request, res: Response, next: NextFunction) => {
     // Only GET/HEAD reach the SPA; anything else unmatched is a genuine 404/405.
     if (req.method !== "GET" && req.method !== "HEAD") return next();
+    const path = guardPath(req.path);
     // An unmatched /api path is an API 404, never the SPA. Returning index.html there would turn
     // every client typo into a 200 with HTML, which breaks fetch callers in the most confusing
     // way available. Note the bare "/api" is checked too — startsWith("/api/") alone would let
     // exactly that one path through.
-    if (req.path === "/api" || req.path.startsWith("/api/")) return next();
+    if (path === "/api" || path.startsWith("/api/")) return next();
+    // A request for a FILE that does not exist is a 404, not the SPA. Otherwise a client holding
+    // a stale index.html asks for a purged /assets/index-abc123.js and receives HTML with a 200,
+    // failing later as an opaque module-parse error instead of an honest missing-asset 404.
+    if (posix.basename(path).includes(".")) return next();
     res.sendFile(indexHtml);
   });
 }

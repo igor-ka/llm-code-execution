@@ -2,6 +2,7 @@
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { buildCsp } from "./src/csp";
+import { resolveApiBase } from "./src/apiBase";
 
 /**
  * Emit the production CSP alongside the bundle.
@@ -24,17 +25,16 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "VITE_");
   const auth0Domain = env.VITE_AUTH0_DOMAIN || "";
 
-  // The production policy takes the RAW value, mirroring api.ts's `?? default` exactly. The dev
-  // fallback must not leak in here: the production image builds with VITE_API_BASE="" (the API is
-  // same-origin), and `"" || "http://localhost:8000"` would bake a plaintext localhost origin
-  // into connect-src — shipped in csp.txt, and caught by the image check as a build defect.
-  const prodCsp = buildCsp({ apiBase: env.VITE_API_BASE ?? "", auth0Domain, dev: false });
-  // The dev server keeps the convenience fallback; nothing it emits is ever deployed.
-  const devCsp = buildCsp({
-    apiBase: env.VITE_API_BASE || "http://localhost:8000",
-    auth0Domain,
-    dev: true,
-  });
+  // THE SAME resolution the bundle uses (src/apiBase.ts), not a lookalike. `?? ""` here and
+  // `?? "http://localhost:8000"` in the app would agree when the variable is set and diverge
+  // when it is unset — shipping a bundle that calls localhost under a policy that forbids it,
+  // with every check still green because the policy looks strict.
+  //
+  // The production image builds with VITE_API_BASE="" (same-origin API), so connect-src reduces
+  // to 'self'; an unset value means a local build, which really does call localhost.
+  const apiBase = resolveApiBase(env.VITE_API_BASE);
+  const prodCsp = buildCsp({ apiBase, auth0Domain, dev: false });
+  const devCsp = buildCsp({ apiBase, auth0Domain, dev: true });
 
   return {
     plugins: [react(), emitCsp(prodCsp)],
