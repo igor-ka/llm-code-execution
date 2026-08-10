@@ -60,13 +60,22 @@ against what `DockerBackend` enforces today:
 | --- | --- | --- |
 | Network | `--network none` | **Denied by default** |
 | Credentials | nothing passed in | no host env, no secrets, **no metadata server** |
-| Filesystem | read-only + tmpfs | read-only base, writes to a discarded memory overlay |
+| Filesystem | read-only + tmpfs (a write outside tmpfs **fails**) | read-only base; a write anywhere **succeeds** into a discarded memory overlay |
 | Startup | sub-second | ~500 ms |
 | Per-execution CPU/mem/PID caps | enforced | **undocumented** (D7) |
 
 Two properties *improve*: egress is denied without configuring anything, and the sandbox cannot
 reach the metadata server — a concern the local backend never had to think about because there was
 no metadata server to reach.
+
+**The filesystem row is not an equivalence, and the difference is observable.** Both designs
+contain the write — nothing reaches the host, nothing persists past the execution. But under
+`ReadonlyRootfs` a write outside the tmpfs *fails* with `EROFS`, while in a sandbox it *succeeds*
+into an overlay that is then thrown away. The containment outcome is the same; the behaviour the
+README documents is not. Spec **S3** requires the existing check *"writing outside the tmpfs is
+blocked"* to pass against the deployed backend — that check must be **restated** for this backend
+(*a write outside the tmpfs does not persist and is invisible to the host*), not merely re-run and
+expected to go green.
 
 *Rejected: Cloud Run Jobs per execution.* GA rather than preview, and it keeps per-execution
 resource caps. But Cloud Run tasks have **default internet egress**, so matching today's
@@ -86,13 +95,23 @@ instance's allocation, and Google **documents** no per-sandbox equivalents — t
 that none are documented, not that none exist; no probe was run. Either way this design does not
 rely on them. **The lost enforcement is a real regression and it is accepted, not hidden.**
 
-What carries the load instead: the concurrency cap from ADR-0003 bounds how many sandboxes run at
-once, the wall-clock timeout still kills runaways, and the instance is sized so N concurrent
-sandboxes fit.
+What partially carries the load instead: the concurrency cap from ADR-0003 bounds how many
+sandboxes run at once, and the wall-clock timeout still kills a runaway. Neither is a substitute
+for a per-execution ceiling, as the next paragraph sets out.
 
-The risk **changes shape rather than growing** — a memory-hungry payload degrades the instance it
-shares instead of escaping it. Spec criterion S4 requires the gap to be written into the README's
-security posture *before* launch, because a silent regression is worse than a stated one.
+**Escape** risk does not grow — the sandbox boundary is what stops a payload reaching the host,
+and that boundary is unchanged. **Availability blast radius does grow, and this ADR should not
+pretend otherwise.** Under Docker a runaway allocation was capped at 256 MB and killed that one
+execution. Without a per-sandbox ceiling, a single execution can exhaust the whole instance,
+taking down every concurrent request on it and the instance itself — so "size the instance so N
+concurrent sandboxes fit" is a capacity plan for well-behaved payloads, not a guarantee that N
+hostile ones fit. The concurrency cap bounds *how many* run; the timeout bounds *how long*;
+neither bounds *how much* any one of them consumes.
+
+Spec criterion S4 requires this gap in the README's security posture *before* launch, because a
+silent regression is worse than a stated one. If it proves unacceptable in practice, the honest
+fixes are an instance-level memory ceiling or a return to Cloud Run Jobs — both of which mean a
+superseding ADR, not an edit to this one.
 
 *Rejected: falling back to Cloud Run Jobs to keep the caps.* That pays the egress workaround and
 seconds of latency to preserve a property that matters less than the one it would cost.
@@ -122,9 +141,12 @@ party is down or has rate-limited us"* — a likelier event than a Memorystore o
   app is reachable. An honest gap beats a silent one.
 - **The quota's failure modes widen** (D8): a third party's availability now feeds ADR-0003's
   fail-open path, and the Upstash provider needs its own credential in Terraform.
-- **The isolation checks in the README are no longer inherited.** They were verified against
-  `DockerBackend`; every one must be re-run against the deployed backend before this is called
-  done (spec S3).
+- **The isolation checks in the README are no longer inherited, and one of them changes meaning.**
+  They were verified against `DockerBackend`; every one must be re-run against the deployed
+  backend before this is called done (spec S3) — and the filesystem check must be **restated**
+  first, because a write outside the tmpfs no longer fails, it succeeds into a discarded overlay.
+  Re-running it unchanged would report a regression that is not one, or paper over the fact that
+  the observable behaviour differs.
 - **"Deployed" is a state with an end date.** The environment is deliberately destroyable and the
   credits expire; day 91 is a `terraform destroy`, not a renewal, unless the billing decision is
   revisited.
