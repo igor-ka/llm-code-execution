@@ -86,8 +86,12 @@ strip_fences() {
         while (substr(s, n + 1, 1) == ch) n++
       }
       if (n >= 3) {
+        # CommonMark: an opening fence may carry an info string ("```bash"); a *closing* fence
+        # may not. Without the rest-is-blank test, a "```bash" line inside an equal-length
+        # block reads as the close, and everything after it leaks back into the count.
+        rest = substr(s, n + 1)
         if (!infence) { infence = 1; fch = ch; flen = n }
-        else if (ch == fch && n >= flen) { infence = 0 }
+        else if (ch == fch && n >= flen && rest ~ /^[[:space:]]*$/) { infence = 0 }
         next
       }
       if (!infence) print
@@ -104,18 +108,25 @@ find_closers() {
 # URL — counts once. awk rather than sed: the branch-on-substitution needed to stop the
 # bare-"#N" rule from rewriting an already-qualified match is spelled differently in BSD and GNU
 # sed.
+#
+# Everything is lowercased first, because find_closers matches case-insensitively and GitHub
+# treats owner and repository names that way too. Without it "https://GitHub.com/…" matches no
+# branch here and is silently dropped, and "Owner/Repo#64" survives `sort -u` as a second issue
+# alongside "owner/repo#64".
 normalise() {
   awk -v repo="$GITHUB_REPOSITORY" '
+    BEGIN { repo = tolower(repo) }
     {
-      if (match($0, /https?:\/\/(www\.)?github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/issues\/[0-9]+$/)) {
-        s = substr($0, RSTART, RLENGTH)
+      r = tolower($0)
+      if (match(r, /https?:\/\/(www\.)?github\.com\/[a-z0-9._-]+\/[a-z0-9._-]+\/issues\/[0-9]+$/)) {
+        s = substr(r, RSTART, RLENGTH)
         sub(/^https?:\/\/(www\.)?github\.com\//, "", s)
         sub(/\/issues\//, "#", s)
         print s
-      } else if (match($0, /[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+#[0-9]+$/)) {
-        print substr($0, RSTART, RLENGTH)
-      } else if (match($0, /#[0-9]+$/)) {
-        print repo substr($0, RSTART, RLENGTH)
+      } else if (match(r, /[a-z0-9._-]+\/[a-z0-9._-]+#[0-9]+$/)) {
+        print substr(r, RSTART, RLENGTH)
+      } else if (match(r, /#[0-9]+$/)) {
+        print repo substr(r, RSTART, RLENGTH)
       }
     }'
 }

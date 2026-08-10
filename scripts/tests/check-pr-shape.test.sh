@@ -107,6 +107,28 @@ case_ "a closer in an inline code span is ignored" 0 "feat: thing" \
 case_ "a closer in a double-backtick span is ignored" 0 "feat: thing" \
   'Closes #64 and the doc says ``Closes #65`` verbatim'
 
+# CommonMark: an opening fence may carry an info string, a closing fence may not. Treating
+# "```bash" as a close inside an equal-length block exposed everything after it.
+case_ "an equal-length fence with an info string is content" 0 "feat: thing" \
+  'Closes #64
+
+```
+quoting a document:
+```bash
+Closes #65
+```
+still inside the quote
+```'
+
+# find_closers is case-insensitive; normalise was not, so a mixed-case URL matched and was then
+# silently dropped, and a mixed-case owner/repo survived sort -u as a second issue.
+case_ "a mixed-case GitHub URL is not silently dropped" 1 "feat: thing" \
+  "Closes https://GitHub.com/igor-ka/llm-code-execution/issues/64
+Closes #65"
+
+case_ "mixed-case owner/repo dedupes with the canonical form" 0 "feat: thing" \
+  "Closes igor-ka/llm-code-execution#64 and closes Igor-Ka/LLM-Code-Execution#64"
+
 case_ "a multi-line HTML comment is ignored" 0 "feat: thing" \
   "Closes #64
 

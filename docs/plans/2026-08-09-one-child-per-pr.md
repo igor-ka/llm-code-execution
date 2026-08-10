@@ -17,12 +17,23 @@ code; the blast radius is the development process itself.
 **Issue:** [#72](https://github.com/igor-ka/llm-code-execution/issues/72) — read its **Resolved**
 section first; it records why there is no size gate, no stacked PRs, and no `[no-issue]` marker.
 
-> **Post-implementation note.** `code-review` found four issues that changed the shipped script
-> after this plan was written: quotation stripping now runs fences → code spans → HTML comments
-> (the original order let a `<!--` inside a fenced snippet swallow the body and pass anything),
-> inline code spans are stripped, and the suite is 20 cases rather than 17. The PR description
-> records what was applied and what was pushed back on. This document is the pre-implementation
-> record and has not been rewritten.
+> **Post-implementation note — the code listings below are superseded. Do not copy them.**
+> This document is the pre-implementation record, deliberately left as it was reviewed. Review
+> found four defects in the script it specifies, all fixed in the shipped files
+> (`scripts/check-pr-shape.sh`, `scripts/tests/check-pr-shape.test.sh`), which are the only
+> source of truth:
+>
+> - quotation stripping runs fences → code spans → HTML comments; the order here let a `<!--`
+>   inside a fenced snippet swallow the rest of the body and pass any number of references;
+> - inline code spans are stripped;
+> - a closing fence must have nothing but whitespace after the delimiter, so an equal-length
+>   ` ```bash ` line inside a block is content rather than the close;
+> - `normalise` lowercases, so a mixed-case GitHub URL is not silently dropped and
+>   `Owner/Repo#64` does not survive dedupe as a second issue.
+>
+> The suite is 23 cases, not 17. The PR description records what was applied and what was
+> pushed back on. **Task 7 was also reordered**: the ruleset edit happens *before* merge, not
+> after — see that task.
 
 **PR boundaries:** One PR, closing #72. Every task below touches `docs/sdlc.md`, so splitting
 would mean writing the same contract update twice. A single PR closing exactly one issue is also
@@ -965,15 +976,17 @@ Both are mandatory (`CLAUDE.md`). Evaluate each finding with `receiving-code-rev
 applying it. Point the security review specifically at the workflow's handling of
 `github.event.pull_request.body`.
 
-- [ ] **Step 5: Merge**
+- [ ] **Step 5: Add `PR shape` to the ruleset's required status checks — *before* merging**
 
-```bash
-gh pr merge --squash --delete-branch
-```
+Reordered after review. The original plan did this after merge, which would let the PR that
+closes #72 land without the enforcement it promises — the exact shape of the `SDLC docs` lapse.
+The context already exists: the job has reported on this PR's head SHA, so making it required
+is satisfied immediately rather than blocking.
 
-- [ ] **Step 6: Add `PR shape` to the ruleset's required status checks**
-
-Only after the workflow is on `main`.
+> **Side effect to expect.** The five open Dependabot PRs (#73–#78) predate this workflow and
+> have no `PR shape` result on their head SHAs, so they will show the check as missing until
+> each is nudged (a push, or close/reopen). They pass the check on content — verified against
+> #73 — so this is a re-run, not a fix.
 
 ```bash
 gh api repos/igor-ka/llm-code-execution/rulesets/17055903 \
@@ -985,7 +998,7 @@ gh api repos/igor-ka/llm-code-execution/rulesets/17055903 \
 gh api -X PUT repos/igor-ka/llm-code-execution/rulesets/17055903 --input /tmp/protect-main.json
 ```
 
-- [ ] **Step 7: Verify the gate is live**
+- [ ] **Step 6: Verify the gate is live**
 
 ```bash
 gh api repos/igor-ka/llm-code-execution/rulesets/17055903 \
@@ -999,6 +1012,12 @@ Backend checks
 Frontend checks
 SDLC docs
 PR shape
+```
+
+- [ ] **Step 7: Merge**
+
+```bash
+gh pr merge --squash --delete-branch
 ```
 
 - [ ] **Step 8: Close the loop on the issue**
@@ -1038,7 +1057,7 @@ gh api -X PUT repos/igor-ka/llm-code-execution/rulesets/17055903 --input /tmp/pr
 
 Against `.claude/skills/references/definition-of-done.md`:
 
-- [ ] `./scripts/tests/check-pr-shape.test.sh` passes locally — 17 cases
+- [ ] `./scripts/tests/check-pr-shape.test.sh` passes locally — 23 cases
 - [ ] The check fails #71's body and clears #51's, #63's and #73's (Task 1, Step 5)
 - [ ] Both `verify.sh` scripts green
 - [ ] `SDLC docs` green — it is watching every file this change touches

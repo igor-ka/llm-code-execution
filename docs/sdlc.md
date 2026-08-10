@@ -402,7 +402,7 @@ flags that the limiter keys on a header when auth is off. `receiving-code-review
 first. It's real → fix it. Had it instead claimed the in-memory counter was a cross-user leak when
 the tests already prove otherwise, the right response is a pushback citing the test, not a change.
 
-**6. Merge** — PR body carries `Closes #62` so the child closes itself; both CI jobs green;
+**6. Merge** — PR body carries `Closes #62` so the child closes itself; all four checks green;
 branch deleted. Four PRs land this way, one child each — the `PR shape` job would fail a PR that
 tried to close two — and the epic closes when the last child does.
 
