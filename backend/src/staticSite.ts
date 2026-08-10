@@ -53,17 +53,25 @@ export function readCspPolicy(publicDir: string): string {
 }
 
 /**
- * Mount static serving + the SPA history fallback. Call this AFTER the API routes and BEFORE the
- * error handler: the fallback answers anything unmatched, so anything mounted later is dead.
+ * Set the policy on EVERY response. Mount this BEFORE the API routes.
+ *
+ * Ordering is the whole point: mounted after them, a route that answers — or throws to the error
+ * handler — terminates before this ever runs, so every API response including error bodies would
+ * ship without a policy. A JSON 500 is a weaker target than a document, but "the header is on
+ * whichever responses happened to fall through" is not a posture anyone can reason about.
  */
-export function mountStaticSite(app: Express, publicDir: string): void {
-  const policy = readCspPolicy(publicDir);
-
+export function installCspHeader(app: Express, policy: string): void {
   app.use((_req: Request, res: Response, next: NextFunction) => {
     res.setHeader("Content-Security-Policy", policy);
     next();
   });
+}
 
+/**
+ * Mount static serving + the SPA history fallback. Call this AFTER the API routes and BEFORE the
+ * error handler: the fallback answers anything unmatched, so anything mounted later is dead.
+ */
+export function mountSpaFallback(app: Express, publicDir: string): void {
   // index:false — the fallback below owns "/", so directory indexing would answer it twice.
   const serveAssets = express.static(publicDir, { index: false });
   app.use((req: Request, res: Response, next: NextFunction) => {

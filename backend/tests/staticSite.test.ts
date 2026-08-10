@@ -3,16 +3,29 @@ import request from "supertest";
 import express from "express";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { readCspPolicy, mountStaticSite } from "../src/staticSite.js";
+import { readCspPolicy, installCspHeader, mountSpaFallback } from "../src/staticSite.js";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "public");
 
+/** Mirrors server.ts's mount order exactly: header first, routes, then the SPA fallback. */
 function appServing(dir: string) {
   const app = express();
+  installCspHeader(app, readCspPolicy(dir));
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok" });
   });
-  mountStaticSite(app, dir);
+  app.get("/api/boom", () => {
+    throw new Error("kaboom");
+  });
+  mountSpaFallback(app, dir);
+  // Mirrors server.ts's final error handler. Without one, Express's built-in finalhandler
+  // renders its own HTML error page and stamps a stricter `default-src 'none'` over ours — fine
+  // for that page, but it means a bare app cannot show what the real app returns.
+  app.use(
+    (_err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      res.status(500).json({ detail: "Internal server error" });
+    },
+  );
   return app;
 }
 
@@ -69,6 +82,17 @@ describe("mountStaticSite", () => {
     const res = await request(appServing(fixtures)).get("/api/health");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: "ok" });
+  });
+
+  it("puts the policy on API responses too, not just the ones that fall through", async () => {
+    const res = await request(appServing(fixtures)).get("/api/health");
+    expect(res.headers["content-security-policy"]).toContain("script-src 'self'");
+  });
+
+  it("puts the policy on error responses", async () => {
+    const res = await request(appServing(fixtures)).get("/api/boom");
+    expect(res.status).toBe(500);
+    expect(res.headers["content-security-policy"]).toContain("script-src 'self'");
   });
 
   it("does not serve csp.txt itself — it is server config, not a public asset", async () => {
