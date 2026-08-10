@@ -40,7 +40,7 @@ jobs:
     steps:
       # Full history so the base can be resolved. persist-credentials: false keeps the token
       # out of .git/config, since the step after this executes a script from the PR branch.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false

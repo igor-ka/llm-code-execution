@@ -47,7 +47,7 @@ jobs:
       # No fetch-depth: 0 — unlike the SDLC docs check there is no base to diff against.
       # persist-credentials: false keeps the token out of .git/config, since the steps after
       # this execute scripts from the PR branch.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Self-test
