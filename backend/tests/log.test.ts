@@ -103,6 +103,25 @@ describe("makeLogger (json)", () => {
     expect(entry.err.cause.message).toBe("root cause");
   });
 
+  it("never throws when a field's getter throws, and still emits severity/message", () => {
+    // Reading caller properties happens in normalize(), which must sit inside the same guard as
+    // serialization: an exception escaping here would turn error reporting into a second error.
+    const lines: string[] = [];
+    const log = makeLogger("json", (line) => lines.push(line));
+    const hostile = {
+      get boom() {
+        throw new Error("getter exploded");
+      },
+    };
+
+    expect(() => log.error("still logged", hostile)).not.toThrow();
+
+    const entry = JSON.parse(lines[0]);
+    expect(entry.severity).toBe("ERROR");
+    expect(entry.message).toBe("still logged");
+    expect(entry.unserializableFields).toBe(true);
+  });
+
   it("keeps a Date readable instead of flattening it to {}", () => {
     const lines: string[] = [];
     const log = makeLogger("json", (line) => lines.push(line));

@@ -100,29 +100,31 @@ function stringify(value: unknown): string {
 
 export function makeLogger(format: LogFormat, sink: (line: string) => void): Logger {
   const emit = (severity: Severity, message: string, fields?: Fields): void => {
-    const normalized = fields ? normalize(fields) : {};
+    // normalize() READS caller-supplied properties, so it can throw on a hostile or merely
+    // exotic getter. It therefore lives inside the try alongside serialization — leaving it
+    // outside would let an exception escape the one function that must never throw, turning an
+    // error-reporting path into a second error.
     if (format === "json") {
       let line: string;
       try {
+        const normalized = fields ? normalize(fields) : {};
         // severity/message are spread LAST so they always win. A caller field named `message` is
         // entirely natural — log.error("x", { message: err.message }) — and if it overwrote the
         // real one, an ERROR line would vanish from every `severity>=ERROR` filter. The two
         // fields that make a line findable are not negotiable by its payload.
         line = stringify({ ...normalized, severity, message });
       } catch {
-        // Last resort — a throwing getter, say. Keep the two fields that make a line filterable.
         line = JSON.stringify({ severity, message, unserializableFields: true });
       }
       sink(line);
       return;
     }
     let suffix = "";
-    if (Object.keys(normalized).length) {
-      try {
-        suffix = ` ${stringify(normalized)}`;
-      } catch {
-        suffix = ` {"unserializableFields":true}`;
-      }
+    try {
+      const normalized = fields ? normalize(fields) : {};
+      if (Object.keys(normalized).length) suffix = ` ${stringify(normalized)}`;
+    } catch {
+      suffix = ` {"unserializableFields":true}`;
     }
     sink(`${severity.padEnd(5)} ${message}${suffix}`);
   };
