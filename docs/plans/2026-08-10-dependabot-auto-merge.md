@@ -933,6 +933,49 @@ preceding commit — the deny-list-not-fail-closed point (a missing or null `pac
 fails the `!= "npm_and_yarn"` test) and the missing disarm path.
 
 Also applied: a paragraph in `README.md`'s CI section noting that a fourth pull-request workflow
-exists and gates nothing. The reviewer flagged this as a judgment call under the documentation
+exists and gates nothing.
+
+---
+
+## Live acceptance results — 2026-08-10, after PR #126 merged as `66bca9b`
+
+Three fixtures, rebased with `@dependabot rebase` to produce a `synchronize` event.
+
+**The gate is correct.** Both npm runs produced the right verdict and the right diagnostic:
+
+| PR | Bump | Verdict | Diagnostic |
+| --- | --- | --- | --- |
+| #117 | `globals` 17.7.0 → 17.9.0 | `eligible` | `globals: 17.7.0 -> 17.9.0 [version-update:semver-minor]` |
+| #120 | `jsdom` 25.0.1 → 30.0.1 | `not-eligible: at least one dependency is not patch or minor` | `jsdom: 25.0.1 -> 30.0.1 [version-update:semver-major]` |
+
+**The `github_actions` exclusion works, and it works in the right place.** #98
+(`actions/setup-node` 4 → 7) produced **no run at all** — the job-level `if:` rejected it on
+`head_ref` before any step, so `fetch-metadata` never executed. That is the property the Copilot
+finding was about, and only a live run could demonstrate it: a jq-level rule would have shown the
+same verdict while still having run the action.
+
+**Two defects, both fixed in the follow-up PR.**
+
+1. **`pull-requests: write` alone is not sufficient.** Run 31432435114 failed with
+   `GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)`, and run
+   31432454576 failed identically on `disablePullRequestAutoMerge`. Both auto-merge mutations are
+   gated on the `contents` scope. This was the one change shipped on reasoning rather than
+   evidence, flagged as such at the time, and the reasoning was wrong — GitHub's documented
+   example carries `contents: write` for a reason. Restored, with the run IDs recorded in the
+   workflow so nobody re-derives it.
+2. **The disarm fallback's not-armed check never matched.** `gh pr view --json autoMergeRequest
+   --jq '.autoMergeRequest'` prints an **empty string** when the field is null, not the text
+   `null`. Verified directly: the raw form returns a zero-length string, while
+   `--jq 'if .autoMergeRequest == null then "no" else "yes" end'` returns `no`. So an ineligible
+   PR that was never armed took the loud failure path. Switched to the predicate form, which also
+   makes an empty value mean "`gh` itself failed" — which correctly falls through to the loud
+   path.
+
+Neither defect could reach `main`: the failures are in a job that gates nothing, and in both cases
+the outcome was "auto-merge not armed".
+
+**Still unproven, honestly:** no PR has auto-merged yet, so #94's "merges with no human
+interaction" criterion is not yet met — it is blocked on defect 1, not on the design. Task 7 Steps
+4–5, 7b and 8 are re-run after the follow-up lands. The reviewer flagged this as a judgment call under the documentation
 rule in `CLAUDE.md`; a workflow that merges to `main` is close enough to "security posture" to
 name.

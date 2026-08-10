@@ -589,14 +589,16 @@ token.
 
 **Security posture — different from every other job here.** `SDLC docs` and `PR shape` run
 scripts from the PR branch under a read-only token. This one inverts that: it holds
-`pull-requests: write`, and so it checks nothing out and runs no repository code. Its only
-third-party action is pinned to a full commit SHA. It uses `pull_request`, never
+`contents: write` and `pull-requests: write`, and so it checks nothing out and runs no repository
+code. Its only third-party action is pinned to a full commit SHA. It uses `pull_request`, never
 `pull_request_target`. Keep all four of those properties together — each one is load-bearing only
 because the others hold.
 
-`contents: write` is deliberately **not** requested, though GitHub's documented example for this
-task carries it: `gh pr merge --auto` only enables auto-merge, and GitHub performs the merge
-later. `contents: write` is the scope that would let a compromised step push straight to `main`.
+`contents: write` was first shipped omitted, on the reasoning that `gh pr merge --auto` only
+*enables* auto-merge and GitHub performs the merge later. The first real run disproved it:
+`Resource not accessible by integration (enablePullRequestAutoMerge)`, and the same on
+`disablePullRequestAutoMerge`. Both mutations are gated on `contents`, not `pull-requests`. Do not
+narrow the scope again without a run to point at.
 
 ---
 

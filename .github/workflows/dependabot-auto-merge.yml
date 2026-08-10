@@ -61,14 +61,22 @@ jobs:
     # that needs it. The repository default is `read`; a workflow may request more, and a PR from
     # a fork is capped at read regardless of what is written here.
     #
-    # `contents: write` is deliberately NOT requested, though GitHub's documented example for this
-    # task carries it. `gh pr merge --auto` issues the GraphQL `enablePullRequestAutoMerge`
-    # mutation; the merge itself is performed later by GitHub, not by this token. `contents: write`
-    # is the scope that would let a compromised step here push straight to `main`, and this job
-    # runs a third-party action. If the arm step ever fails with a 403 or "Resource not accessible
-    # by integration", that is the signal the narrower scope is insufficient — add
-    # `contents: write` back and say so here.
+    # `contents: write` is required, and this is settled by evidence rather than reasoning. It was
+    # shipped without it on the argument that `gh pr merge --auto` only issues the GraphQL
+    # `enablePullRequestAutoMerge` mutation and never merges anything itself. The first real run
+    # disproved that: run 31432435114 on PR #117 failed with
+    #
+    #   GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)
+    #
+    # and run 31432454576 failed the same way on `disablePullRequestAutoMerge`. Both auto-merge
+    # mutations are gated on the `contents` scope, not `pull-requests`. GitHub's documented example
+    # carries both for this reason. Do not narrow this again without a run to point at.
+    #
+    # What keeps the scope safe is everything else in this file: no checkout, no repository code,
+    # one third-party action pinned to a full SHA, and the ecosystem allow-list in the `if:` above
+    # that stops a bump to that very pin from ever executing here.
     permissions:
+      contents: write
       pull-requests: write
     steps:
       # Pinned to the full commit SHA for v3.1.0, not @v3 — a moving tag is a supply-chain
@@ -185,12 +193,18 @@ jobs:
             echo "auto-merge disarmed"
             exit 0
           fi
-          state="$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest')"
-          if [[ "$state" == "null" ]]; then
+          # `--jq '.autoMergeRequest'` prints an EMPTY string when the field is null, not the text
+          # "null" — so comparing against "null" never matches and the not-armed case reported a
+          # false failure (run 31432454576 on PR #120). Ask jq for the predicate instead, which
+          # always yields a non-empty answer; an empty value now means `gh` itself failed, and
+          # that falls through to the loud path below where it belongs.
+          armed="$(gh pr view "$PR_URL" --json autoMergeRequest \
+            --jq 'if .autoMergeRequest == null then "no" else "yes" end')"
+          if [[ "$armed" == "no" ]]; then
             echo "auto-merge was not armed — nothing to disarm"
             exit 0
           fi
-          echo "FAILED to disarm auto-merge on an ineligible PR: $state" >&2
+          echo "FAILED to disarm auto-merge on an ineligible PR (armed=${armed:-<unreadable>})" >&2
           exit 1
 
       # Prints why a PR was left alone, so "why did this not merge?" is answered in the run log
