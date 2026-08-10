@@ -14,7 +14,7 @@ and layout.
 
 `docs/sdlc.md` is the full process — phases, gates, how it meets CI, and a worked example.
 **It is a contract:** if you change `.claude/skills/**`, either `verify.sh`,
-`.github/workflows/**`, or `scripts/check-sdlc-sync.sh`, update `docs/sdlc.md` in the same PR.
+`.github/workflows/**`, or anything in `scripts/`, update `docs/sdlc.md` in the same PR.
 The `SDLC docs` CI job enforces this; `[skip-sdlc-sync]` in the PR title is the escape hatch
 for a genuine no-op.
 
@@ -68,6 +68,11 @@ fresh subagent reviewer using `planning-reviewer-prompt.md`. **Surface the revie
 and wait** — present the reviewer's report with your own opinionated take and do **not** fold
 the findings into the plan until I've seen them. I decide what goes into the plan.
 
+**One child per PR.** A PR closes at most one issue; the `PR shape` job enforces it and
+`[multi-child]` in the title is the visible exception. The decision belongs earlier — every plan
+header names its PR boundaries and the staff review checks them. See
+[`docs/sdlc.md`](docs/sdlc.md).
+
 Every skill in `.claude/skills/` is **vendored** — copied in, adapted to this repo, pinned to an
 upstream commit, and reviewed in-diff. No plugin marketplace is wired into this repository and
 nothing is fetched at runtime. See `.claude/skills/NOTICE.md` for both upstreams, their pinned
@@ -92,10 +97,10 @@ nothing a README reader relies on.
 ## CI job names are a contract
 
 The "Protect main" ruleset requires status checks by job name (`Backend checks`,
-`Frontend checks`). Renaming or removing a CI job breaks merges until the ruleset's required
-checks are updated to match. Change what runs *inside* a job freely; keep its name stable, or
-update the ruleset in the same PR.
+`Frontend checks`, `SDLC docs`, `PR shape`). Renaming or removing a CI job breaks merges until
+the ruleset's required checks are updated to match. Change what runs *inside* a job freely; keep
+its name stable, or update the ruleset in the same PR.
 
-`SDLC docs` (PRs only, in its own `sdlc-docs.yml`) is the one deliberate exception to the
-`verify.sh` mirroring rule above: it diffs a PR against its base, so it has no
-single-working-tree equivalent.
+`SDLC docs` and `PR shape` (PRs only, each in its own workflow) are the two deliberate exceptions
+to the `verify.sh` mirroring rule above: one diffs a PR against its base, the other reads the PR
+body, and neither has a single-working-tree equivalent.

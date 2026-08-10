@@ -1,0 +1,61 @@
+name: PR shape
+
+# docs/sdlc.md says a PR is "one change, closing a child". This job is the guarantee behind
+# that sentence — see "One child per PR" in docs/sdlc.md.
+#
+# Why a separate workflow from ci.yml, and why these event types:
+#   `edited`      — the [multi-child] hatch is read from the PR title, and the count is read
+#                   from the body. Neither fires `synchronize`. Without `edited`, fixing either
+#                   would never re-run the check.
+#   `synchronize` — required status checks are evaluated against the PR's head SHA. Without it,
+#                   a PR that passed on its first commit and was then pushed to would have no
+#                   result on the new SHA, and the ruleset would block the merge forever.
+# Putting either type on ci.yml would re-run the full backend and frontend suites, Docker
+# builds included, on every PR-title edit.
+#
+# Like `SDLC docs`, this is an exception to the "never add a CI check without adding it to the
+# matching verify.sh" rule: there is no PR body in a working tree. Its unit tests *do* have a
+# local equivalent, which is why they run here as a step and are documented as a pre-push
+# command in docs/sdlc.md — the same file, run both places, so the two cannot drift.
+#
+# The job `name:` is a contract like the others (see ci.yml). It is a new name, so no existing
+# required check is affected — and a job that only reports is not a gate, which is how
+# `SDLC docs` sat un-enforced from #53 until 2026-08-09. Adding "PR shape" to the "Protect main"
+# ruleset's required status checks is therefore part of landing this change, not a follow-up:
+# see Task 7 of docs/plans/2026-08-09-one-child-per-pr.md for the command and its rollback.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+
+concurrency:
+  group: pr-shape-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only: this job reads PR metadata handed to it as environment variables and never needs
+# the repository's write scope. It runs a script from the PR branch, so it must not hold a
+# writable token.
+permissions:
+  contents: read
+
+jobs:
+  pr-shape:
+    name: PR shape
+    runs-on: ubuntu-latest
+    steps:
+      # No fetch-depth: 0 — unlike the SDLC docs check there is no base to diff against.
+      # persist-credentials: false keeps the token out of .git/config, since the steps after
+      # this execute scripts from the PR branch.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Self-test
+        run: ./scripts/tests/check-pr-shape.test.sh
+      - name: Check the PR closes at most one issue
+        env:
+          # Via env, never inline `${{ }}` in `run:`. The body is attacker-controllable by
+          # anyone who can open a PR against this public repo.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: ./scripts/check-pr-shape.sh
