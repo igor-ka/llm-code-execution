@@ -39,4 +39,32 @@ const url = process.env.DATABASE_URL;
       await pool.end();
     }
   });
+
+  it("serializes concurrent runners on a fresh database", async () => {
+    // Two pools = two sessions = a faithful stand-in for two instances cold-starting together.
+    // Without the advisory lock one of these rejects with `relation "sessions" already exists`.
+    //
+    // Repeated, because the interleaving is not enforced: both runners must reach the
+    // schema_migrations lookup before either commits its DDL. In practice they do — every await
+    // yields the event loop — but "in practice" is not a gate, and a single round that happened
+    // to serialize itself would go green with the lock removed. Five fresh-database rounds make
+    // an accidental pass vanishingly unlikely at no cost to production code.
+    const a = makePool(url!);
+    const b = makePool(url!);
+    try {
+      for (let round = 0; round < 5; round++) {
+        await a.query("DROP TABLE IF EXISTS runs, sessions, schema_migrations CASCADE");
+
+        await expect(Promise.all([migrate(a), migrate(b)])).resolves.toBeDefined();
+
+        const rec = await a.query<{ n: number }>(
+          "SELECT count(*)::int AS n FROM schema_migrations",
+        );
+        expect(rec.rows[0].n, `round ${round}`).toBe(1);
+      }
+    } finally {
+      await a.end();
+      await b.end();
+    }
+  });
 });
