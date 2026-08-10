@@ -51,7 +51,7 @@ is lost.
 
 [Cloud Run sandboxes](https://docs.cloud.google.com/run/docs/code-execution) reached public preview
 in July 2026: a native sandbox **inside** the instance, enabled with `--sandbox-launcher` and
-invoked as `sandbox do -- <cmd>` from the backend process.
+invoked as `/usr/local/gcp/bin/sandbox do -- <cmd>` from the backend process.
 
 It is not merely adequate, it is a better fit than what this epic originally assumed. Measured
 against what `DockerBackend` enforces today:
@@ -62,7 +62,7 @@ against what `DockerBackend` enforces today:
 | Credentials | nothing passed in | no host env, no secrets, **no metadata server** |
 | Filesystem | read-only + tmpfs | read-only base, writes to a discarded memory overlay |
 | Startup | sub-second | ~500 ms |
-| Per-execution CPU/mem/PID caps | enforced | **not available** (D7) |
+| Per-execution CPU/mem/PID caps | enforced | **undocumented** (D7) |
 
 Two properties *improve*: egress is denied without configuring anything, and the sandbox cannot
 reach the metadata server — a concern the local backend never had to think about because there was
@@ -70,8 +70,9 @@ no metadata server to reach.
 
 *Rejected: Cloud Run Jobs per execution.* GA rather than preview, and it keeps per-execution
 resource caps. But Cloud Run tasks have **default internet egress**, so matching today's
-`--network none` requires Direct VPC egress plus a deny-all egress firewall rule at priority > 1000
-— a pile of configuration whose only purpose is to get back to where we already are. It also costs
+`--network none` requires Direct VPC egress plus a deny-all egress firewall rule — which must sit
+below the implied allow-egress rule at priority 65535, GCP evaluating the LOWEST priority number
+first — a pile of configuration whose only purpose is to get back to where we already are. It also costs
 seconds of startup per execution instead of milliseconds.
 
 **Accepted cost: a hard dependency on a Pre-GA feature.** No SLA, and the CLI surface can change.
@@ -81,8 +82,9 @@ class, not a rewrite — and by `DockerBackend` remaining the local path regardl
 ### D7 — The per-execution CPU, memory and PID caps do not survive
 
 `DockerBackend` enforces 256 MB, 0.5 CPU and 64 PIDs per execution. Sandboxes share the host
-instance's allocation and Google documents no per-sandbox equivalents. **This is a real regression
-and it is accepted, not hidden.**
+instance's allocation, and Google **documents** no per-sandbox equivalents — the precise claim is
+that none are documented, not that none exist; no probe was run. Either way this design does not
+rely on them. **The lost enforcement is a real regression and it is accepted, not hidden.**
 
 What carries the load instead: the concurrency cap from ADR-0003 bounds how many sandboxes run at
 once, the wall-clock timeout still kills runaways, and the instance is sized so N concurrent

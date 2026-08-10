@@ -304,9 +304,8 @@ The behavioral checks below have been run and pass (✅). Re-run them anytime.
 - **GCP deploy: decided, not yet done.** Cloud Run (not GKE), with untrusted code executed by
   [Cloud Run sandboxes](https://docs.cloud.google.com/run/docs/code-execution) behind the
   existing `SandboxBackend` seam — egress denied by default and no metadata server, at the cost
-  of a preview dependency and the per-execution memory/CPU/PID caps, which do not survive the
-  move. See [ADR-0004](docs/adr/0004-hosting-and-sandbox-execution.md) and the
+  of a preview dependency and the per-execution memory/CPU/PID caps, which are undocumented there
+  and which this design does not rely on. See [ADR-0004](docs/adr/0004-hosting-and-sandbox-execution.md) and the
   [spec](docs/specs/2026-08-09-deploy-to-gcp.md). Phase 0 (deployability hardening) is landing
   now; nothing is hosted yet.
 - Vertex AI for Claude (swap the client in `llm.ts`), more languages, artifact/chart return.
-```
