@@ -282,8 +282,14 @@ Details that are easy to get wrong:
   metadata-level: `SDLC docs` diffs a PR against its base, and `PR shape` reads the PR body —
   neither has a meaningful single-working-tree equivalent. Both live in their own workflows so
   they can listen for `pull_request: edited` without re-running the full suites on every
-  PR-title change. `PR shape`'s *unit tests* do have a local equivalent, and it is the same file
-  CI runs: `./scripts/tests/check-pr-shape.test.sh`.
+  PR-title change. Both jobs' *unit tests* do have a local equivalent, and it is the same file
+  CI runs: `./scripts/tests/check-pr-shape.test.sh` and
+  `./scripts/tests/check-sdlc-sync.test.sh`.
+- **Dependabot PRs are exempt from `SDLC docs`, and need no exemption from `PR shape`.** The
+  first is because `github-actions` bumps touch watched workflow files; the second is because
+  bot PRs close no issue and the rule is *at most* one. If someone proposes an actor exemption
+  for `PR shape`, that is a sign the rule drifted — see
+  [One child per PR](#one-child-per-pr).
 - **CI splits `verify.sh` into named steps** (Install / Lint / Format / Test / Build / …) purely
   so each gets its own pass/fail and timing in the log. That is presentation, not a second
   definition of the checks.
@@ -459,6 +465,20 @@ was updated by a different change.
 `[skip-sdlc-sync]` in the PR title. That's deliberately visible in the PR list rather than a
 silent bypass. The workflow listens for `pull_request: edited` so that editing the title
 actually re-runs the check; without that type the hatch would be documented but unusable.
+
+**Dependabot is exempt.** The `github-actions` ecosystem bumps `uses:` pins inside
+`.github/workflows/*.yml` — a watched path — so without an exemption every action update would
+fail a required check that a bot can never satisfy. `scripts/check-sdlc-sync.sh` exits 0 when
+`PR_ACTOR` is exactly `dependabot[bot]`. A pin bump is not a process change.
+
+That exemption is an early `exit 0` **inside the script**, not a job-level `if:`. `SDLC docs` is
+a required status check, and a skipped job does not report success — a required check that never
+reports success blocks the merge permanently, which is worse than the failure being avoided.
+The same reasoning keeps `PR shape`'s self-test a step rather than a conditional job.
+
+Both early exits are covered by `scripts/tests/check-sdlc-sync.test.sh`, which the job runs as
+its first step and which is also the local pre-push command. The base-resolution logic below
+them is not covered — it needs git fixtures, and no change has yet warranted building them.
 
 To take an upstream skill update: re-vendor the file, update the pinned commit in
 `.claude/skills/NOTICE.md`, re-apply the local modifications listed there, and open a PR. The
