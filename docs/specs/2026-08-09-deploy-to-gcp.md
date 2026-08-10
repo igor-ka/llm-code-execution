@@ -1,7 +1,7 @@
 # Spec: deploy the app so users can reach it
 
-Epic: [#79](https://github.com/igor-ka/llm-code-execution/issues/79) · Status: **open questions
-Q1–Q5 need answers before planning**
+Epic: [#79](https://github.com/igor-ka/llm-code-execution/issues/79) · Status: **all questions
+answered (D1–D10) — ready to plan**
 
 Stack, commands, project layout, code style, and testing strategy are not restated here; they
 live in [`CLAUDE.md`](../../CLAUDE.md) and [`README.md`](../../README.md).
@@ -71,7 +71,7 @@ Grounding for the criteria below; no design implied. Verified on `main` @ `86f20
 - Secrets from a secret manager, never baked into an image or a repo file.
 - **Deployability hardening of the app itself** (Phase 0): structured logging, graceful shutdown,
   an advisory-locked migration runner, a production frontend image. App-only, no GCP.
-- Infrastructure as Terraform, in a new top-level directory (Q5).
+- Infrastructure as Terraform, in a new top-level `infra/` directory (D10).
 - A **budget alarm** and a documented day-91 teardown, because the funding model is trial credits.
 - Re-verification of the existing security batteries against the deployed environment — auth gate,
   history isolation (INV-1…8), quota and concurrency refusals.
@@ -117,7 +117,8 @@ a reserved IP behind is a slow leak against a fixed budget.
 
 ## Decisions
 
-Carried in from 2026-08-05 (D1–D4), recorded here so the plan does not re-litigate them.
+D1–D5 carried in from 2026-08-05; D6–D10 answered 2026-08-09. Recorded here so the plan does
+not re-litigate them.
 
 **D1 — Cloud Run, not GKE.** Terraform is an explicit learning goal; Kubernetes explicitly is not.
 GKE would have taught K8s with Terraform as a thin wrapper around cluster creation, and cost
@@ -143,106 +144,103 @@ $30 of the credits over 90 days — and a far richer Terraform exercise (private
 IAM, Secret Manager) than a Postgres container. Shared-core carries no SLA, which is acceptable
 for this workload.
 
+Answered 2026-08-09, after the research recorded in the Sources section.
+
+**D6 — Cloud Run sandboxes execute the untrusted code.**
+[Cloud Run sandboxes](https://docs.cloud.google.com/run/docs/code-execution) reached public
+preview in July 2026 — after D1–D4 were made, and they change the answer those decisions assumed.
+A sandbox runs *inside* the Cloud Run instance: deploy with `--sandbox-launcher`, then call
+`/usr/local/gcp/bin/sandbox do -- <cmd>` from the backend process.
+
+| | **Chosen: Cloud Run sandboxes** | Rejected: Cloud Run Jobs | Rejected: Docker on a VM |
+| --- | --- | --- | --- |
+| Network default | **Deny-by-default** | Internet egress | `--network none` |
+| Regains today's isolation? | Natively | Only with Direct VPC egress **+** a deny-all egress rule at priority > 1000 | Already there |
+| Startup | ~500 ms | Seconds per execution | Sub-second |
+| Credentials | No host env, no secrets, **no metadata server** | Task SA, metadata reachable | N/A |
+| Per-execution CPU/mem cap | **Undocumented** (D7) | Yes | Yes |
+| Cost | None beyond the instance | Per execution | VM billed 24/7 |
+| Maturity | Preview, gen2 only | GA | GA |
+
+*Why it beats the `CloudRunJobsBackend` the epic assumed:* it **improves** two of the three
+isolation properties rather than merely restoring them — deny-by-default egress, and no metadata
+server, which the local Docker backend never had to think about — and it deletes the entire
+Direct-VPC-egress-plus-firewall workaround that Jobs needs just to reach parity. It also makes the
+concurrency cap *correctly* scoped: sandboxes share the instance, the cap is per-instance, so
+[ADR-0003](../adr/0003-rate-limiting-approach.md)'s residual risk #2 resolves itself instead of
+needing a rewrite. Docker-on-a-VM was rejected for contradicting D1 outright — a VM billed around
+the clock, host patching we own, and no scale-to-zero.
+
+*Accepted cost:* **a hard dependency on a Pre-GA feature.** No SLA, and the CLI surface can change
+under us. Bounded by the [`SandboxBackend`](../../backend/src/sandbox/base.ts) seam — a withdrawal
+or breaking change costs one class, not a rewrite — and by the fact that `DockerBackend` remains
+the local path either way.
+
+**D7 — The per-execution CPU, memory and PID caps are not replaced. The gap is documented.**
+Docker enforces 256 MB, 0.5 CPU and 64 PIDs per execution today
+([Context §3](#context--what-the-code-does-today)); sandboxes share the host instance's allocation
+and Google documents no per-sandbox equivalents. Rejected: a Phase 2 probe to hunt for
+undocumented limits (parks an open security question inside the deploy phase), and falling back to
+Jobs for cap fidelity (pays the egress workaround and seconds of latency to keep a property that
+matters less than the one it would cost).
+
+What actually holds the line instead: the **concurrency cap** bounds how many sandboxes run at
+once, the **wall-clock timeout** still kills runaways, and the instance is sized so N concurrent
+sandboxes fit. **The risk changes shape rather than growing** — a memory-hungry payload degrades
+the instance it shares instead of escaping it. That is a real regression and S4 makes it visible:
+it goes into the README's posture section *before* launch, not after someone finds it.
+
+**D8 — Redis is Upstash's free tier, not Memorystore.**
+256 MB and 500k commands/month at $0, against ~$36/mo for Memorystore Basic — about **$110 of the
+$300** for a counter holding a handful of keys. The credits go to Cloud SQL and Cloud Run instead.
+Rejected: Memorystore (the better Terraform exercise, but a third of the budget for the least
+interesting resource) and Redis co-located on the Cloud Run instance (dies with the instance,
+reintroducing exactly the restart-bypass ADR-0003 D1 rejected).
+
+*Accepted cost:* **a third party holds the state of a security control**, outside the GCP blast
+radius and outside `terraform destroy`. Two consequences the plan must carry: the Upstash
+Terraform provider needs its own credential, and ADR-0003's fail-open path (D5 there) now also
+covers *"the third party is down or has rate-limited us"* — a likelier event than a Memorystore
+outage.
+
+**D9 — The SPA is served from the same Cloud Run service as the API.**
+One origin, one deploy path. Rejected: Firebase Hosting — a second toolchain to maintain, resources
+partly outside the Terraform story, and it keeps the SPA cross-origin. Single-origin deletes a
+class of bug this repo has already hit once: ADR-0003 D7 records that `Retry-After` is invisible to
+the browser today because it is not CORS-safelisted. Same-origin makes that irrelevant. It also
+makes Phase 0's production nginx image load-bearing rather than incidental.
+
+*Accepted cost:* Cloud Run serves static bytes, and `VITE_*` values are baked at build time, so a
+given image is bound to one environment. Both were already true of the Phase 0 image.
+
+**D10 — Terraform lives in `infra/`, gated like everything else.**
+A new top-level directory with an `infra/verify.sh` (`terraform fmt -check`, `terraform validate`)
+mirrored by a `Terraform checks` CI job, added in Phase 1 alongside the first `.tf` file. The
+mirroring rule in [`CLAUDE.md`](../../CLAUDE.md) is repo law and infrastructure does not get an
+exemption on its first day. Adding a required check means the "Protect main" ruleset changes in the
+same PR — the job-name contract applies here too.
+
 ## Open questions
 
-**These are the reason this spec exists.** Q1 is architectural and blocks the plan; Q2 follows
-from it; Q3–Q5 are cheaper but still shape the phases.
-
-### Q1 — What executes the untrusted code?
-
-Research on 2026-08-09 turned up an option that did not exist when D1–D4 were made:
-**[Cloud Run sandboxes](https://docs.cloud.google.com/run/docs/code-execution)** went to public
-preview in July 2026. It is a native sandbox *inside* your Cloud Run instance — deploy with
-`--sandbox-launcher`, then call `/usr/local/gcp/bin/sandbox do -- <cmd>` from your own process.
-
-| | **A. Cloud Run sandboxes** (preview) | **B. Cloud Run Jobs per execution** | **C. Docker on a VM** |
-| --- | --- | --- | --- |
-| Network default | **Deny-by-default**, `--allow-egress` to open | Default internet egress | `--network none` today |
-| Matches `--network none`? | Yes, natively | Only via Direct VPC egress + deny-all egress firewall (priority > 1000) | Already does |
-| Startup | ~500 ms spawn-execute-stop | Seconds per execution | ~sub-second locally |
-| Credential isolation | No host env vars, no secrets, **no metadata server** | Task has its own SA, metadata server reachable | Inherits nothing today |
-| Filesystem | Read-only base, writes to a memory overlay, discarded | Container FS | Read-only + tmpfs |
-| Per-execution CPU/mem cap | **Not documented** — shares the host instance's allocation | Yes, per job | Yes |
-| Extra cost | None — uses the instance you already pay for | Per-execution vCPU/memory | VM runs 24/7 |
-| Maturity | **Public preview, Pre-GA terms, gen2 only** | GA | GA |
-
-**My recommendation: A**, with B as the fallback if preview terms are unacceptable. It is a
-better fit than the `CloudRunJobsBackend` the epic assumed: it *improves* two of the three
-isolation properties (deny-by-default egress, and no metadata server — something the local Docker
-backend does not even have to think about), and it deletes the entire Direct-VPC-egress-plus-
-firewall workaround that option B needs just to get back to parity. The concurrency cap decorator
-also becomes *correctly* scoped — sandboxes share the instance, and the cap is per-instance, so
-ADR-0003's residual risk #2 resolves itself rather than needing a rewrite.
-
-**The cost of choosing it** is a hard dependency on a preview feature: no SLA, and the CLI surface
-can change under us. For a learning project I think that is the right trade; it is not for a
-product. **Your call.**
-
-### Q2 — What replaces the per-execution memory, CPU, and PID caps?
-
-Follows directly from Q1-A. Cloud Run sandboxes share the host instance's CPU and memory, and
-Google documents **no per-sandbox limit flags**. Today those caps are explicit
-([Context §3](#context--what-the-code-does-today)): 256 MB, 0.5 CPU, 64 PIDs.
-
-Options: accept the loss and lean on the existing concurrency cap plus the wall-clock timeout,
-sizing the instance so N concurrent sandboxes fit; or verify experimentally in Phase 2 whether
-undocumented limits exist; or keep option B for cap fidelity.
-
-**My recommendation:** accept, size deliberately, and **write the gap into the README's posture
-section** (S4). A memory-hungry payload then degrades one instance rather than escaping it — which
-is a different risk from the one the caps were defending, and a smaller one. But this is exactly
-the kind of quiet regression S4 exists to prevent, so it should be a decision, not a discovery.
-
-### Q3 — Where does Redis live?
-
-The backend will not boot without `REDIS_URL` (ADR-0003 D6), so this is not deferrable.
-
-- **Memorystore Basic, 1 GiB** — ~$36/mo, i.e. **~$110 of the $300** over 90 days for a quota
-  counter that will hold a handful of keys. Native Terraform, private IP, no third party.
-- **Upstash free tier** — 256 MB, 500k commands/month, $0. Redis-protocol compatible, has a
-  Terraform provider, but it is a third-party service holding a security control's state.
-- **Redis on the same Cloud Run instance** — free, but dies with the instance, which reintroduces
-  exactly the restart-bypass that D1 of ADR-0003 rejected.
-
-**My recommendation:** Memorystore if the credits are meant to be spent on learning GCP properly —
-$110 of $300 is real but the trial exists to be used. Upstash if you would rather aim the credits
-at Cloud SQL and Cloud Run. I lean Memorystore for the Terraform exercise; I do not think the
-third option is defensible.
-
-### Q4 — Where is the SPA served from?
-
-Firebase Hosting (managed certs, generous free tier, its own deploy tooling and thus a second
-deploy path to maintain) versus serving the built assets from the same Cloud Run service via the
-production nginx image Phase 0 has to build anyway (one deploy path, one origin, and CORS stops
-mattering — the SPA and API become same-origin).
-
-**My recommendation: Cloud Run, single origin.** It makes the production frontend image earn its
-keep, removes a whole class of CORS and CSP mismatch, and keeps `terraform destroy` complete —
-Firebase resources sit slightly outside the Terraform story. Note this interacts with `VITE_*`
-build-time values: a built image is bound to one environment either way.
-
-### Q5 — Where does Terraform live, and does the SDLC contract cover it?
-
-A new top-level `infra/` (or `terraform/`) directory. The question is not the name but the gate:
-`CLAUDE.md` requires `docs/sdlc.md` to be updated when the process changes, and CI job names are a
-contract. Does infrastructure get a `verify.sh`-equivalent (`terraform fmt -check`, `validate`,
-maybe `tflint`) with a matching CI job — and if so, is that a new required check on the ruleset?
-
-**My recommendation:** yes, `infra/verify.sh` mirroring a `Terraform checks` job, added in Phase 1
-alongside the first `.tf` file. The mirroring rule is repo law; infrastructure should not get an
-exemption on its first day.
+**None — all resolved (D1–D10).** Two items deferred as configuration rather than architecture:
+the Cloud Run instance size (follows from D7 and the concurrency cap — chosen in the plan, verified
+in Phase 2), and the GCP region (must satisfy Cloud Run gen2 + sandboxes preview availability and
+Cloud SQL in one place; a Phase 1 lookup, not a design decision).
 
 ## Residual risk
 
 Recorded rather than solved:
 
-1. **Preview dependency** (Q1-A). A Pre-GA feature can change or be withdrawn. Mitigated by the
+1. **Preview dependency** (D6). A Pre-GA feature can change or be withdrawn. Mitigated by the
    `SandboxBackend` seam — a change is one class, not a rewrite.
-2. **Per-execution resource caps weaken** (Q2). Bounded by the concurrency cap and the timeout,
+2. **Per-execution resource caps weaken** (D7). Bounded by the concurrency cap and the timeout,
    but a hostile payload can degrade the instance it runs on.
-3. **A public URL invites real adversaries.** The quota's fail-open path (ADR-0003 D5) and the
+3. **A security control's state sits with a third party** (D8). Upstash holds the quota counters,
+   so its availability and its own rate limits now feed the fail-open path. Bounded by the same
+   alarm ADR-0003 S9 already demands.
+4. **A public URL invites real adversaries.** The quota's fail-open path (ADR-0003 D5) and the
    single-tenant auth model were both accepted when the audience was one person.
-4. **Day-91 cliff.** The environment is deliberately destroyable, so "deployed" is a state that
+5. **Day-91 cliff.** The environment is deliberately destroyable, so "deployed" is a state that
    ends on a known date unless the billing decision is revisited.
 
 ## Sources
