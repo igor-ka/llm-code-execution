@@ -22,14 +22,19 @@ approved (`docs/sdlc.md`: children come after the plan), one per row, in this or
 | 1 | Structured logging (`log.ts`), adopted at every non-CLI `console` site | — |
 | 2 | Advisory-locked migration runner | — |
 | 3 | Composition root owns pool + Redis; graceful `SIGTERM` shutdown; `PORT` from env | PR 1 |
-| 4 | The build emits the production CSP; the backend serves the SPA under it | — |
+| 4 | The build emits the production CSP; the backend serves the SPA under it | PR 1, PR 3 |
 | 5 | Single production image (SPA + API, one origin) | PR 3, PR 4 |
 | 6 | ADR-0004 — the hosting decision | — |
 
-PRs 1, 2, 4 and 6 are independent and can land in any order. **PR 4 is one child, not two**, even
-though "emit the policy" and "serve under the policy" are separable commits: emitting a file
-nobody reads is not a deliverable, and splitting them would leave a merged PR whose only effect is
-a build artifact with no consumer.
+PRs 1, 2 and 6 are independent and can land in any order. **PR 4 depends on 1 and 3** for reasons
+that are easy to miss: Step 11 locates the error handler by the log line PR 1 introduces, and
+edits the boot log PR 3 introduces. **PR 4 is one child, not two**, even though "emit the policy"
+and "serve under the policy" are separable commits: emitting a file nobody reads is not a
+deliverable, and splitting them would leave a merged PR whose only effect is a build artifact with
+no consumer.
+
+**Before filing the child issues, rebase onto `main`.** This branch was cut before #80 landed, so
+it does not yet carry the `PR shape` workflow that enforces the one-child rule at merge time.
 
 ---
 
@@ -54,7 +59,7 @@ Read this before following any task; it is why the code below differs from `6b2b
 
 1. **`index.ts` already fails fast on `REDIS_URL`** (`assertRedisConfigured`, `index.ts:13`) and
    already opens a *temporary* migration pool it closes immediately (`index.ts:17-24`).
-2. **`createApp` has grown a `deps` seam with five slots** — `settings`, `llm`, `sandbox`,
+2. **`createApp` has grown a `deps` seam with six slots** — `settings`, `llm`, `sandbox`,
    `history`, `quota`, `requirePrincipal` (`server.ts:27-34`). Task 3 uses `history` and `quota`
    rather than inventing a new injection point.
 3. **There is now a third resource to close on shutdown**: `RedisQuotaStore` holds a connection
@@ -94,6 +99,7 @@ Read this before following any task; it is why the code below differs from `6b2b
 | `backend/tests/config.test.ts` | Cover the three new settings. |
 | `backend/tests/limits/middleware.test.ts` | Spy `console.log`, not `console.error`. |
 | `backend/tests/history/migrate.test.ts` | Concurrent-runner regression test. |
+| `backend/Dockerfile` | Pin `ENV PORT=8000` so the dev image's `EXPOSE 8000` stays true. |
 | `backend/verify.sh` | Build the production image in the `docker` target. |
 
 **Frontend — modified**
@@ -103,8 +109,10 @@ Read this before following any task; it is why the code below differs from `6b2b
 | `frontend/vite.config.ts` | Build-only plugin emitting `dist/csp.txt` from the same `buildCsp()`. |
 | `frontend/verify.sh` | Assert the built output carries the policy. |
 
-**Repo root — created:** `Dockerfile` (production image).
-**Repo root — modified:** `.env.example`, `README.md`, `docs/sdlc.md`, `docs/adr/0004-*.md`.
+**Repo root — created:** `Dockerfile` (production image), `.dockerignore` (the repo-root build
+context — `frontend/.dockerignore` does not apply to it).
+**Repo root — modified:** `.env.example` (Task 3), `docker-compose.yml` (Task 3), `README.md`
+(Tasks 3, 5, 6), `docs/sdlc.md` (Tasks 4, 5), `docs/adr/0004-*.md` (Task 6).
 
 ---
 
@@ -381,7 +389,7 @@ In `backend/src/limits/redisQuota.ts`, add `import { log } from "../log.js";` an
 - [ ] **Step 8: Move the middleware test's spy onto the new sink**
 
 In `backend/tests/limits/middleware.test.ts`, inside
-`it("fails OPEN when the store throws, and says so loudly (D5, S9)")`, replace lines 78-81:
+`it("fails OPEN when the store throws, and says so loudly (D5, S9)")`, replace lines 79-82:
 
 ```ts
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -594,7 +602,8 @@ stay exactly as they are, so every test that calls `createApp()` is unaffected.
 
 **Files:**
 - Create: `backend/src/shutdown.ts`, `backend/tests/shutdown.test.ts`
-- Modify: `backend/src/index.ts`, `backend/src/config.ts`, `backend/tests/config.test.ts`
+- Modify: `backend/src/index.ts`, `backend/src/config.ts`, `backend/tests/config.test.ts`,
+  `backend/Dockerfile`, `docker-compose.yml`, `.env.example`, `README.md`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -670,6 +679,19 @@ describe("makeShutdown", () => {
     expect(exit).toHaveBeenCalledWith(1);
   });
 
+  it("defaults to a grace period inside Cloud Run's 10s SIGTERM→SIGKILL window", () => {
+    // Pins the intent, not the number: at exactly 10s the force-exit and the platform's kill
+    // land together and the timer is decorative. It has to fire while we are still alive.
+    vi.useFakeTimers();
+    const server = fakeServer();
+    const exit = vi.fn();
+    const shutdown = makeShutdown({ server, exit, log: () => {} });
+
+    shutdown("SIGTERM");
+    vi.advanceTimersByTime(9_000);
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
   it("still exits 0 when cleanup rejects", async () => {
     const server = fakeServer();
     const exit = vi.fn();
@@ -722,7 +744,13 @@ export interface ShutdownOptions {
   server: ClosableServer;
   /** Release external resources. Errors are logged, never fatal. */
   cleanup?: () => Promise<void>;
-  /** Hard deadline before we give up waiting for connections to drain. */
+  /**
+   * Hard deadline before we give up waiting for connections to drain.
+   *
+   * Deliberately UNDER the platform's own SIGTERM→SIGKILL window (Cloud Run's is 10s). At
+   * exactly 10s this timer and the kill fire together and the force-exit never helps — the
+   * process still dies looking like a crash, which is the outcome it exists to prevent.
+   */
   graceMs?: number;
   exit?: (code: number) => void;
   log?: (message: string, fields?: Fields) => void;
@@ -731,7 +759,7 @@ export interface ShutdownOptions {
 export function makeShutdown({
   server,
   cleanup,
-  graceMs = 10_000,
+  graceMs = 8_000,
   exit = (code) => process.exit(code),
   log = () => {},
 }: ShutdownOptions): (signal: string) => void {
@@ -804,11 +832,16 @@ describe("port", () => {
 });
 ```
 
-> **Note the port change is user-visible.** The backend has listened on 8000 since the Python
-> original. `docker-compose.yml`, `.env.example`, the README's `curl localhost:8000/api/health`
-> and the frontend's default `VITE_API_BASE` all name 8000. Keep them working by setting
-> `PORT=8000` explicitly in `docker-compose.yml`'s backend service rather than chasing the
-> default through every document.
+> **Note the port change is user-visible, and Compose alone does not contain it.** The backend
+> has listened on 8000 since the Python original. Four things still assume it and only one of
+> them is Compose: `README.md:27` states the entrypoint *"listens on :8000"*; the README's
+> "run locally without Compose" recipe exports `../.env` and expects 8000; and **both** frontend
+> consumers default to it — `frontend/src/api.ts:3` and `frontend/src/history.ts:7`. `.env.example`
+> is the odd one out: it has **no `PORT` entry at all**, which is exactly why a host-run backend
+> would silently move to 8080 while the SPA kept calling 8000.
+>
+> Steps 9–11 below pin 8000 in all three places a human touches (Compose, `.env.example`, the
+> README) rather than chasing the new default through the frontend.
 
 - [ ] **Step 6: Rewrite `index.ts` as the composition root**
 
@@ -888,37 +921,72 @@ Run: `cd backend && ./verify.sh test`
 Expected: PASS. `main.test.ts` builds `createApp` directly with fakes and never imports
 `index.ts`, so it is unaffected.
 
-- [ ] **Step 8: Verify shutdown by hand**
+- [ ] **Step 8: Verify shutdown by hand — against the built entrypoint, not the watcher**
+
+Build first and run the compiled output. `npm run dev` runs `tsx watch`, and signalling the
+watcher does **not** reliably forward SIGTERM to the child process that holds the handler — you
+would be testing tsx, not this code.
 
 ```bash
 docker compose up -d postgres redis
-cd backend
+cd backend && npm run build
 DATABASE_URL=postgres://app:app@localhost:5432/app REDIS_URL=redis://localhost:6379 \
-  AUTH_REQUIRED=false LOG_FORMAT=json PORT=8000 npm run dev
+  AUTH_REQUIRED=false LOG_FORMAT=json PORT=8000 node dist/index.js
 ```
 
 In a second terminal:
 
 ```bash
 curl -s localhost:8000/api/health   # -> {"status":"ok"}
-pkill -TERM -f "tsx watch src/index.ts"
+pkill -TERM -f "node dist/index.js"
 ```
 
 Expected in the first terminal: a `shutdown: draining` JSON line, then `shutdown: complete`, and
-the process exits on its own with no stack trace.
+the process exits on its own with no stack trace. Task 5 Step 3 repeats this against the
+production image, which is the check that actually matters.
 
-- [ ] **Step 9: Point Compose at the explicit port**
+- [ ] **Step 9: Pin the port in Compose**
 
 In `docker-compose.yml`, add `PORT: "8000"` to the backend service's environment (next to the
 existing variables) so the published `8000:8000` mapping keeps working against the new 8080
 default.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 10: Pin it in `.env.example` and the dev image**
+
+`.env.example` has no `PORT` entry today, so a host-run backend would silently move to 8080 while
+both SPA consumers keep calling 8000. Add to `.env.example`, in the section where the other
+backend variables live:
+
+```bash
+# Port the backend listens on. 8080 is the default because that is Cloud Run's contract; local
+# tooling (Compose, the SPA's VITE_API_BASE default) expects 8000, so keep it pinned here.
+PORT=8000
+```
+
+And in `backend/Dockerfile` — the **dev** image, still used by Compose — make its own default
+match what it advertises, so `EXPOSE 8000` stops being a lie the moment the app default moves:
+
+```dockerfile
+ENV PORT=8000
+EXPOSE 8000
+```
+
+(Add the `ENV` line immediately above the existing `EXPOSE 8000`.)
+
+- [ ] **Step 11: Correct the README**
+
+`README.md:27` describes the entrypoint as *"(migrates the history DB, then listens on :8000)"*.
+Change it to name the new default and the pin — something like *"listens on `$PORT` (8080 by
+default; pinned to 8000 for local work)"*. Check the surrounding layout block and the
+"run locally without Compose" recipe for any other bare `:8000` that is now conditional.
+
+- [ ] **Step 12: Commit**
 
 ```bash
 cd backend && npm run format && npm run lint && cd ..
 git add backend/src/shutdown.ts backend/tests/shutdown.test.ts backend/src/index.ts \
-        backend/src/config.ts backend/tests/config.test.ts docker-compose.yml
+        backend/src/config.ts backend/tests/config.test.ts backend/Dockerfile \
+        docker-compose.yml .env.example README.md
 git commit -m "feat(runtime): graceful SIGTERM shutdown over an owned pool and Redis client"
 ```
 
@@ -942,7 +1010,13 @@ it**, matching the `REDIS_URL` posture: never run with a security control silent
 - Modify: `frontend/vite.config.ts`, `frontend/verify.sh`
 - Create: `backend/src/staticSite.ts`, `backend/tests/staticSite.test.ts`,
   `backend/tests/fixtures/public/index.html`, `backend/tests/fixtures/public/csp.txt`
-- Modify: `backend/src/config.ts`, `backend/tests/config.test.ts`, `backend/src/server.ts`
+- Modify: `backend/src/config.ts`, `backend/tests/config.test.ts`, `backend/src/server.ts`,
+  `backend/src/index.ts`, `docs/sdlc.md`
+
+> **`frontend/verify.sh` is inside the SDLC-docs contract.** `scripts/check-sdlc-sync.sh` watches
+> `frontend/verify.sh` alongside `backend/verify.sh`, `.claude/skills/` and `.github/workflows/`,
+> so this PR **must** touch `docs/sdlc.md` (Step 4a) or the `SDLC docs` job fails. `[skip-sdlc-sync]`
+> would not be honest here — the build target gains two real gates.
 
 - [ ] **Step 1: Emit the policy from the build**
 
@@ -973,11 +1047,19 @@ function emitCsp(policy: string): Plugin {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "VITE_");
-  const cspOpts = {
+  const auth0Domain = env.VITE_AUTH0_DOMAIN || "";
+
+  // The production policy takes the RAW value, mirroring api.ts's `?? default` exactly. The dev
+  // fallback must not leak in here: the production image builds with VITE_API_BASE="" (the API is
+  // same-origin), and `"" || "http://localhost:8000"` would bake a plaintext localhost origin
+  // into connect-src — shipped in csp.txt, and caught by Task 5's grep as a build defect.
+  const prodCsp = buildCsp({ apiBase: env.VITE_API_BASE ?? "", auth0Domain, dev: false });
+  // The dev server keeps the convenience fallback; nothing it emits is ever deployed.
+  const devCsp = buildCsp({
     apiBase: env.VITE_API_BASE || "http://localhost:8000",
-    auth0Domain: env.VITE_AUTH0_DOMAIN || "",
-  };
-  const prodCsp = buildCsp({ ...cspOpts, dev: false });
+    auth0Domain,
+    dev: true,
+  });
 
   return {
     plugins: [react(), emitCsp(prodCsp)],
@@ -985,7 +1067,7 @@ export default defineConfig(({ mode }) => {
     // path) gets the strict one.
     server: {
       port: 5173,
-      headers: { "Content-Security-Policy": buildCsp({ ...cspOpts, dev: true }) },
+      headers: { "Content-Security-Policy": devCsp },
     },
     preview: {
       headers: { "Content-Security-Policy": prodCsp },
@@ -1048,6 +1130,13 @@ And update the usage comment on line 11:
 Run: `cd frontend && SKIP_INSTALL=1 SKIP_DOCKER=1 ./verify.sh`
 
 Expected: PASS, with the two new `test -f` / `grep` steps visible in the output.
+
+- [ ] **Step 4a: Update `docs/sdlc.md` for the `verify.sh` change**
+
+Required, not optional — see the note under **Files** above. In whatever part of `docs/sdlc.md`
+describes what the frontend `build` target covers, add one sentence: the build now emits
+`dist/csp.txt` and the target fails if the production policy is missing from it. Do not create a
+new section.
 
 - [ ] **Step 5: Create the backend test fixtures**
 
@@ -1235,10 +1324,13 @@ In `backend/src/config.ts`, add to the `Settings` interface after `port`:
   publicDir: string; // absolute path to the built SPA; empty disables SPA serving (dev default)
 ```
 
-In `loadSettings`, after `port`:
+Add `import { resolve } from "node:path";` to the imports at the top of `config.ts`, and in
+`loadSettings`, after `port`:
 
 ```ts
-    publicDir: str(env.PUBLIC_DIR, ""),
+    // resolve() because res.sendFile() rejects a relative path: left relative, the mistake
+    // surfaces as a 500 on every SPA request instead of at the boundary where it was made.
+    publicDir: env.PUBLIC_DIR ? resolve(env.PUBLIC_DIR) : "",
 ```
 
 Append to `backend/tests/config.test.ts`:
@@ -1252,8 +1344,14 @@ describe("publicDir", () => {
   it("takes PUBLIC_DIR from the environment", () => {
     expect(loadSettings({ PUBLIC_DIR: "/app/public" }).publicDir).toBe("/app/public");
   });
+
+  it("resolves a relative path, which res.sendFile would otherwise reject at request time", () => {
+    expect(loadSettings({ PUBLIC_DIR: "./public" }).publicDir).toBe(resolve("./public"));
+  });
 });
 ```
+
+That last test needs `import { resolve } from "node:path";` in the test file too.
 
 - [ ] **Step 11: Mount it in `server.ts`**
 
@@ -1263,9 +1361,9 @@ In `backend/src/server.ts`, add to the imports:
 import { mountStaticSite } from "./staticSite.js";
 ```
 
-Find the final error-handling middleware (the one containing
-`log.error("unhandled request error", { err })`, around line 220) and insert **immediately
-before it**:
+Find the final error-handling middleware — the last `app.use` in the file, the four-argument one
+containing `log.error("unhandled request error", { err })` after PR 1 renamed it — and insert
+**immediately before it**, after the history router mount:
 
 ```ts
   // Serve the built SPA from this process when one is bundled with it (spec D9, single origin).
@@ -1321,7 +1419,7 @@ cd ../frontend && npm run format && npm run lint
 cd ..
 git add frontend/vite.config.ts frontend/verify.sh backend/src/staticSite.ts \
         backend/tests/staticSite.test.ts backend/tests/fixtures backend/src/config.ts \
-        backend/tests/config.test.ts backend/src/server.ts backend/src/index.ts
+        backend/tests/config.test.ts backend/src/server.ts backend/src/index.ts docs/sdlc.md
 git commit -m "fix(csp): emit the production policy at build and serve the SPA under it"
 ```
 
@@ -1337,10 +1435,37 @@ D9 describes: the built SPA served by the API process, listening on `PORT`, runn
 The per-side dev images stay exactly as they are; `docker compose up` is untouched.
 
 **Files:**
-- Create: `Dockerfile`
-- Modify: `backend/verify.sh`, `docs/sdlc.md`
+- Create: `Dockerfile`, `.dockerignore`
+- Modify: `backend/verify.sh`, `docs/sdlc.md`, `README.md`
 
-- [ ] **Step 1: Write the Dockerfile**
+- [ ] **Step 1: Write the repo-root `.dockerignore` — first, not last**
+
+Docker reads `.dockerignore` from the **context** root. The context here is the repo root, where
+none exists; `frontend/.dockerignore` does not apply. Without this file, `COPY frontend/ ./` in
+stage 1 copies the host's `frontend/node_modules` over the freshly-`npm ci`'d tree, and the build
+dies on esbuild's platform check (host binaries are darwin-arm64; the image is linux). CI would
+not catch it — the `Backend checks` job never installs frontend deps — so this is the
+green-in-CI/broken-locally failure mode, in a script whose entire purpose is local/CI parity.
+
+Create `.dockerignore` at the repo root:
+
+```gitignore
+# Context root for the production image (see ./Dockerfile). Each stage installs its own deps;
+# copying host node_modules over them breaks the build with platform-mismatched binaries.
+**/node_modules
+**/dist
+**/.vite
+.git
+.github
+docs
+security
+*.md
+.env
+.env.*
+!.env.example
+```
+
+- [ ] **Step 2: Write the Dockerfile**
 
 Create `Dockerfile` at the repo root:
 
@@ -1369,6 +1494,14 @@ ENV VITE_API_BASE=$VITE_API_BASE \
     VITE_AUTH0_DOMAIN=$VITE_AUTH0_DOMAIN \
     VITE_AUTH0_CLIENT_ID=$VITE_AUTH0_CLIENT_ID \
     VITE_AUTH0_AUDIENCE=$VITE_AUTH0_AUDIENCE
+# Fail the BUILD rather than ship an app that blocks its own login. The CSP's connect-src and
+# frame-src are derived from VITE_AUTH0_DOMAIN; built empty, the policy is still valid, still
+# strict, still passes every check — and silently forbids the Auth0 token endpoint and the
+# silent-auth iframe. staticSite.ts makes a MISSING policy fatal but cannot detect a WRONG one,
+# so this is the only place the mistake is catchable.
+RUN test -n "$VITE_AUTH0_DOMAIN" || { \
+      echo "VITE_AUTH0_DOMAIN is required: build with --build-arg VITE_AUTH0_DOMAIN=<tenant>"; \
+      exit 1; }
 RUN npm run build
 
 # --- Stage 2: compile the backend -------------------------------------------------------------
@@ -1398,30 +1531,37 @@ USER node
 CMD ["node", "dist/index.js"]
 ```
 
-- [ ] **Step 2: Build it and check the three things that silently break**
+- [ ] **Step 3: Build it and check the three things that silently break**
 
 ```bash
-docker build -t llm-code-execution:prod .
+docker build --build-arg VITE_AUTH0_DOMAIN=tenant.us.auth0.com -t llm-code-execution:prod .
 ```
+
+The build arg is mandatory — Step 2's assertion fails without it. Any value works for this local
+check; it only has to be non-empty.
 
 Then, in order:
 
 ```bash
-# 1. The SPA must not have baked in the localhost API base.
+# 1. Nothing may have baked in the localhost API base — not the bundle, and not csp.txt.
+#    This is why the production policy uses `?? ""` rather than `|| "http://localhost:8000"`.
 docker run --rm llm-code-execution:prod \
   sh -c "grep -rl 'localhost:8000' /app/public || echo 'CLEAN: no localhost baked in'"
 
-# 2. The CSP must have shipped.
+# 2. The CSP must have shipped, and must name the Auth0 origin.
 docker run --rm llm-code-execution:prod cat /app/public/csp.txt
 
 # 3. It must run as a non-root user.
 docker run --rm llm-code-execution:prod id -u   # -> 1000, not 0
 ```
 
-Expected: `CLEAN: no localhost baked in`, a policy line containing `script-src 'self'`, and uid
-1000.
+Expected: `CLEAN: no localhost baked in`; a policy line containing `script-src 'self'` **and**
+`https://tenant.us.auth0.com`; uid 1000.
 
-- [ ] **Step 3: Run the image against the local services**
+Check 1 is the one that fails loudly if the `?? ""` in Task 4 Step 1 was written as `||` —
+`grep` finds the origin inside `csp.txt`, exits 0, and `CLEAN` never prints.
+
+- [ ] **Step 4: Run the image against the local services**
 
 ```bash
 docker compose up -d postgres redis
@@ -1443,7 +1583,7 @@ Expected: health OK, a real CSP header, and JSON log lines in the first terminal
 Ctrl-C and confirm you see `shutdown: draining` then `shutdown: complete` — that is Task 3's work
 proving itself in the artifact that will actually be deployed.
 
-- [ ] **Step 4: Add it to `backend/verify.sh`**
+- [ ] **Step 5: Add it to `backend/verify.sh`**
 
 The production image is the backend's artifact — it is the backend process that serves the SPA —
 so it belongs to that side's script. Replace the `docker_()` function:
@@ -1454,7 +1594,13 @@ docker_() {
   run docker build -t llm-sandbox:verify ./sandbox-image
   # The production artifact (repo-root Dockerfile, repo-root context): the SPA and the API in one
   # image. Built here because it is the backend process that serves the SPA.
-  run docker build -f ../Dockerfile -t llm-code-execution:verify ..
+  #
+  # The VITE_AUTH0_DOMAIN placeholder satisfies the Dockerfile's build-time assertion. It proves
+  # the WIRING, never the value: a real deploy passes its real tenant, and an image built by this
+  # script must never be deployed.
+  run docker build -f ../Dockerfile \
+    --build-arg VITE_AUTH0_DOMAIN=verify.invalid \
+    -t llm-code-execution:verify ..
 }
 ```
 
@@ -1462,29 +1608,36 @@ No CI change is needed: `.github/workflows/ci.yml` already invokes `./verify.sh 
 step, so the new build runs inside the existing `Backend checks` job and the job-name contract is
 untouched.
 
-- [ ] **Step 5: Run the backend checks**
+**State the coupling this creates**, in the PR description and in Step 7's `docs/sdlc.md`
+sentence: `Backend checks` now builds the frontend too, so a frontend-only regression fails the
+*backend* job, and that job gets slower. That is an acceptable price for having the deployable
+artifact built on every PR, but it should be a decision on the record rather than a surprise the
+first time someone bisects a red backend job caused by a React change.
+
+- [ ] **Step 6: Run the backend checks**
 
 Run: `cd backend && SKIP_INSTALL=1 ./verify.sh docker`
 
 Expected: three image builds, all green.
 
-- [ ] **Step 6: Update `docs/sdlc.md`**
+- [ ] **Step 7: Update `docs/sdlc.md`**
 
 `backend/verify.sh` is in the SDLC-docs contract's trigger list, so this PR must touch
 `docs/sdlc.md` or the `SDLC docs` job fails. Add the production image to wherever that document
-describes what `verify.sh docker` covers — one sentence naming the repo-root `Dockerfile` and why
-it exists (single origin, no Docker socket). Do not invent a new section for it.
+describes what `verify.sh docker` covers — two sentences: what the repo-root `Dockerfile` is and
+why it exists (single origin, no Docker socket), and the coupling from Step 5 (`Backend checks`
+now builds the frontend). Do not invent a new section for it.
 
-- [ ] **Step 7: Update the README**
+- [ ] **Step 8: Update the README**
 
-Per `CLAUDE.md`, the README moves in the same change: add the repo-root `Dockerfile` to the
-project layout, and note in the verification section that `./verify.sh docker` now builds three
-images.
+Per `CLAUDE.md`, the README moves in the same change: add the repo-root `Dockerfile` and
+`.dockerignore` to the project layout, and note in the verification section that
+`./verify.sh docker` now builds three images.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add Dockerfile backend/verify.sh docs/sdlc.md README.md
+git add Dockerfile .dockerignore backend/verify.sh docs/sdlc.md README.md
 git commit -m "feat(deploy): one production image serving the SPA and the API"
 ```
 
@@ -1548,7 +1701,9 @@ cd backend && DATABASE_URL=postgres://app:app@localhost:5432/app \
 cd ../frontend && ./verify.sh
 ```
 
-Expected: both green, including the new `csp.txt` gate and the three-image docker target.
+Expected: both green, including the new `csp.txt` gate and the three-image docker target (the
+third build passes `--build-arg VITE_AUTH0_DOMAIN=verify.invalid`; a placeholder is enough to
+satisfy the assertion, and an image built by `verify.sh` is never deployable).
 
 Then confirm the four Phase 0 outcomes by hand, against the production image rather than the dev
 topology:
