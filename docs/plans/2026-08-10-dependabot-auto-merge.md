@@ -936,3 +936,91 @@ Also applied: a paragraph in `README.md`'s CI section noting that a fourth pull-
 exists and gates nothing. The reviewer flagged this as a judgment call under the documentation
 rule in `CLAUDE.md`; a workflow that merges to `main` is close enough to "security posture" to
 name.
+
+---
+
+## Live acceptance results — 2026-08-10, after PR #126 merged as `66bca9b`
+
+Three fixtures, rebased with `@dependabot rebase` to produce a `synchronize` event.
+
+**The gate is correct.** Both npm runs produced the right verdict and the right diagnostic:
+
+| PR | Bump | Verdict | Diagnostic |
+| --- | --- | --- | --- |
+| #117 | `globals` 17.7.0 → 17.9.0 | `eligible` | `globals: 17.7.0 -> 17.9.0 [version-update:semver-minor]` |
+| #120 | `jsdom` 25.0.1 → 30.0.1 | `not-eligible: at least one dependency is not patch or minor` | `jsdom: 25.0.1 -> 30.0.1 [version-update:semver-major]` |
+
+**The `github_actions` exclusion works, and it works in the right place.** #98
+(`actions/setup-node` 4 → 7) produced **no run at all** — the job-level `if:` rejected it on
+`head_ref` before any step, so `fetch-metadata` never executed. That is the property the Copilot
+finding was about, and only a live run could demonstrate it: a jq-level rule would have shown the
+same verdict while still having run the action.
+
+**Two defects, both fixed in the follow-up PR.**
+
+1. **`pull-requests: write` alone is not sufficient.** Run 31432435114 failed with
+   `GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)`, and run
+   31432454576 failed identically on `disablePullRequestAutoMerge`. Both auto-merge mutations are
+   gated on the `contents` scope. This was the one change shipped on reasoning rather than
+   evidence, flagged as such at the time, and the reasoning was wrong — GitHub's documented
+   example carries `contents: write` for a reason. Restored, with the run IDs recorded in the
+   workflow so nobody re-derives it.
+2. **The disarm fallback's not-armed check never matched.** `gh pr view --json autoMergeRequest
+   --jq '.autoMergeRequest'` prints an **empty string** when the field is null, not the text
+   `null`. Verified directly: the raw form returns a zero-length string, while
+   `--jq 'if .autoMergeRequest == null then "no" else "yes" end'` returns `no`. So an ineligible
+   PR that was never armed took the loud failure path. Switched to the predicate form, which also
+   makes an empty value mean "`gh` itself failed" — which correctly falls through to the loud
+   path.
+
+Neither defect could reach `main`: the failures are in a job that gates nothing, and in both cases
+the outcome was "auto-merge not armed".
+
+**Still unproven, honestly:** no PR has auto-merged yet, so #94's "merges with no human
+interaction" criterion is not yet met — it is blocked on defect 1, not on the design. Task 7 Steps
+4–5, 7b and 8 are re-run after the follow-up lands.
+
+### Review of the follow-up (PR #127)
+
+`security-review` found nothing. `code-review` found two more real defects and one design
+consequence of restoring `contents: write` that the follow-up itself had introduced:
+
+10. **The disarm step failed open.** A step `if:` without a status function is implicitly ANDed
+    with `success()`, so a failure in `Fetch Dependabot metadata` or in the gate skipped the
+    disarm entirely — leaving an armed PR armed. Confirmed in run 31432454576, where the `Explain`
+    step never appeared after the disarm step failed. Both non-eligible steps now carry
+    `!cancelled()`, and an unknown verdict takes the disarm path rather than the skip.
+11. **`set -uo pipefail` never cleared errexit.** GitHub invokes steps as `bash -e {0}`, so
+    errexit is already on and `set -u -o pipefail` does not turn it off. The `gh`-failure branches
+    added in this very PR were unreachable — the script died at the assignment. The comment
+    claiming otherwise was wrong in exactly the way the PR was correcting elsewhere. Fixed with an
+    explicit `set +e`, and covered by the stub test below.
+12. **Restoring `contents: write` made `--disable-auto` work for the first time — including
+    against humans.** `allow_auto_merge` is repository-wide, so a maintainer can read a major and
+    arm auto-merge by hand. The next Dependabot rebase would have silently revoked that decision.
+    The step now reads `autoMergeRequest.enabledBy.login` first and only disarms what
+    `github-actions[bot]` armed.
+
+**One architectural change, reversible if you disagree.** `code-review` pointed out that with
+`contents: write` restored, the single job hands a main-writable token to
+`dependabot/fetch-metadata` — making the SHA pin the only control rather than defence in depth.
+The workflow is now two jobs: `gate` (third-party action, `pull-requests: read`, publishes a
+verdict) and `apply` (`contents: write`, runs only `gh`). This is *not* the two-job design
+rejected during planning — that one required a checkout to run a repository script, and this one
+still checks nothing out. The rejection reasoning does not carry over.
+
+**The shell logic now has a test.** `test-driven-development` applies to a bug fix, and finding 11
+is exactly the kind a test catches. The disarm script cannot move to `scripts/` — that would need
+a checkout in the privileged job — so instead it is **extracted verbatim from the workflow YAML**
+and run under `bash -e` (the runner's actual shell) against a stub `gh`:
+
+| Case | Expected |
+| --- | --- |
+| not armed | exit 0, "nothing to disarm" |
+| armed by a human | exit 0, "leaving it alone" |
+| armed by the bot, disarm succeeds | exit 0, "auto-merge disarmed" |
+| armed by the bot, disarm fails | **exit 1**, loud |
+| `gh pr view` fails | **exit 1**, "refusing to assume it is disarmed" |
+| armed by `github-actionsb` | exit 0, treated as a human — the unquoted-`[bot]`-is-a-glob regression |
+
+All six pass. The fifth is the one that was dead code before finding 11.
