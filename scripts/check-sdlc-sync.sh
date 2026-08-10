@@ -32,9 +32,14 @@ fi
 # which is a watched path — so without this every action update would fail a required check
 # that a bot can never satisfy. A pin bump is not a process change.
 #
-# This is an early `exit 0` rather than a job-level `if:` in sdlc-docs.yml on purpose. `SDLC
-# docs` is a *required* status check; a skipped job does not report success, and a required
-# check that never reports success blocks the merge permanently. The job must run and pass.
+# This is an early `exit 0` rather than a job-level `if:` in sdlc-docs.yml on purpose — but NOT
+# because a skipped job would block the merge. It would not: GitHub reports a job skipped by an
+# `if:` as Success, and it satisfies a required check. (The case that does hang forever is a
+# workflow-level path or branch filter, where the check never reports at all.)
+#
+# The real reasons are that a job-level `if:` would also skip the Self-test step — so the suite
+# guarding this very exemption would not run on the PRs the exemption exists for — and that a
+# skipped job says nothing in the checks list, while this prints why it passed.
 #
 # The actor is exact-matched. PR_ACTOR comes from github.event.pull_request.user.login, which
 # GitHub sets and a contributor cannot forge, and it arrives via `env:` like the title.

@@ -471,10 +471,16 @@ actually re-runs the check; without that type the hatch would be documented but 
 fail a required check that a bot can never satisfy. `scripts/check-sdlc-sync.sh` exits 0 when
 `PR_ACTOR` is exactly `dependabot[bot]`. A pin bump is not a process change.
 
-That exemption is an early `exit 0` **inside the script**, not a job-level `if:`. `SDLC docs` is
-a required status check, and a skipped job does not report success — a required check that never
-reports success blocks the merge permanently, which is worse than the failure being avoided.
-The same reasoning keeps `PR shape`'s self-test a step rather than a conditional job.
+That exemption is an early `exit 0` **inside the script**, not a job-level `if:` — and the reason
+is worth stating precisely, because the intuitive one is wrong. A job skipped by an `if:` does
+**not** block a required check: GitHub reports it as *Success* and it satisfies the requirement.
+The case that hangs a merge forever is a workflow-level `paths:` or `branches:` filter, where the
+check never reports at all.
+
+The actual reasons are narrower. A job-level `if:` would skip the `Self-test` step too, so the
+suite guarding the exemption would not run on the very PRs the exemption exists for. And a
+skipped job says nothing in the checks list, where this prints why it passed — which matters for
+a bypass, the one outcome you want to be able to see.
 
 Both early exits are covered by `scripts/tests/check-sdlc-sync.test.sh`, which the job runs as
 its first step and which is also the local pre-push command. The base-resolution logic below

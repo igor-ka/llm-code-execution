@@ -17,6 +17,20 @@ step, matching the `PR shape` pattern.
 *Findings from the first real run* section first; findings 1 and 3 are the two decisions this
 plan implements.
 
+> **Post-implementation correction — this plan's central rationale is wrong.** Copilot review
+> challenged it and was right: GitHub reports a job skipped by a job-level `if:` as *Success*,
+> and it **satisfies** a required status check — *"A job that is skipped will report its status
+> as 'Success'. It will not prevent a pull request from merging, even if it is a required
+> check."* The case that hangs a merge forever is a workflow-level `paths:`/`branches:` filter,
+> where the check never reports at all.
+>
+> The decision (exit 0 inside the script) stands, on narrower ground: a job-level `if:` would
+> skip the `Self-test` step too, so the suite guarding the exemption would not run on the PRs it
+> exists for — and a skipped job says nothing in the checks list, where an exercised bypass
+> should be visible. Wherever this document says a skipped required check "blocks the merge
+> permanently", read the corrected reasoning in `docs/sdlc.md` and `scripts/check-sdlc-sync.sh`.
+> Issue #56's finding 1 was corrected the same way.
+
 **PR boundaries:** One PR, closing #56. The config and the exemption are not separable: the
 first `github-actions` bump fails `SDLC docs` the moment the config exists, so shipping the
 config alone would knowingly break the queue it creates. `docs/sdlc.md` is touched by both
