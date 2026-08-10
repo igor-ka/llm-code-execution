@@ -881,6 +881,31 @@ Two further findings were accepted as improvements rather than defects:
   proposed `github.repository_owner` has the same failure mode on a transfer, and the slug is
   already hard-coded in `scripts/check-pr-shape.sh`. Churn without a fix.
 
+### Copilot review, same PR
+
+Copilot found the one thing both other reviews missed, and it invalidated a claim this plan made
+about its own design:
+
+7. **The ecosystem rule ran too late by construction.** For `pull_request` the workflow file is
+   read from the merge ref — a fact this plan already used to explain why open PRs pick up a
+   workflow on `main`, without noticing the consequence. A Dependabot PR bumping this workflow's
+   own `fetch-metadata` pin would therefore execute the *replacement* action under the job's
+   writable token, and only afterwards reach a jq rule that rejects `github_actions`. Any rule
+   built on metadata the third-party action produces cannot protect the step that produces it.
+   Fixed by hoisting the allow-list into the job-level `if:` as
+   `startsWith(github.head_ref, 'dependabot/npm_and_yarn/')`, which is event data evaluated before
+   the first step. The jq rule stays as defence in depth. Dropping `contents: write` had already
+   bounded the blast radius of this to "can enable auto-merge", not "can push to `main`".
+8. **The disarm step trusted a snapshot.** It was gated on
+   `github.event.pull_request.auto_merge != null`, a field captured when the event fired; being
+   wrong about it in the "already armed" direction is the exact failure the step exists to
+   prevent. It now attempts the disarm unconditionally and, if that errors, re-reads the live
+   state and fails loudly unless auto-merge really is off.
+
+Copilot's remaining two comments were already addressed by the `code-review` fixes in the
+preceding commit — the deny-list-not-fail-closed point (a missing or null `packageEcosystem` now
+fails the `!= "npm_and_yarn"` test) and the missing disarm path.
+
 Also applied: a paragraph in `README.md`'s CI section noting that a fourth pull-request workflow
 exists and gates nothing. The reviewer flagged this as a judgment call under the documentation
 rule in `CLAUDE.md`; a workflow that merges to `main` is close enough to "security posture" to

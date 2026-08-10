@@ -547,12 +547,20 @@ Four details in that rule are not decoration:
   "Removes `esbuild`". The summary output is the *max* across entries and skips those blanks, so a
   security PR whose only major is an unparseable entry reports minor. The gate reads the
   per-dependency JSON instead and fails closed on a blank, a missing key or malformed input.
-- **An allow-list of ecosystems, not a deny-list.** Only `npm_and_yarn` auto-merges.
-  `github_actions` must not: the workflow pins its own action by SHA with the version in a
-  trailing comment, and Dependabot bumps SHA pins by that comment, so a new third-party action SHA
-  would arrive as a *patch* and merge unread — and `SDLC docs` exits 0 for `dependabot[bot]` while
-  no `verify.sh` reads workflow files. An allow-list also fails closed on ecosystems added later:
-  `docker` is proposed in #110, where a base-image digest bump has the same property.
+- **An allow-list of ecosystems, not a deny-list, and it is applied *before* any step runs.** Only
+  `npm_and_yarn` auto-merges. `github_actions` must not: the workflow pins its own action by SHA
+  with the version in a trailing comment, and Dependabot bumps SHA pins by that comment, so a new
+  third-party action SHA would arrive as a *patch* and merge unread — and `SDLC docs` exits 0 for
+  `dependabot[bot]` while no `verify.sh` reads workflow files. An allow-list also fails closed on
+  ecosystems added later: `docker` is proposed in #110, where a base-image digest bump has the
+  same property.
+
+  The check lives in the **job-level `if:`**, on `github.head_ref`, not in the gate that reads the
+  action's output — and that placement is the whole point. For `pull_request` the workflow file is
+  read from the merge ref, so a Dependabot PR bumping this workflow's own `fetch-metadata` pin
+  would execute the *replacement* action under the job's writable token and only afterwards reach
+  a gate that rejects it. Any rule that depends on metadata the third-party action produces is too
+  late by construction. The gate repeats the check as defence in depth.
 - **One commit, or nothing.** `fetch-metadata` verifies the PR author and then reads and
   signature-checks only `commits[0]`; auto-merge merges HEAD. Requiring a single commit closes the
   gap between what was inspected and what would merge. Every Dependabot PR this repository has

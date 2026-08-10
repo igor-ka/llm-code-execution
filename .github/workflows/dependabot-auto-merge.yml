@@ -44,9 +44,19 @@ jobs:
     runs-on: ubuntu-latest
     # `github.repository` keeps this inert in forks. `user.login` is set by GitHub from the
     # authenticated actor and cannot be forged by a PR author.
+    #
+    # The branch-prefix test is the ecosystem allow-list, hoisted to where it runs BEFORE any
+    # step does. It has to be here, not in the gate below: for `pull_request` the workflow file
+    # is read from the merge ref, so a Dependabot PR that bumps this file's own
+    # `fetch-metadata` pin would run the *replacement* action — with this job's writable token —
+    # and only afterwards reach a gate that rejects the `github_actions` ecosystem. Rejecting on
+    # metadata the action produces is too late by construction. `github.head_ref` is event data,
+    # available before the first step, and Dependabot always names branches
+    # `dependabot/<ecosystem>/…`. The jq rule below repeats the check as defence in depth.
     if: >-
       github.event.pull_request.user.login == 'dependabot[bot]' &&
-      github.repository == 'igor-ka/llm-code-execution'
+      github.repository == 'igor-ka/llm-code-execution' &&
+      startsWith(github.head_ref, 'dependabot/npm_and_yarn/')
     # Declared at job level, not workflow level, so the scope is visibly attached to the only job
     # that needs it. The repository default is `read`; a workflow may request more, and a PR from
     # a fork is capped at read regardless of what is written here.
@@ -158,14 +168,30 @@ jobs:
       # Dependabot has write. So a grouped PR that is armed while patch-only, and later updated in
       # place to carry a major, would stay armed and merge that major unattended. This is the step
       # that prevents it.
+      #
+      # Attempted unconditionally rather than gated on `github.event.pull_request.auto_merge`:
+      # that payload field is a snapshot taken when the event fired, and being wrong about it in
+      # the "already armed" direction is the failure this step exists to prevent. `--disable-auto`
+      # errors on a PR that was never armed, so the fallback re-reads the live state and only
+      # passes if auto-merge really is off.
       - name: Disarm auto-merge if it is no longer eligible
-        if: >-
-          steps.gate.outputs.verdict != 'eligible' &&
-          github.event.pull_request.auto_merge != null
+        if: steps.gate.outputs.verdict != 'eligible'
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr merge --disable-auto "$PR_URL"
+        run: |
+          set -uo pipefail
+          if gh pr merge --disable-auto "$PR_URL"; then
+            echo "auto-merge disarmed"
+            exit 0
+          fi
+          state="$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest')"
+          if [[ "$state" == "null" ]]; then
+            echo "auto-merge was not armed — nothing to disarm"
+            exit 0
+          fi
+          echo "FAILED to disarm auto-merge on an ineligible PR: $state" >&2
+          exit 1
 
       # Prints why a PR was left alone, so "why did this not merge?" is answered in the run log
       # rather than by re-deriving the rule. Majors are the common case here.
