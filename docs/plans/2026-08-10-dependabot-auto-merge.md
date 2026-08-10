@@ -726,6 +726,32 @@ Expected: the run exists, the `Explain why auto-merge was not armed` step ran an
 immediately (`allow_auto_merge=false` is the fastest kill switch; `git revert` the merge commit
 removes the workflow).
 
+- [ ] **Step 7b: Confirm the eligible → ineligible transition disarms**
+
+Added after the Copilot review. Arming is sticky, so the transition is the case that matters and
+neither fixture covers it. Do it on a PR that is already armed (#117 if Step 4 armed it and it has
+not merged; otherwise the next eligible bump):
+
+```bash
+gh pr view <PR> --json autoMergeRequest --jq '.autoMergeRequest.mergeMethod'   # expect: SQUASH
+gh pr comment <PR> --body "@dependabot recreate"
+```
+
+`recreate` rewrites the branch. If the rewritten PR is still patch/minor the verdict stays
+`eligible` and nothing changes — that is not the test. To reach the transition, use a grouped PR
+that Dependabot refreshes across a major, or verify the branch directly:
+
+```bash
+gh run list --workflow "Dependabot auto-merge" --limit 3
+gh pr view <PR> --json autoMergeRequest --jq '.autoMergeRequest'
+```
+
+Expected when the verdict flips to `not-eligible`: the `Disarm auto-merge if it is no longer
+eligible` step runs, prints `auto-merge disarmed`, and `autoMergeRequest` becomes `null`. If no
+natural transition occurs within the acceptance window, record that it was not exercised rather
+than claiming it was — the step's own failure path (`FAILED to disarm auto-merge on an ineligible
+PR`) is loud, so an unexercised path is a known gap, not a silent one.
+
 - [ ] **Step 8: Note whether the post-merge `CI` run on `main` fired**
 
 ```bash
