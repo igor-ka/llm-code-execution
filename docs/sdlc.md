@@ -219,6 +219,12 @@ cd backend  && ./verify.sh     # eslint, prettier, tsc, vitest, build, docker im
 cd frontend && ./verify.sh     # eslint, prettier, vitest, tsc -b && vite build, docker image
 ```
 
+The frontend `build` target also asserts that `dist/csp.txt` exists and carries a production
+`script-src`. That gate is not decoration: the Content-Security-Policy used to be attached only
+by the Vite dev and preview servers, so a static deploy of `dist/` shipped with **no CSP at
+all** — and a unit test on the policy builder cannot catch "the server forgot the header".
+The build emits the policy as data and the backend serves the SPA under it.
+
 Individual targets exist for the inner loop: `install`, `lint`, `format`, `test`, `build`,
 `docker`, plus `migrate` and `test:integration` on the backend. `SKIP_INSTALL=1` and
 `SKIP_DOCKER=1` speed up iteration — but the pre-push run should be unskipped, because CI does

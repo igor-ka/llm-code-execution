@@ -8,7 +8,7 @@
 #   lint     eslint
 #   format   prettier --check
 #   test     vitest
-#   build    tsc -b && vite build
+#   build    tsc -b && vite build (+ assert the production CSP shipped)
 #   docker   build the frontend image
 #
 # CI invokes the individual targets as separate named steps (Install / Lint / Format /
@@ -33,7 +33,14 @@ install() { run npm ci; }
 lint()    { run npm run lint; }
 format()  { run npm run format:check; }
 test_()   { run npm run test; }
-build()   { run npm run build; }
+build() {
+  run npm run build
+  # Regression gate: the production CSP must ship with the bundle. It used to exist only as a
+  # Vite dev/preview response header, so a static deploy of dist/ silently served no CSP at all —
+  # a unit test on the policy builder cannot catch "the server forgot the header".
+  run test -f dist/csp.txt
+  run grep -q "script-src 'self'" dist/csp.txt
+}
 docker_() { run docker build -t llm-code-execution-frontend:verify .; }
 
 all() {
