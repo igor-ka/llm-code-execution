@@ -1,13 +1,21 @@
 # Scheduled version updates. Security updates are enabled separately in repository settings and
 # ignore `schedule` and `open-pull-requests-limit` here — but they DO honour a `groups` block
-# that sets `applies-to: security-updates`, which is why each npm ecosystem has two.
+# that sets `applies-to: security-updates`.
 #
 # Both package.json files live one level down, so `directory:` must name them explicitly; a
 # single "/" entry silently matches nothing and Dependabot reports no error.
 #
-# Each npm ecosystem declares the SAME patterns twice. `applies-to` defaults to
-# `version-updates`, so a single group would silently not cover security updates — and both
-# PRs that motivated grouping (#77, #78) were security updates. See issue #56, finding 3.
+# TWO INVARIANTS, both learned the hard way:
+#
+# 1. Every group is declared TWICE — once for version updates, once with
+#    `applies-to: security-updates`. `applies-to` defaults to `version-updates`, so a single
+#    group silently covers only half, and both PRs that first motivated grouping (#77, #78)
+#    were security updates. See issue #56, finding 3.
+#
+# 2. A group must contain the whole peer-connected component, not a convenient subset. Split a
+#    bounded peer range across two PRs and each half dies at `npm ci` — #78, #102, #107 and
+#    #109 are four instances of exactly that. `typescript-eslint` peers on BOTH `typescript`
+#    and `eslint`, so those two clusters are one group, not two.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -15,6 +23,17 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # typescript-eslint@8.67.0 — the latest — still declares `typescript: ">=4.8.4 <6.1.0"`,
+      # while typescript is on 7.0.2. No compatible pair exists, so grouping cannot save this
+      # one: Dependabot generates a lockfile anyway (it falls back to --legacy-peer-deps) and
+      # the PR dies at `npm ci`, which is what #107 and #102 are. Ignoring the major keeps that
+      # PR from being re-raised indefinitely.
+      #
+      # `update-types` affects VERSION updates only — a typescript security advisory still
+      # comes through. Remove this entry once typescript-eslint widens its peer range.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
     groups:
       # Peer-linked packages must move together. Ungrouped, a vite major lands while its
       # peers stay pinned and the PR dies at `npm ci`.
@@ -37,25 +56,38 @@ updates:
           - vitest
           - "@vitest/*"
           - esbuild
-      # typescript-eslint pins a *bounded* peer range on typescript (8.60.0 declares
-      # ">=4.8.4 <6.1.0"), so a solo typescript major cannot resolve — PR #107 died at `npm ci`
-      # with exactly that. The two only move together.
-      typescript-toolchain:
+      # One group, not two: `typescript-eslint` peers on `typescript` AND on `eslint`, so the
+      # two clusters are a single peer-connected component. `@eslint/js@10.0.1` peers
+      # `eslint: ^10.0.0` — a hard major-for-major lock — so an eslint major split across two
+      # PRs is the #107 failure again with different names.
+      lint-toolchain:
         patterns:
           - typescript
           - typescript-eslint
           - "@typescript-eslint/*"
-      typescript-toolchain-security:
+          - eslint
+          - "@eslint/*"
+          - eslint-config-prettier
+          - "eslint-plugin-*"
+      lint-toolchain-security:
         applies-to: security-updates
         patterns:
           - typescript
           - typescript-eslint
           - "@typescript-eslint/*"
+          - eslint
+          - "@eslint/*"
+          - eslint-config-prettier
+          - "eslint-plugin-*"
   - package-ecosystem: npm
     directory: /frontend
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # Same bounded peer range as the backend; see the comment there.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
     groups:
       # The frontend groups additionally carry @vitejs/* — @vitejs/plugin-react declares a
       # peer range on vite, and leaving it behind is exactly what broke PR #78.
@@ -76,27 +108,40 @@ updates:
           - "@vitest/*"
           - "@vitejs/*"
           - esbuild
-      # Same bounded-peer-range problem as the backend; PR #102 died the same way.
-      typescript-toolchain:
+      lint-toolchain:
         patterns:
           - typescript
           - typescript-eslint
           - "@typescript-eslint/*"
-      typescript-toolchain-security:
+          - eslint
+          - "@eslint/*"
+          - eslint-config-prettier
+          - "eslint-plugin-*"
+      lint-toolchain-security:
         applies-to: security-updates
         patterns:
           - typescript
           - typescript-eslint
           - "@typescript-eslint/*"
-      # @types/react and @types/react-dom are peer-linked to each other and to the runtime
-      # packages. PR #109 raised @types/react to 19 while @types/react-dom stayed on 18 and
-      # could not resolve. Frontend only — the backend has no React.
+          - eslint
+          - "@eslint/*"
+          - eslint-config-prettier
+          - "eslint-plugin-*"
+      # PR #109 raised @types/react to 19 while @types/react-dom stayed on 18 and could not
+      # resolve. The group also carries the packages that BOUND react rather than just the
+      # react packages themselves: @testing-library/react peers all four at ^18 || ^19, and
+      # @auth0/auth0-react — a runtime dependency — peers react/react-dom on an even narrower
+      # range. Omit them and react 20 reproduces #109 with the group in place.
+      # @testing-library/dom is here because @testing-library/react peers it at ^10.0.0.
       react:
         patterns:
           - react
           - react-dom
           - "@types/react"
           - "@types/react-dom"
+          - "@testing-library/react"
+          - "@testing-library/dom"
+          - "@auth0/auth0-react"
       react-security:
         applies-to: security-updates
         patterns:
@@ -104,6 +149,9 @@ updates:
           - react-dom
           - "@types/react"
           - "@types/react-dom"
+          - "@testing-library/react"
+          - "@testing-library/dom"
+          - "@auth0/auth0-react"
   - package-ecosystem: github-actions
     directory: /
     schedule:
