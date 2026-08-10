@@ -19,16 +19,22 @@ const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", 
 const migrationCount = readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).length;
 
 /**
- * Reset to an empty database.
+ * Every table this application owns. Kept explicit on purpose.
  *
- * Dropping the schema rather than a hardcoded table list is deliberate: naming
- * `runs, sessions, schema_migrations` means the day a 002 migration creates a new table, the
- * reset drops the ledger (so 002 replays) but not its table, and the replay fails with
- * `relation "..." already exists` — a failure that looks like a locking bug and is not.
+ * `DROP SCHEMA public CASCADE` would be tidier and would survive new migrations automatically,
+ * but this reset runs against whatever `DATABASE_URL` points at — a cascade would destroy
+ * unrelated objects in a shared or local database, which is a much larger blast radius than the
+ * problem deserves.
+ *
+ * **When a migration adds a table, add it here.** That is a real maintenance point: forget it and
+ * the reset drops the ledger (so the migration replays) but not its table, and the replay fails
+ * with `relation "..." already exists` — a failure that looks like a locking bug and is not.
+ * A visible chore beats a quiet risk of deleting someone's data.
  */
+const APP_TABLES = "runs, sessions, schema_migrations";
+
 async function resetSchema(pool: Pool): Promise<void> {
-  await pool.query("DROP SCHEMA public CASCADE");
-  await pool.query("CREATE SCHEMA public");
+  await pool.query(`DROP TABLE IF EXISTS ${APP_TABLES} CASCADE`);
 }
 
 (url ? describe : describe.skip)("migrate", () => {
