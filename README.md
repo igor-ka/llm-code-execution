@@ -48,7 +48,9 @@ backend/
 frontend/                    React + Vite UI
   src/                       App.tsx, api.ts, history.ts, components/ (HistorySidebar, SessionView, RunResult)
   verify.sh                  one-command checks (lint + format + vitest + build + docker)
-docker-compose.yml           backend + frontend + postgres + redis + one-shot sandbox-image build
+docker-compose.yml           local dev topology: backend + frontend + postgres + redis + one-shot sandbox-image build
+Dockerfile                   PRODUCTION image: SPA + API in one container, one origin, non-root, no Docker socket
+.dockerignore                build context for the production image (the repo root is that context)
 ```
 
 ## Prerequisites
@@ -235,13 +237,34 @@ regression-tested (the cross-user INV battery + planted-hole mutants, against bo
 the [ad-hoc security-testing runbook](docs/runbooks/adhoc-auth-security-testing.md) shows how to
 drive Claude Code for on-demand discovery testing of the auth gate.
 
+## Production image
+
+`Dockerfile` at the repo root builds the single artifact intended for a hosted environment: the
+SPA and the API in one container, one origin, listening on `$PORT`, running non-root, with **no
+Docker socket**. The two per-side Dockerfiles remain the dev images `docker compose` uses.
+
+```bash
+docker build \
+  --build-arg VITE_AUTH0_DOMAIN=<tenant> \
+  --build-arg VITE_AUTH0_CLIENT_ID=<client-id> \
+  --build-arg VITE_AUTH0_AUDIENCE=<api-audience> \
+  -t llm-code-execution:prod .
+```
+
+All three build args are **required** — the build fails without them. `VITE_*` values are
+inlined at build time, so an image is bound to one environment; built without the Auth0 values
+the bundle is valid, the CSP is valid and strict, every check passes, and login is silently
+broken. `VITE_API_BASE` is deliberately empty: the API is same-origin here.
+
 ## Verification
 
 Each side has a single `verify.sh` that runs everything CI runs — so local and CI can't
 drift (CI invokes the same scripts).
 
 - **Backend:** `cd backend && ./verify.sh` — installs deps, runs ESLint + Prettier + Vitest,
-  type-checks/builds (`tsc`), and builds the backend and sandbox Docker images.
+  type-checks/builds (`tsc`), and builds three Docker images: the dev backend image, the sandbox
+  image, and the repo-root production image — then asserts inside that image that the production
+  CSP shipped, that the policy names no plaintext origin, and that the runtime user is not root.
 - **Frontend:** `cd frontend && ./verify.sh` — installs deps, runs ESLint + Prettier +
   Vitest, type-checks/builds, and builds the frontend Docker image.
 

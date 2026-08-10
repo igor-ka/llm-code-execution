@@ -52,6 +52,70 @@ integration() {
 docker_() {
   run docker build -t llm-code-execution-backend:verify .
   run docker build -t llm-sandbox:verify ./sandbox-image
+  # The production artifact (repo-root Dockerfile, repo-root context): the SPA and the API in one
+  # image. Built here because it is the backend process that serves the SPA.
+  #
+  # The VITE_AUTH0_* placeholders satisfy the Dockerfile's build-time assertion. They prove the
+  # WIRING, never the values: a real deploy passes its real tenant, and an image built by this
+  # script must never be deployed.
+  run docker build -f ../Dockerfile \
+    --build-arg VITE_AUTH0_DOMAIN=verify.invalid \
+    --build-arg VITE_AUTH0_CLIENT_ID=verify \
+    --build-arg VITE_AUTH0_AUDIENCE=https://verify.invalid/api \
+    -t llm-code-execution:verify ..
+  # NOTE the `if …; then exit 1; fi` form. `! grep -q …` under `set -e` does NOT abort: POSIX
+  # exempts a command whose return value is inverted with `!` from errexit, so the negated
+  # assertions silently passed on a bad image. frontend/verify.sh uses the same explicit form for
+  # the same reason.
+  run docker run --rm llm-code-execution:verify sh -c '
+    set -e
+    # The CSP must have shipped, and must be the PRODUCTION policy.
+    grep -qE "script-src '"'"'self'"'"'\s*(;|$)" /app/public/csp.txt
+    if grep -q "unsafe-eval" /app/public/csp.txt; then
+      echo "csp.txt permits unsafe-eval — that is the DEV policy" >&2; exit 1
+    fi
+
+    # No PLAINTEXT origin in the policy. connect-src is generated from the same resolveApiBase()
+    # the bundle uses, so a VITE_API_BASE left at the localhost fallback shows up here.
+    #
+    # Scope of what this proves: THIS build passes no VITE_API_BASE, so it exercises the ARG
+    # default (""). It therefore guards the default and the policy builder, not a real deploy
+    # that passes a plaintext base — that one is caught by the same assertion run against the
+    # image you actually ship.
+    #
+    # Do NOT grep the bundle for localhost instead: resolveApiBase() carries that string as its
+    # fallback LITERAL, so it is present in every build by construction whether or not it is in
+    # use. The policy reflects the RESOLVED value; the bundle does not.
+    if grep -q "http://" /app/public/csp.txt; then
+      echo "csp.txt names a plaintext http:// origin" >&2; exit 1
+    fi
+
+    # The Auth0 origin must have REACHED the policy. Without this, a regression in the
+    # ARG -> ENV -> buildCsp wiring leaves every other assertion green while the deployed app
+    # blocks its own login: the policy is still valid, still strict, and missing frame-src /
+    # connect-src for the tenant. The Dockerfile guard only proves the value was non-EMPTY.
+    if ! grep -q "verify.invalid" /app/public/csp.txt; then
+      echo "csp.txt does not name the Auth0 origin that was passed as a build arg" >&2; exit 1
+    fi
+
+    # Never root.
+    [ "$(id -u)" != "0" ]
+    echo "production image assertions passed"
+  '
+  # Negative test: the Dockerfile MUST reject an empty VITE_AUTH0_* value. CI always supplies all
+  # three, so without this the guard could be deleted and every check would stay green — the
+  # classic gate that does not gate. Runs after the positive build, so the npm ci layer is warm
+  # and this costs seconds. Omitting the audience exercises the ARG default ("").
+  echo
+  echo "==> docker build (negative: VITE_AUTH0_AUDIENCE omitted, MUST fail)"
+  if docker build -f ../Dockerfile \
+      --build-arg VITE_AUTH0_DOMAIN=verify.invalid \
+      --build-arg VITE_AUTH0_CLIENT_ID=verify \
+      -t llm-code-execution:argcheck .. >/dev/null 2>&1; then
+    echo "Dockerfile built with VITE_AUTH0_AUDIENCE empty — the build-arg guard is not enforcing" >&2
+    exit 1
+  fi
+  echo "    rejected as expected"
 }
 
 all() {
