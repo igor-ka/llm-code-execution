@@ -10,6 +10,7 @@
  * bare INCR would charge callers for requests it refused.
  */
 import { createClient } from "redis";
+import { log } from "../log.js";
 import type { QuotaStore, QuotaLimits, QuotaDecision } from "./quota.js";
 
 /**
@@ -86,7 +87,7 @@ export class RedisQuotaStore implements QuotaStore {
     // An 'error' listener is mandatory: without one, node-redis emits an unhandled 'error'
     // event and takes the process down, turning D5's fail-open into a crash.
     this.client.on("error", (err: unknown) => {
-      console.error("[quota] redis error:", err instanceof Error ? err.message : err);
+      log.error("redis client error", { err });
     });
   }
 

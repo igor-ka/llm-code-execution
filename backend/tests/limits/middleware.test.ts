@@ -76,9 +76,12 @@ describe("quota middleware", () => {
       usage: async () => ({ burst: 0, sustained: 0 }),
       close: async () => {},
     };
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // The alarm now goes through log.ts, whose sink is console.log — severity is a field, not a
+    // stream. Left on console.error, this spy would pass vacuously and stop guarding S9 at all.
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     await request(app(broken)).post("/api/execute").send({ prompt: "1" }).expect(200);
     expect(spy).toHaveBeenCalled(); // silence would violate S9
+    expect(String(spy.mock.calls[0]?.[0])).toContain("FAILING OPEN");
     spy.mockRestore();
   });
 

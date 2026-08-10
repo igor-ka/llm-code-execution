@@ -13,6 +13,7 @@ import { DockerBackend } from "./sandbox/dockerBackend.js";
 import type { SandboxBackend, ExecutionLimits } from "./sandbox/base.js";
 import { ExecuteRequest, messageResponse, resultResponse } from "./schemas.js";
 import { HttpError } from "./errors.js";
+import { log } from "./log.js";
 import { SessionNotFound, type HistoryStore } from "./history/store.js";
 import { PostgresHistoryStore } from "./history/pgStore.js";
 import { makePool } from "./history/pool.js";
@@ -151,7 +152,7 @@ export function createApp(deps: AppDeps = {}): Express {
           return { sessionId: session.id, runId: run.id };
         } catch (err) {
           if (err instanceof SessionNotFound) throw new HttpError(404, "session_id not found");
-          console.error("history persist failed (continuing):", err);
+          log.error("history persist failed (continuing)", { err });
           return undefined;
         }
       };
@@ -221,7 +222,7 @@ export function createApp(deps: AppDeps = {}): Express {
         res.status(422).json({ detail: "Invalid JSON body" });
         return;
       }
-      console.error(err);
+      log.error("unhandled request error", { err });
       res.status(500).json({ detail: "Internal server error" });
     },
   );
