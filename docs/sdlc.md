@@ -323,6 +323,13 @@ Details that are easy to get wrong:
   bot PRs close no issue and the rule is *at most* one. If someone proposes an actor exemption
   for `PR shape`, that is a sign the rule drifted — see
   [One child per PR](#one-child-per-pr).
+- **One workflow is not a check: `Dependabot auto-merge`.** It runs on every pull request but
+  does nothing unless the author is `dependabot[bot]`, and all it does then is press "enable
+  auto-merge" on patch and minor bumps. The four required checks still decide whether the PR is
+  mergeable. It is therefore **not** in the ruleset's required checks and **not** subject to the
+  `verify.sh` mirroring rule above — that rule binds gates, and this gates nothing. It also holds
+  the only writable `GITHUB_TOKEN` in this repository's CI, which is why it checks nothing out;
+  see [Auto-merging dependency bumps](#auto-merging-dependency-bumps).
 - **CI splits `verify.sh` into named steps** (Install / Lint / Format / Test / Build / …) purely
   so each gets its own pass/fail and timing in the log. That is presentation, not a second
   definition of the checks.
@@ -524,6 +531,50 @@ them is not covered — it needs git fixtures, and no change has yet warranted b
 To take an upstream skill update: re-vendor the file, update the pinned commit in
 `.claude/skills/NOTICE.md`, re-apply the local modifications listed there, and open a PR. The
 prompt diff gets reviewed like code, because that is exactly what it is.
+
+### Auto-merging dependency bumps
+
+`.github/workflows/dependabot-auto-merge.yml` arms GitHub's native auto-merge on Dependabot PRs
+where **every** dependency is a patch or minor bump. Majors are always merged by a human, because
+a major is where a peer range breaks — #78 raised `vite` without `@vitejs/plugin-react` and died
+at `npm ci`.
+
+Two details in that rule are not decoration:
+
+- **Every dependency, not the PR's highest reported update type.** On security updates Dependabot
+  omits `update-type:` from the commit trailer, so the action falls back to parsing versions out
+  of the PR body and yields nothing for an entry it cannot parse — #78's `esbuild` line reads
+  "Removes `esbuild`". The summary output is the *max* across entries and skips those blanks, so a
+  security PR whose only major is an unparseable entry reports minor. The gate reads the
+  per-dependency JSON instead and fails closed on a blank, a missing key or malformed input.
+- **`github_actions` never auto-merges.** This workflow pins its own action by SHA with the
+  version in a trailing comment, and Dependabot bumps SHA pins by that comment — so a new
+  third-party action SHA would arrive as a *patch* and merge unread. Nothing else would catch it:
+  `SDLC docs` exits 0 for `dependabot[bot]`, `PR shape` passes, and no `verify.sh` reads workflow
+  files.
+
+**What it is not.** It does not weaken any gate. Native auto-merge waits for all four required
+checks *and* for every review thread to be resolved. Copilot reviews every PR including
+Dependabot's, so a single inline comment parks the merge until someone answers it. That is the
+intended behaviour and was chosen deliberately over dropping
+`required_review_thread_resolution` (issue #94): the feature is "auto-merge when nothing
+objects", not "unattended merges". A parked PR is a correct outcome, not a bug to design around.
+
+**Why it does not update stale branches.** `strict_required_status_checks_policy` is on, so a
+merge to `main` leaves every other open PR out of date, and auto-merge will not update a branch
+itself — that is what a merge queue is for. For Dependabot PRs the update arrives from Dependabot,
+which rebases its own PRs by default and gives up after 30 days. The queue therefore drains on
+Dependabot's cadence rather than instantly. If that becomes the bottleneck, the fix is a merge
+queue, not dropping `strict` — but note that the built-in `GITHUB_TOKEN` cannot add a pull request
+to a merge queue, so adopting one means re-authenticating this workflow with a PAT or a GitHub App
+token.
+
+**Security posture — different from every other job here.** `SDLC docs` and `PR shape` run
+scripts from the PR branch under a read-only token. This one inverts both: it holds
+`contents: write` and `pull-requests: write`, and so it checks nothing out and runs no repository
+code. Its only third-party action is pinned to a full commit SHA. It uses `pull_request`, never
+`pull_request_target`. Keep all four of those properties together — each one is load-bearing only
+because the others hold.
 
 ---
 
