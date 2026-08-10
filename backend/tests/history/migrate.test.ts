@@ -1,9 +1,14 @@
 /**
- * Migration-runner integration test. Gated on DATABASE_URL exactly like pgStore.test.ts, so
- * the DB-free unit run skips it. Proves migrate() is idempotent (running twice is a no-op),
- * creates the history tables, and serializes concurrent runners.
+ * Migration-runner tests, in two halves.
+ *
+ * The integration half is gated on DATABASE_URL exactly like pgStore.test.ts, so the DB-free unit
+ * run skips it. It proves migrate() is idempotent (running twice is a no-op), creates the history
+ * tables, and serializes concurrent runners.
+ *
+ * The error-reporting half runs everywhere against a fake pool, because the failure it pins —
+ * a broken connection making ROLLBACK reject — cannot be provoked against a healthy Postgres.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { Pool } from "pg";
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -95,5 +100,72 @@ async function resetSchema(pool: Pool): Promise<void> {
       await a.end();
       await b.end();
     }
+  });
+});
+
+/**
+ * A Pool stand-in covering just the surface migrate() touches: connect(), query(), release().
+ * `failOn` decides which statements reject, so a test can break the connection at a chosen point.
+ *
+ * Every successful query answers `rowCount: 0` (so the ledger lookup reports "not yet applied"
+ * and the run proceeds) with `unlocked: true` (so the advisory-unlock check stays quiet).
+ */
+function fakePool(failOn: (sql: string) => Error | undefined) {
+  const statements: string[] = [];
+  const client = {
+    query(sql: string) {
+      statements.push(sql);
+      const err = failOn(sql);
+      return err
+        ? Promise.reject(err)
+        : Promise.resolve({ rowCount: 0, rows: [{ unlocked: true }] });
+    },
+    release: vi.fn(),
+  };
+  return { statements, pool: { connect: async () => client } as unknown as Pool };
+}
+
+/**
+ * Fails the migration body — identified as the statement right after BEGIN, rather than by its
+ * text, so this does not break when 001_history.sql is edited or renamed.
+ */
+function failMigrationBody(bodyError: Error, rollbackError?: Error) {
+  let nextIsBody = false;
+  return (sql: string): Error | undefined => {
+    if (sql === "BEGIN") {
+      nextIsBody = true;
+      return undefined;
+    }
+    if (nextIsBody) {
+      nextIsBody = false;
+      return bodyError;
+    }
+    if (sql === "ROLLBACK") return rollbackError;
+    return undefined;
+  };
+}
+
+describe("migrate error reporting", () => {
+  it("surfaces the migration error even when the rollback also fails", async () => {
+    // The real shape: Postgres restarts or a proxy drops the connection mid-migration, so the
+    // migration rejects AND the ROLLBACK that follows rejects. An unguarded `await` on the
+    // rollback replaces the original error — and this runs before listen(), on the one client
+    // holding the advisory lock, so that error is the entire diagnostic for a failed boot.
+    const bodyError = new Error('syntax error at or near "CREAT"');
+    const { pool } = fakePool(
+      failMigrationBody(bodyError, new Error("Connection terminated unexpectedly")),
+    );
+
+    await expect(migrate(pool)).rejects.toThrow(bodyError);
+  });
+
+  it("still attempts the rollback when a migration fails", async () => {
+    // Guards the fix from degrading into "skip the rollback": swallowing its error must not
+    // mean skipping the statement. Here the rollback succeeds and the original error still wins.
+    const bodyError = new Error("boom");
+    const { statements, pool } = fakePool(failMigrationBody(bodyError));
+
+    await expect(migrate(pool)).rejects.toThrow(bodyError);
+    expect(statements).toContain("ROLLBACK");
   });
 });
