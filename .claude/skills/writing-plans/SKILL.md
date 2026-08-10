@@ -1,6 +1,6 @@
 ---
 name: writing-plans
-description: Use when you have requirements for a multi-step task, before touching code. Writes a comprehensive implementation plan, then runs a staff-engineer review of that plan and surfaces the findings to the user before incorporating them.
+description: Use when you have requirements for a multi-step task, before touching code. Writes a comprehensive implementation plan, then runs a staff-engineer review of that plan; mechanical findings are applied and reported, judgment findings are surfaced to the user and block until they decide.
 ---
 
 <!--
@@ -170,11 +170,63 @@ After your Self-Review, dispatch a **fresh** general-purpose subagent using
 `planning-reviewer-prompt.md` in this directory. A fresh reviewer has no authorship
 bias — its job is to find the gaps you can't see.
 
-**Then surface the review to the user before changing the plan.** Do not silently
-fold the findings in. Present the reviewer's report (Status, Issues, Recommendations)
-to the user, give your own opinionated take on each item, and wait for their input.
-Only revise the plan once they have seen the review. This is deliberate: the user
-decides what goes into the plan.
+The reviewer classifies each finding at source and returns two buckets. They are
+handled differently, and the difference is the point: human attention is the scarce
+resource, so it is spent only on findings that carry a decision.
+
+**Mechanical findings — apply, then report.** One right answer, and the reviewer wrote
+the exact correction. Apply each to the plan, and list every one in what you surface so
+the user can audit and reverse them.
+
+Applying means transcribing the correction the reviewer gave. Two things send a finding
+back the other way: the reviewer stated no correction, or applying it would settle
+something the plan has not already settled. Either way, treat it as a judgment finding.
+**Never re-classify in the other direction.** A finding the reviewer called judgment
+stays a judgment finding, however obvious the fix looks to you — you are the author, and
+that is exactly the bias the split exists to contain.
+
+**Judgment findings — escalate and wait.** Scope, cost, risk posture, architecture, the
+security invariants (auth, isolation, sandbox), anything where you and the reviewer
+disagree, anything the reviewer flagged as uncertain. **Do not touch the plan for
+these.** Recommendations are advisory in the same way: surface them, never auto-apply.
+
+**Tie-break rule: when in doubt, escalate.** A false escalation costs the user a few
+seconds of reading. A false auto-apply silently changes the plan they thought they
+approved.
+
+### What to surface
+
+Present, in this order, then **stop and wait**:
+
+1. **Status** — the reviewer's verdict.
+2. **Applied without asking** — every mechanical finding, one line each, naming the edit
+   you made. Write "none" if there were none; never omit the section.
+3. **Needs your decision** — every judgment finding, with the decision being asked for
+   and your own opinionated take on it.
+4. **Advisory** — the reviewer's recommendations, unapplied.
+
+Record the same applied list at the end of the plan document under a `## Plan review log`
+heading, dated, so the audit trail outlives the conversation. The plan is committed and
+reviewed in a PR; terminal scrollback is not.
+
+```markdown
+## Plan review log
+
+Staff-engineer review 2026-08-10 — applied without asking:
+- Task 4: `clearFullLayers()` → `clearLayers()`, matching Task 3.
+- Task 6: added the missing `./verify.sh test` step before the commit step.
+
+Escalated to the user: the single-tenancy assumption in Task 2. Decision: scoped out —
+recorded in the epic's Resolved list.
+```
+
+### Why the gate stays
+
+The reviewer is another instance of the same model, so its blind spots correlate with
+yours. Two agreeing agents are much weaker evidence than two agreeing engineers — the
+user is the only uncorrelated signal in this loop. This split narrows *what reaches*
+them; it does not remove the gate. **Implementation does not start until they respond**,
+even when both buckets come back empty.
 
 ## After Approval
 

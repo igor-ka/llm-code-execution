@@ -56,6 +56,11 @@ Of the shared `references/`, only `definition-of-done.md`, `security-checklist.m
   `DATABASE_URL` self-skip trap, the shared `HistoryStore` contract suite).
 - `security-and-hardening` gained a *Trust boundaries in this repository* section covering the
   sandbox, the auth gate, history isolation, and treating **LLM output as untrusted input**.
+- `writing-plans` gained a mandatory `PR boundaries` field in the plan header (see
+  [One child per PR](../../docs/sdlc.md#one-child-per-pr)), and its plan review was split into two
+  buckets: the reviewer classifies each finding as **mechanical** or **judgment** at source, the
+  author applies the mechanical ones and lists them for audit, and the judgment ones block on the
+  human. Upstream returned one flat list and escalated all of it.
 - `references/definition-of-done.md` was rewritten around this repo's actual gates — `verify.sh`,
   the INV-1…8 isolation battery, the mandatory `code-review` + `security-review` pass, and the
   README/`docs/sdlc.md` upkeep rules.

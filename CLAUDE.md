@@ -64,9 +64,12 @@ real and push the result.
 
 **Every plan — staff-engineer review.** Before writing code from a plan, run the staff-engineer
 plan review via the `writing-plans` skill (vendored in `.claude/skills/`), which dispatches a
-fresh subagent reviewer using `planning-reviewer-prompt.md`. **Surface the review to me first
-and wait** — present the reviewer's report with your own opinionated take and do **not** fold
-the findings into the plan until I've seen them. I decide what goes into the plan.
+fresh subagent reviewer using `planning-reviewer-prompt.md`. The reviewer sorts its own findings
+into two buckets. **Mechanical** ones — wrong paths, name mismatches, placeholders, a missing test
+or verification step — you apply, then list explicitly so I can reverse them. **Judgment** ones —
+scope, cost, risk, architecture, the security invariants, anything either of you is unsure about —
+you do **not** touch: surface them with your own opinionated take and **wait**. When in doubt,
+escalate. I decide what goes into the plan, and implementation doesn't start until I've responded.
 
 **One child per PR.** A PR closes at most one issue; the `PR shape` job enforces it and
 `[multi-child]` in the title is the visible exception. The decision belongs earlier — every plan

@@ -159,10 +159,28 @@ graph, so a human sees "seven PRs" before a line is written. The `PR shape` job 
 rule at merge time, but it is a backstop, not the decision point.
 
 **The mandatory gate:** every plan gets a **staff-engineer review by a fresh subagent** using
-`planning-reviewer-prompt.md`, and the findings are **surfaced to the human before anything is
-folded into the plan**. A fresh reviewer has no authorship bias — but it is another instance of
-the same model, so its blind spots correlate with the author's. The human is the only
-uncorrelated signal, which is why the gate exists and why it is not delegated.
+`planning-reviewer-prompt.md`, and the review is **surfaced to the human before implementation
+starts**. A fresh reviewer has no authorship bias — but it is another instance of the same model,
+so its blind spots correlate with the author's. The human is the only uncorrelated signal, which
+is why the gate exists and why it is not delegated.
+
+**The reviewer sorts its own findings into two buckets**, at the point of writing each one — the
+author can't be trusted to sort them afterwards, having the exact bias the fresh reviewer was
+dispatched to counter.
+
+| Bucket | What lands here | What happens |
+| --- | --- | --- |
+| **Mechanical** | Wrong file paths, name/signature mismatches between tasks, placeholders that slipped the no-placeholders rule, a missing verification step, a missing test for behaviour the plan already commits to | The author **applies it and lists it** in what's surfaced, so the human can audit and reverse it. A finding qualifies only if the reviewer wrote the exact correction. |
+| **Judgment** | Scope, cost, risk posture, architecture, the security invariants (auth, isolation, sandbox), reviewer-vs-author disagreement, anything the reviewer is unsure of | **Escalated and blocking.** The plan is not touched until the human decides. |
+
+**Tie-break: when in doubt, escalate.** A false escalation costs a few seconds of reading; a
+false auto-apply silently changes the plan the human thought they approved. The author may
+demote a mechanical finding to judgment, never the reverse.
+
+This narrows *what reaches* the human; it does not remove the gate. The applied edits are
+recorded in the plan document under `## Plan review log` — the plan is committed and reviewed in
+a PR, so the audit trail outlives the conversation — and **implementation still waits for the
+human**, even when both buckets come back empty.
 
 ### 3. Build — *implement in thin, working slices*
 
@@ -332,11 +350,13 @@ design. That open question is what earns the spec — without one, this step is 
 plan absorbs it.
 
 **2. Plan** — `writing-plans` writes `docs/plans/2026-08-08-per-user-rate-limiting.md` as ordered
-steps. A fresh subagent reviews it and reports, for example, that the plan never says what happens
-when `AUTH_REQUIRED=false` and there is no `sub` to key on. **That report goes to the human
-first.** The human decides whether to handle it now or scope it out. Only then is the plan revised.
-The plan's header also names its **PR boundaries** — here, four PRs, one per child — and the
-reviewer checks that split against the task graph.
+steps. A fresh subagent reviews it and returns both buckets. *Mechanical:* Task 5 calls the limiter
+`checkLimit()` where Task 2 defined it as `consume()` — one right answer, so it is applied on the
+spot and listed in the plan's `Plan review log`. *Judgment:* the plan never says what happens when
+`AUTH_REQUIRED=false` and there is no `sub` to key on — that is scope, so it **goes to the human
+and blocks**. The human decides whether to handle it now or scope it out; only then is the plan
+revised. The plan's header also names its **PR boundaries** — here, four PRs, one per child — and
+the reviewer checks that split against the task graph.
 
 **2b. Children** — *now* the slices are known, so batch-create them under the epic, one per
 PR boundary the plan review approved, labelled `enhancement`:
