@@ -26,14 +26,17 @@ updates:
           - vite
           - vitest
           - "@vitest/*"
-      # The one that actually bites for the backend: `vite` is transitive here, and security
-      # updates are the only path that reaches transitive dependencies.
+      # The one that actually bites for the backend: `vite` AND `esbuild` are transitive here
+      # (esbuild@0.28.1 is hoisted in package-lock.json today), and security updates are the
+      # only path that reaches transitive dependencies. `esbuild` appears only in the security
+      # groups for exactly that reason — a version-updates group would never match it.
       vite-toolchain-security:
         applies-to: security-updates
         patterns:
           - vite
           - vitest
           - "@vitest/*"
+          - esbuild
   - package-ecosystem: npm
     directory: /frontend
     schedule:
@@ -48,6 +51,9 @@ updates:
           - vitest
           - "@vitest/*"
           - "@vitejs/*"
+      # PR #78 was an *esbuild* advisory that also carried vite, vitest and coverage-v8 — and it
+      # is the PR that broke. `esbuild` is not in the frontend lock right now (vite 8 dropped
+      # it), but it was last week; a security group has to name the transitives that come and go.
       vite-toolchain-security:
         applies-to: security-updates
         patterns:
@@ -55,6 +61,7 @@ updates:
           - vitest
           - "@vitest/*"
           - "@vitejs/*"
+          - esbuild
   - package-ecosystem: github-actions
     directory: /
     schedule:

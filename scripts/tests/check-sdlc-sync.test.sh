@@ -44,15 +44,24 @@ asserts() {
   fi
 }
 
-# refutes <name> <PR_TITLE> <PR_ACTOR> — the exemption must NOT have fired. Exit code ignored
-# on purpose; see the header.
+# refutes <name> <PR_TITLE> <PR_ACTOR> — the exemption must NOT have fired.
+#
+# The script's *verdict* is ignored: 0 and 1 are both fine here, because whether the doc is in
+# sync depends on the branch's own diff and this assertion must not.
+#
+# But it must have RUN. Absence of the exemption line is trivially true when nothing executed —
+# a renamed script exits 127 with only bash's own error captured, and the case would report ✓
+# while testing nothing. So the exit code is checked for plausibility (0 or 1, the script's two
+# real verdicts) and the output for non-emptiness. Same vacuity the header warns about for
+# `asserts`, reached from the other side.
 refutes() {
-  local name="$1" title="$2" actor="$3" out
+  local name="$1" title="$2" actor="$3" got out
   out="$(run "$title" "$actor")"
-  if [[ "$out" != *"$EXEMPT_LINE"* ]]; then
+  got=$?
+  if [[ "$got" -le 1 && -n "$out" && "$out" != *"$EXEMPT_LINE"* ]]; then
     ok "$name"
   else
-    bad "$name" "the dependabot exemption fired and should not have" "$out"
+    bad "$name" "expected the script to run (exit 0 or 1, non-empty) without the exemption line, got exit ${got}" "$out"
   fi
 }
 
