@@ -40,21 +40,66 @@ Task tool (general-purpose):
     Approve unless there are serious gaps — missing requirements, contradictory
     steps, placeholder content, or tasks so vague they can't be acted on.
 
+    ## Classify Every Finding
+
+    Each finding gets exactly one class. **You** classify, at the point of
+    writing the finding — not the plan's author afterwards, who has the
+    authorship bias you were dispatched to counter.
+
+    **MECHANICAL** — one right answer, and the plan already implies it. Applying
+    it settles nothing that isn't already settled:
+    - Wrong or inconsistent file path
+    - Type, signature, or name mismatch between tasks (`clearLayers()` in
+      Task 3, `clearFullLayers()` in Task 7)
+    - A placeholder that slipped the no-placeholders rule ("TBD", "add error
+      handling", "write tests for the above")
+    - A missing verification step on a task that plainly needs one
+    - A missing test for behaviour the plan already commits to
+
+    A MECHANICAL finding **must state the exact correction** — the path, the
+    name, the step, the test. If you cannot write the correction down, the
+    author would have to invent it, and it is not MECHANICAL.
+
+    **JUDGMENT** — someone has to decide, and it is not you:
+    - Anything that changes **scope** — a requirement the plan doesn't cover
+    - Anything that changes **cost, risk posture, or architecture**
+    - Anything touching the security invariants (auth, isolation, sandbox)
+    - Anything where you disagree with a choice the plan states deliberately
+    - Anything you are not certain about
+
+    **Tie-break: when in doubt, JUDGMENT.** A wrong JUDGMENT costs a human a few
+    seconds of reading. A wrong MECHANICAL silently changes a plan the human
+    thought they had approved.
+
+    Two questions settle most cases. *Does this have exactly one correct
+    resolution?* and *would resolving it require weighing a trade-off?*
+    MECHANICAL needs yes to the first and no to the second.
+
     ## Output Format
 
     ## Plan Review
 
     **Status:** Approved | Issues Found
 
-    **Issues (if any):**
-    - [Task X, Step Y]: [specific issue] - [why it matters for implementation]
+    **Mechanical findings (one right answer; the author applies these):**
+    - [Task X, Step Y]: [specific issue] — Correction: [the exact edit to make]
+
+    **Judgment findings (a human decides these):**
+    - [Task X, Step Y]: [specific issue] — [why it matters for implementation]
+      — [the decision being asked for, and the options you see]
 
     **Recommendations (advisory, do not block approval):**
     - [suggestions for improvement]
+
+    Write "None" under any bucket that is empty. Do not merge the buckets.
 ```
 
-**Reviewer returns:** Status, Issues (if any), Recommendations.
+**Reviewer returns:** Status, Mechanical findings, Judgment findings,
+Recommendations.
 
-**After the review:** Do **not** silently fold the findings into the plan.
-Surface the review report to the user first (see the "Staff-Engineer Plan
-Review" section of `SKILL.md`), and only revise the plan once they have seen it.
+**After the review:** apply the **mechanical** findings to the plan and list
+every one of them in what you surface. Do **not** apply the **judgment**
+findings or the recommendations — surface those and wait for the user (see the
+"Staff-Engineer Plan Review" section of `SKILL.md`). The user still decides what
+goes into the plan; the mechanical bucket exists so their attention is spent on
+the findings that actually carry a decision.
