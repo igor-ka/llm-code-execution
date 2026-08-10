@@ -11,6 +11,7 @@
 # Usage:  scripts/check-sdlc-sync.sh
 #   BASE_SHA   fallback base commit (default: merge-base with origin/main)
 #   PR_TITLE   pull request title; containing [skip-sdlc-sync] skips the check
+#   PR_ACTOR   pull request author login; dependabot[bot] is exempt (see below)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -24,6 +25,21 @@ DOC='docs/sdlc.md'
 
 if [[ "${PR_TITLE:-}" == *"[skip-sdlc-sync]"* ]]; then
   echo "==> [skip-sdlc-sync] found in the PR title — skipping the SDLC doc check."
+  exit 0
+fi
+
+# Dependabot's `github-actions` ecosystem bumps `uses:` pins inside .github/workflows/*.yml,
+# which is a watched path — so without this every action update would fail a required check
+# that a bot can never satisfy. A pin bump is not a process change.
+#
+# This is an early `exit 0` rather than a job-level `if:` in sdlc-docs.yml on purpose. `SDLC
+# docs` is a *required* status check; a skipped job does not report success, and a required
+# check that never reports success blocks the merge permanently. The job must run and pass.
+#
+# The actor is exact-matched. PR_ACTOR comes from github.event.pull_request.user.login, which
+# GitHub sets and a contributor cannot forge, and it arrives via `env:` like the title.
+if [[ "${PR_ACTOR:-}" == "dependabot[bot]" ]]; then
+  echo "==> author is dependabot[bot] — dependency bumps are exempt from the SDLC doc check."
   exit 0
 fi
 
