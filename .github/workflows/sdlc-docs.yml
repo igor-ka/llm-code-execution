@@ -44,9 +44,13 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Self-test
+        run: ./scripts/tests/check-sdlc-sync.test.sh
       - name: Check docs/sdlc.md is in sync
         env:
           # Fallback only — the script prefers the merge ref's first parent, which is exact.
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_TITLE: ${{ github.event.pull_request.title }}
+          # GitHub sets this; a contributor cannot forge it. Via env, never inline in `run:`.
+          PR_ACTOR: ${{ github.event.pull_request.user.login }}
         run: ./scripts/check-sdlc-sync.sh
