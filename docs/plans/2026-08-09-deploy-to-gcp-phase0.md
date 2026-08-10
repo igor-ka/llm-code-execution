@@ -169,14 +169,22 @@ describe("makeLogger (json)", () => {
     expect(typeof entry.err.stack).toBe("string");
   });
 
-  it("never throws on a circular field value", () => {
+  it("survives a circular field value WITHOUT losing severity or message", () => {
+    // The whole point of the logger is filterable lines. Dropping severity/message to report a
+    // bad field would make the fail-open quota alarm unfindable at exactly the wrong moment.
     const lines: string[] = [];
     const log = makeLogger("json", (line) => lines.push(line));
-    const circular: Record<string, unknown> = {};
+    const circular: Record<string, unknown> = { keep: "me" };
     circular.self = circular;
 
     expect(() => log.warn("odd", { circular })).not.toThrow();
     expect(lines).toHaveLength(1);
+
+    const entry = JSON.parse(lines[0]);
+    expect(entry.severity).toBe("WARNING");
+    expect(entry.message).toBe("odd");
+    expect(entry.circular.keep).toBe("me"); // the rest of the field survives
+    expect(entry.circular.self).toBe("[Circular]");
   });
 });
 
@@ -257,23 +265,50 @@ function normalize(fields: Fields): Fields {
   return out;
 }
 
-/** A logging call must never take the process down, whatever it was handed. */
-function safeStringify(value: unknown): string {
-  try {
-    return JSON.stringify(value) ?? "null";
-  } catch {
-    return JSON.stringify({ unserializable: true });
-  }
+/**
+ * A logging call must never take the process down, and must never lose `severity`/`message` —
+ * those are what make a line filterable, and the alarm this logger exists to carry is worthless
+ * if it lands as an unfilterable blob.
+ *
+ * So circular references are replaced *in place* with a marker rather than allowed to throw and
+ * take the whole entry with them. The catch is a genuine last resort (a getter that throws, a
+ * BigInt), and even then it preserves the two fields that matter.
+ */
+function stringify(value: unknown): string {
+  const seen = new WeakSet<object>();
+  return (
+    JSON.stringify(value, (_key, val: unknown) => {
+      if (typeof val === "object" && val !== null) {
+        if (seen.has(val)) return "[Circular]";
+        seen.add(val);
+      }
+      return typeof val === "bigint" ? val.toString() : val;
+    }) ?? "null"
+  );
 }
 
 export function makeLogger(format: LogFormat, sink: (line: string) => void): Logger {
   const emit = (severity: Severity, message: string, fields?: Fields): void => {
     const normalized = fields ? normalize(fields) : {};
     if (format === "json") {
-      sink(safeStringify({ severity, message, ...normalized }));
+      let line: string;
+      try {
+        line = stringify({ severity, message, ...normalized });
+      } catch {
+        // Last resort — a throwing getter, say. Keep the two fields that make a line filterable.
+        line = JSON.stringify({ severity, message, unserializableFields: true });
+      }
+      sink(line);
       return;
     }
-    const suffix = Object.keys(normalized).length ? ` ${safeStringify(normalized)}` : "";
+    let suffix = "";
+    if (Object.keys(normalized).length) {
+      try {
+        suffix = ` ${stringify(normalized)}`;
+      } catch {
+        suffix = ` {"unserializableFields":true}`;
+      }
+    }
     sink(`${severity.padEnd(5)} ${message}${suffix}`);
   };
 
@@ -456,21 +491,38 @@ Append inside the existing `(url ? describe : describe.skip)("migrate", ...)` bl
   it("serializes concurrent runners on a fresh database", async () => {
     // Two pools = two sessions = a faithful stand-in for two instances cold-starting together.
     // Without the advisory lock one of these rejects with `relation "sessions" already exists`.
+    //
+    // Repeated, because the interleaving is not enforced: both runners must reach the
+    // schema_migrations lookup before either commits its DDL. In practice they do — every await
+    // yields the event loop — but "in practice" is not a gate, and a single round that happened
+    // to serialize itself would go green with the lock removed. Five fresh-database rounds make
+    // an accidental pass vanishingly unlikely at no cost to production code.
     const a = makePool(url!);
     const b = makePool(url!);
     try {
-      await a.query("DROP TABLE IF EXISTS runs, sessions, schema_migrations CASCADE");
+      for (let round = 0; round < 5; round++) {
+        await a.query("DROP TABLE IF EXISTS runs, sessions, schema_migrations CASCADE");
 
-      await expect(Promise.all([migrate(a), migrate(b)])).resolves.toBeDefined();
+        await expect(Promise.all([migrate(a), migrate(b)])).resolves.toBeDefined();
 
-      const rec = await a.query<{ n: number }>("SELECT count(*)::int AS n FROM schema_migrations");
-      expect(rec.rows[0].n).toBe(1);
+        const rec = await a.query<{ n: number }>(
+          "SELECT count(*)::int AS n FROM schema_migrations",
+        );
+        expect(rec.rows[0].n, `round ${round}`).toBe(1);
+      }
     } finally {
       await a.end();
       await b.end();
     }
   });
 ```
+
+> **Why not a deterministic barrier?** A test-only `Pool` proxy could hold both runners at the
+> pre-DDL point and remove the timing dependence entirely — `migrate(pool)` takes the pool, so the
+> seam exists without touching production code. It was considered and rejected for now: the proxy
+> has to intercept the right query on the right client to be correct, which is its own thing to
+> get wrong, and five rounds already closes the realistic gap. **If this test ever flakes green,
+> build the proxy rather than adding rounds.**
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -481,11 +533,12 @@ cd backend && DATABASE_URL=postgres://app:app@localhost:5432/app \
 ```
 
 Expected: FAIL on the new test with `relation "sessions" already exists` or a duplicate-key
-violation. The pre-existing idempotency test still passes.
+violation, and the round number in the assertion message tells you which iteration lost the race.
+The pre-existing idempotency test still passes.
 
-If the new test *passes* before the fix, the race did not interleave — re-run it a few times. It
-should fail reliably; if it never fails, stop and investigate, because the regression gate is
-worthless otherwise.
+If all five rounds *pass* before the fix, stop — do not implement the lock and move on. A gate
+that is green without the thing it guards is not a gate. Build the `Pool`-proxy barrier described
+above until the test is reliably red, then continue.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -545,16 +598,30 @@ async function applyPending(client: PoolClient): Promise<void> {
  */
 export async function migrate(pool: Pool): Promise<void> {
   const client = await pool.connect();
+  let unlocked = false;
   try {
     await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_KEY]);
     try {
       await applyPending(client);
     } finally {
-      await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY]);
+      try {
+        await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY]);
+        unlocked = true;
+      } catch {
+        // Swallowed on purpose: the release below destroys the connection, which ends the
+        // session and takes the lock with it. Rethrowing here would mask a real migration error.
+      }
     }
   } finally {
-    // Releasing to the pool also drops any session locks if the unlock above never ran.
-    client.release();
+    // release(true) DESTROYS the connection instead of returning it to the pool.
+    //
+    // This matters and is easy to get wrong: an advisory lock taken with pg_advisory_lock is
+    // SESSION-scoped, and returning a client to the pool does NOT end its session — node-postgres
+    // issues no DISCARD ALL. A client handed back while still holding the lock would keep it for
+    // the life of the pool, and the next migrate() on this process would block forever on a lock
+    // held by an idle connection three feet away. Destroying is cheap: migrations run once, at
+    // boot, on one connection.
+    client.release(unlocked ? undefined : true);
   }
 }
 ```
@@ -1215,6 +1282,14 @@ describe("mountStaticSite", () => {
     expect(res.text).not.toContain('<div id="root">');
   });
 
+  it("treats the bare /api root as an API path, not a deep link", async () => {
+    // startsWith("/api/") does not match "/api"; without the explicit check this one path
+    // answers 200 with HTML while every other unmatched API path 404s.
+    const res = await request(appServing(fixtures)).get("/api");
+    expect(res.status).toBe(404);
+    expect(res.text).not.toContain('<div id="root">');
+  });
+
   it("leaves real API routes alone", async () => {
     const res = await request(appServing(fixtures)).get("/api/health");
     expect(res.status).toBe(200);
@@ -1302,8 +1377,9 @@ export function mountStaticSite(app: Express, publicDir: string): void {
     if (req.method !== "GET" && req.method !== "HEAD") return next();
     // An unmatched /api path is an API 404, never the SPA. Returning index.html there would turn
     // every client typo into a 200 with HTML, which breaks fetch callers in the most confusing
-    // way available.
-    if (req.path.startsWith("/api/")) return next();
+    // way available. Note the bare "/api" is checked too — startsWith("/api/") alone would let
+    // exactly that one path through to the SPA.
+    if (req.path === "/api" || req.path.startsWith("/api/")) return next();
     res.sendFile(indexHtml);
   });
 }
@@ -1493,14 +1569,17 @@ ENV VITE_API_BASE=$VITE_API_BASE \
     VITE_AUTH0_DOMAIN=$VITE_AUTH0_DOMAIN \
     VITE_AUTH0_CLIENT_ID=$VITE_AUTH0_CLIENT_ID \
     VITE_AUTH0_AUDIENCE=$VITE_AUTH0_AUDIENCE
-# Fail the BUILD rather than ship an app that blocks its own login. The CSP's connect-src and
-# frame-src are derived from VITE_AUTH0_DOMAIN; built empty, the policy is still valid, still
-# strict, still passes every check — and silently forbids the Auth0 token endpoint and the
-# silent-auth iframe. staticSite.ts makes a MISSING policy fatal but cannot detect a WRONG one,
-# so this is the only place the mistake is catchable.
-RUN test -n "$VITE_AUTH0_DOMAIN" || { \
-      echo "VITE_AUTH0_DOMAIN is required: build with --build-arg VITE_AUTH0_DOMAIN=<tenant>"; \
-      exit 1; }
+# Fail the BUILD rather than ship an app that cannot log in. All three values are inlined into
+# the bundle and passed straight to Auth0Provider (frontend/src/main.tsx): the domain also drives
+# the CSP's connect-src and frame-src, the client ID identifies the app, and the audience is what
+# makes Auth0 return a JWT the backend can verify instead of an opaque token. Built empty, the
+# bundle is valid, the policy is valid and strict, every check passes — and login is broken.
+# staticSite.ts makes a MISSING policy fatal but cannot detect a WRONG one, so this is the only
+# place the mistake is catchable.
+RUN for v in VITE_AUTH0_DOMAIN VITE_AUTH0_CLIENT_ID VITE_AUTH0_AUDIENCE; do \
+      eval "val=\$$v"; \
+      [ -n "$val" ] || { echo "$v is required: pass --build-arg $v=<value>"; exit 1; }; \
+    done
 RUN npm run build
 
 # --- Stage 2: compile the backend -------------------------------------------------------------
@@ -1533,38 +1612,52 @@ CMD ["node", "dist/index.js"]
 - [ ] **Step 3: Build it and check the three things that silently break**
 
 ```bash
-docker build --build-arg VITE_AUTH0_DOMAIN=tenant.us.auth0.com -t llm-code-execution:prod .
+docker build \
+  --build-arg VITE_AUTH0_DOMAIN=tenant.us.auth0.com \
+  --build-arg VITE_AUTH0_CLIENT_ID=localcheck \
+  --build-arg VITE_AUTH0_AUDIENCE=https://api.localcheck \
+  -t llm-code-execution:prod .
 ```
 
-The build arg is mandatory — Step 2's assertion fails without it. Any value works for this local
-check; it only has to be non-empty.
+All three build args are mandatory — Step 2's assertion fails without them. Any non-empty values
+work for this local check.
 
-Then, in order:
+Then, in order. Each command **exits non-zero on the defect**, so they can be pasted into a script
+later rather than relying on someone reading the output:
 
 ```bash
 # 1. Nothing may have baked in the localhost API base — not the bundle, and not csp.txt.
 #    This is why the production policy uses `?? ""` rather than `|| "http://localhost:8000"`.
-docker run --rm llm-code-execution:prod \
-  sh -c "grep -rl 'localhost:8000' /app/public || echo 'CLEAN: no localhost baked in'"
+docker run --rm llm-code-execution:prod sh -c '
+  if grep -rl "localhost:8000" /app/public; then
+    echo "DEFECT: localhost baked into the artifact (see paths above)"; exit 1
+  fi
+  echo "CLEAN: no localhost baked in"'
 
 # 2. The CSP must have shipped, and must name the Auth0 origin.
-docker run --rm llm-code-execution:prod cat /app/public/csp.txt
+docker run --rm llm-code-execution:prod sh -c '
+  grep -q "script-src '"'"'self'"'"'" /app/public/csp.txt &&
+  grep -q "tenant.us.auth0.com" /app/public/csp.txt &&
+  cat /app/public/csp.txt'
 
 # 3. It must run as a non-root user.
-docker run --rm llm-code-execution:prod id -u   # -> 1000, not 0
+test "$(docker run --rm llm-code-execution:prod id -u)" = "1000"
 ```
 
-Expected: `CLEAN: no localhost baked in`; a policy line containing `script-src 'self'` **and**
-`https://tenant.us.auth0.com`; uid 1000.
+Expected: `CLEAN: no localhost baked in`; the policy printed, containing `script-src 'self'` and
+the Auth0 origin; and the third command silent with exit 0.
 
-Check 1 is the one that fails loudly if the `?? ""` in Task 4 Step 1 was written as `||` —
-`grep` finds the origin inside `csp.txt`, exits 0, and `CLEAN` never prints.
+Check 1 is the one that fails if the `?? ""` in Task 4 Step 1 was written as `||` — `grep` finds
+the origin inside `csp.txt` and the command exits 1.
 
 - [ ] **Step 4: Run the image against the local services**
 
 ```bash
 docker compose up -d postgres redis
+# --add-host is required on native Linux Docker Engine, which does not define
+# host.docker.internal (Docker Desktop does). Harmless where it already resolves.
 docker run --rm -p 8080:8080 \
+  --add-host=host.docker.internal:host-gateway \
   -e REDIS_URL=redis://host.docker.internal:6379 \
   -e AUTH_REQUIRED=false \
   -e LOG_FORMAT=json \
@@ -1599,6 +1692,8 @@ docker_() {
   # script must never be deployed.
   run docker build -f ../Dockerfile \
     --build-arg VITE_AUTH0_DOMAIN=verify.invalid \
+    --build-arg VITE_AUTH0_CLIENT_ID=verify \
+    --build-arg VITE_AUTH0_AUDIENCE=https://verify.invalid/api \
     -t llm-code-execution:verify ..
 }
 ```
@@ -1701,8 +1796,8 @@ cd ../frontend && ./verify.sh
 ```
 
 Expected: both green, including the new `csp.txt` gate and the three-image docker target (the
-third build passes `--build-arg VITE_AUTH0_DOMAIN=verify.invalid`; a placeholder is enough to
-satisfy the assertion, and an image built by `verify.sh` is never deployable).
+third build passes placeholder `--build-arg` values for all three `VITE_AUTH0_*` variables;
+placeholders satisfy the assertion, and an image built by `verify.sh` is never deployable).
 
 Then confirm the four Phase 0 outcomes by hand, against the production image rather than the dev
 topology:
