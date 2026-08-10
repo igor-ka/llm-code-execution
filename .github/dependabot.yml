@@ -37,6 +37,20 @@ updates:
           - vitest
           - "@vitest/*"
           - esbuild
+      # typescript-eslint pins a *bounded* peer range on typescript (8.60.0 declares
+      # ">=4.8.4 <6.1.0"), so a solo typescript major cannot resolve — PR #107 died at `npm ci`
+      # with exactly that. The two only move together.
+      typescript-toolchain:
+        patterns:
+          - typescript
+          - typescript-eslint
+          - "@typescript-eslint/*"
+      typescript-toolchain-security:
+        applies-to: security-updates
+        patterns:
+          - typescript
+          - typescript-eslint
+          - "@typescript-eslint/*"
   - package-ecosystem: npm
     directory: /frontend
     schedule:
@@ -62,6 +76,34 @@ updates:
           - "@vitest/*"
           - "@vitejs/*"
           - esbuild
+      # Same bounded-peer-range problem as the backend; PR #102 died the same way.
+      typescript-toolchain:
+        patterns:
+          - typescript
+          - typescript-eslint
+          - "@typescript-eslint/*"
+      typescript-toolchain-security:
+        applies-to: security-updates
+        patterns:
+          - typescript
+          - typescript-eslint
+          - "@typescript-eslint/*"
+      # @types/react and @types/react-dom are peer-linked to each other and to the runtime
+      # packages. PR #109 raised @types/react to 19 while @types/react-dom stayed on 18 and
+      # could not resolve. Frontend only — the backend has no React.
+      react:
+        patterns:
+          - react
+          - react-dom
+          - "@types/react"
+          - "@types/react-dom"
+      react-security:
+        applies-to: security-updates
+        patterns:
+          - react
+          - react-dom
+          - "@types/react"
+          - "@types/react-dom"
   - package-ecosystem: github-actions
     directory: /
     schedule:
