@@ -279,6 +279,11 @@ either `verify.sh`, `scripts/**`, or `.github/workflows/**`) without updating
 close more than one issue — `[multi-child]` in the title is the visible exception. That document
 describes how a change gets from an idea to `main` — phases, gates, and how they meet CI.
 
+A fourth pull-request workflow, **`Dependabot auto-merge`**, is not a check and gates nothing: on
+Dependabot PRs where every dependency is an npm patch or minor bump, it enables GitHub's native
+auto-merge, which still waits for all four required checks and for every review thread to be
+resolved. Majors are always merged by a human.
+
 The behavioral checks below have been run and pass (✅). Re-run them anytime.
 
 - **Health:** `curl localhost:8000/api/health` → `{"status":"ok"}`.

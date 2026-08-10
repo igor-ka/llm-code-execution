@@ -1,0 +1,206 @@
+name: Dependabot auto-merge
+
+# Arms GitHub's native auto-merge on Dependabot PRs that only move patch or minor versions.
+# See "Auto-merging dependency bumps" in docs/sdlc.md, and issue #94.
+#
+# This is NOT a check and must never be added to the "Protect main" ruleset's required status
+# checks. The four gates (Backend checks, Frontend checks, SDLC docs, PR shape) still decide
+# whether the PR is mergeable; this job only presses the button in advance. It is therefore also
+# not subject to the "every CI check has a verify.sh equivalent" rule — it gates nothing.
+#
+# Why `pull_request` and NOT `pull_request_target`: pull_request_target runs in the base repo's
+# context with a writable token, which is the standard way to turn a dependency bot into a
+# code-execution path. It is not needed here — Dependabot's branches live in this repository, so
+# a plain `pull_request` run can be granted write via the `permissions:` block below.
+#
+# Why there is no `actions/checkout` step: this job holds the only writable GITHUB_TOKEN in the
+# repository's CI. Checking out the head ref would put code from the PR branch inside that job.
+# Every input this job needs arrives as event metadata or as an action output, so it never needs
+# a working tree. If a future change here needs the repository, check out
+# `${{ github.event.pull_request.base.sha }}`, never the head.
+
+on:
+  pull_request:
+    branches: [main]
+    # `synchronize` matters: Dependabot rebases its open PRs when main moves, and that rebase is
+    # the event that runs this workflow for a PR opened before it existed. (The workflow file is
+    # read from the merge commit, so the PR branch does not have to contain it — it just needs an
+    # event.)
+    #
+    # `reopened` is deliberately dropped from the default set. Check results are keyed to the head
+    # SHA and survive a close/reopen, so reopening a PR whose checks are already green and whose
+    # threads are resolved would run this against an immediately-mergeable PR — and
+    # `gh pr merge --auto` errors in that state ("Pull request is in clean status"). A human who
+    # reopens a PR can merge it themselves.
+    types: [opened, synchronize]
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  auto-merge:
+    name: Dependabot auto-merge
+    runs-on: ubuntu-latest
+    # `github.repository` keeps this inert in forks. `user.login` is set by GitHub from the
+    # authenticated actor and cannot be forged by a PR author.
+    #
+    # The branch-prefix test is the ecosystem allow-list, hoisted to where it runs BEFORE any
+    # step does. It has to be here, not in the gate below: for `pull_request` the workflow file
+    # is read from the merge ref, so a Dependabot PR that bumps this file's own
+    # `fetch-metadata` pin would run the *replacement* action — with this job's writable token —
+    # and only afterwards reach a gate that rejects the `github_actions` ecosystem. Rejecting on
+    # metadata the action produces is too late by construction. `github.head_ref` is event data,
+    # available before the first step, and Dependabot always names branches
+    # `dependabot/<ecosystem>/…`. The jq rule below repeats the check as defence in depth.
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.repository == 'igor-ka/llm-code-execution' &&
+      startsWith(github.head_ref, 'dependabot/npm_and_yarn/')
+    # Declared at job level, not workflow level, so the scope is visibly attached to the only job
+    # that needs it. The repository default is `read`; a workflow may request more, and a PR from
+    # a fork is capped at read regardless of what is written here.
+    #
+    # `contents: write` is deliberately NOT requested, though GitHub's documented example for this
+    # task carries it. `gh pr merge --auto` issues the GraphQL `enablePullRequestAutoMerge`
+    # mutation; the merge itself is performed later by GitHub, not by this token. `contents: write`
+    # is the scope that would let a compromised step here push straight to `main`, and this job
+    # runs a third-party action. If the arm step ever fails with a 403 or "Resource not accessible
+    # by integration", that is the signal the narrower scope is insufficient — add
+    # `contents: write` back and say so here.
+    permissions:
+      pull-requests: write
+    steps:
+      # Pinned to the full commit SHA for v3.1.0, not @v3 — a moving tag is a supply-chain
+      # rewrite waiting to happen, and this step runs in the job holding write access.
+      # `alert-lookup` and `compat-lookup` stay off: both require a PAT, and neither is used.
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Three rules, all fail-closed.
+      #
+      # Rule 1 — single commit. `fetch-metadata` verifies the PR author and then reads and
+      #          signature-checks only `commits[0]`; nothing looks at commits 2..n. Auto-merge, by
+      #          contrast, merges HEAD. Anyone with write access could push a second commit onto a
+      #          genuine Dependabot branch and have it armed on the strength of a trailer from a
+      #          commit the gate never examined. Every Dependabot PR this repository has seen
+      #          carries exactly one commit, so requiring that closes the gap for free.
+      #
+      # Rule 2 — an allow-list of ecosystems, not a deny-list. Only `npm_and_yarn` auto-merges.
+      #          `github_actions` must not: this workflow pins its own action by SHA with the
+      #          version in a trailing comment, and Dependabot bumps SHA pins by that comment, so
+      #          a new third-party action SHA would arrive as a *patch* and merge unread — and
+      #          nothing else would catch it (`SDLC docs` exits 0 for dependabot[bot], and no
+      #          verify.sh reads workflow files). An allow-list also fails closed on ecosystems
+      #          added later: `docker` is already proposed in #110, where a base-image digest bump
+      #          has exactly the same "nobody read it" property.
+      #
+      # Rule 3 — every dependency must declare patch or minor. Why not
+      #          `steps.metadata.outputs.update-type`, which would be one line: on SECURITY
+      #          updates Dependabot omits `update-type:` from the commit trailer entirely —
+      #          verified on PR #78, whose trailer carries only dependency-name/-version/-type.
+      #          The action then derives the type by parsing "Updates `x` from A to B" out of the
+      #          PR body and yields "" for any entry it cannot parse (#78's esbuild line reads
+      #          "Removes `esbuild`", with an empty dependency-version). `update-type` is the MAX
+      #          across entries and the max skips blanks — so a security PR whose only major is an
+      #          unparseable entry reports minor, and a gate reading that output would arm
+      #          auto-merge on a major.
+      #
+      # Key names are camelCase because this output is the action's internal struct serialised
+      # by @actions/core — `updateType`, `packageEcosystem` — not the kebab-case summary outputs.
+      #
+      # An empty `DEPS_JSON` is rejected explicitly: jq reads no values from empty input and exits
+      # 0, which would leave `verdict` blank rather than failing. Malformed input does exit
+      # non-zero, and `set -euo pipefail` turns that into a failed step. A red job here is the
+      # intended outcome: it is not a required check, so it blocks nothing, and it is visible.
+      - name: Decide whether this PR may auto-merge
+        id: gate
+        env:
+          DEPS_JSON: ${{ steps.metadata.outputs.updated-dependencies-json }}
+          PR_COMMITS: ${{ github.event.pull_request.commits }}
+        run: |
+          set -euo pipefail
+          [[ -n "$DEPS_JSON" ]] || { echo "fetch-metadata produced no dependency JSON" >&2; exit 1; }
+
+          if [[ "$PR_COMMITS" != "1" ]]; then
+            verdict="not-eligible: ${PR_COMMITS} commits on the branch; only the first is verified"
+          else
+            verdict="$(printf '%s' "$DEPS_JSON" | jq -r '
+              if type != "array" or length == 0 then "not-eligible: no dependency metadata"
+              elif any(.[]; .packageEcosystem != "npm_and_yarn")
+                then "not-eligible: only npm dependency bumps auto-merge"
+              elif all(.[]; .updateType == "version-update:semver-patch"
+                         or .updateType == "version-update:semver-minor")
+                then "eligible"
+              else "not-eligible: at least one dependency is not patch or minor"
+              end')"
+          fi
+
+          echo "verdict=${verdict}" >> "$GITHUB_OUTPUT"
+          echo "${verdict}"
+          # Guarded: the bare `.[]` form dies on non-array input, which is exactly the input the
+          # verdict above handles gracefully — an unguarded log line would fail the step and
+          # suppress the explanation it exists to provide.
+          printf '%s' "$DEPS_JSON" | jq -r '
+            if type == "array"
+              then .[] | "  \(.dependencyName): \(.prevVersion // "?") -> \(.newVersion // "?") [\(.updateType // "unknown")]"
+              else "  (dependency metadata was not a JSON array)"
+            end'
+
+      # `--squash`, not `--merge`: the ruleset allows only squash and rebase, and
+      # required_linear_history is on. GitHub's own documented example uses `--merge` and would
+      # fail here.
+      #
+      # No `gh pr review --approve`: required_approving_review_count is 0, and the repository
+      # sets can_approve_pull_request_reviews: false, so Actions could not approve anyway.
+      - name: Arm auto-merge
+        if: steps.gate.outputs.verdict == 'eligible'
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge --auto --squash "$PR_URL"
+
+      # Arming is sticky, so ineligibility has to be acted on, not just logged. GitHub disables
+      # auto-merge only when someone WITHOUT write permission pushes to the head branch —
+      # Dependabot has write. So a grouped PR that is armed while patch-only, and later updated in
+      # place to carry a major, would stay armed and merge that major unattended. This is the step
+      # that prevents it.
+      #
+      # Attempted unconditionally rather than gated on `github.event.pull_request.auto_merge`:
+      # that payload field is a snapshot taken when the event fired, and being wrong about it in
+      # the "already armed" direction is the failure this step exists to prevent. `--disable-auto`
+      # errors on a PR that was never armed, so the fallback re-reads the live state and only
+      # passes if auto-merge really is off.
+      - name: Disarm auto-merge if it is no longer eligible
+        if: steps.gate.outputs.verdict != 'eligible'
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          if gh pr merge --disable-auto "$PR_URL"; then
+            echo "auto-merge disarmed"
+            exit 0
+          fi
+          state="$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest')"
+          if [[ "$state" == "null" ]]; then
+            echo "auto-merge was not armed — nothing to disarm"
+            exit 0
+          fi
+          echo "FAILED to disarm auto-merge on an ineligible PR: $state" >&2
+          exit 1
+
+      # Prints why a PR was left alone, so "why did this not merge?" is answered in the run log
+      # rather than by re-deriving the rule. Majors are the common case here.
+      - name: Explain why auto-merge was not armed
+        if: steps.gate.outputs.verdict != 'eligible'
+        env:
+          VERDICT: ${{ steps.gate.outputs.verdict }}
+          DEPS: ${{ steps.metadata.outputs.dependency-names }}
+        run: |
+          echo "Auto-merge not armed — ${VERDICT}."
+          echo "Dependencies: ${DEPS}"
+          echo "Merge this one by hand after reading the diff."
