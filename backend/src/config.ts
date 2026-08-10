@@ -29,6 +29,7 @@ export interface Settings {
   databaseUrl: string;
   historyEnabled: boolean; // convenience: authRequired && databaseUrl set
   logFormat: "json" | "text"; // "json" for Cloud Logging ingestion; "text" for humans
+  port: number; // Cloud Run injects PORT; 8080 is its default contract
   redisUrl: string;
   quotaBurst: number;
   quotaBurstWindowSeconds: number;
@@ -92,6 +93,7 @@ export function loadSettings(env: Env = process.env): Settings {
     // configured. Anonymous/local mode (no DATABASE_URL) boots with history disabled.
     historyEnabled: authRequired && databaseUrl !== "",
     logFormat: str(env.LOG_FORMAT, "text") === "json" ? "json" : "text",
+    port: posInt("PORT", env.PORT, 8080),
     // Rate limiting. Defaults are deliberately conservative: 10 requests/minute of burst and
     // 100/hour sustained per identity, and 4 concurrent sandboxes (at 256 MB and 0.5 CPU each,
     // roughly what a 4-core/8 GB dev box tolerates). All tunable — they are config, not

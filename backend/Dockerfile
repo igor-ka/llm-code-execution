@@ -17,5 +17,8 @@ COPY --from=build /app/dist ./dist
 # ../../migrations relative to dist/history), so they must ship in the runtime image.
 COPY migrations ./migrations
 
+# The application default is 8080 (Cloud Run's contract); this DEV image keeps 8000 so its
+# EXPOSE and the compose port mapping stay true.
+ENV PORT=8000
 EXPOSE 8000
 CMD ["node", "dist/index.js"]

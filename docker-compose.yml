@@ -15,6 +15,9 @@ services:
       # Same for Redis: reach it by compose service name. The backend refuses to start
       # without this (D6) — the request quota is not optional.
       REDIS_URL: redis://redis:6379
+      # The app default is 8080 (Cloud Run's contract). Pinned here so the published mapping
+      # below, the README's curl commands and the SPA's VITE_API_BASE default all keep working.
+      PORT: "8000"
     ports:
       - "8000:8000"
     volumes:
