@@ -93,6 +93,16 @@ async function applyPending(client: PoolClient): Promise<void> {
  */
 export async function migrate(pool: Pool): Promise<void> {
   const client = await pool.connect();
+  // A checked-out client has NO 'error' listener — pg-pool removes its idle listener on acquire.
+  // When the connection dies, pg rejects the in-flight query and then emits 'error' on the
+  // client, and Node's EventEmitter THROWS on an unhandled 'error': the process exits from an
+  // uncaught exception before any `.catch()` below can run. Without this line the rollback guard
+  // is unreachable in exactly the scenario it was written for. Verified against a live Postgres —
+  // `pg_terminate_backend` mid-migration killed the process and the migration error was never
+  // printed. Logging is all this handler owes; `release(true)` in the outer finally disposes it.
+  client.on("error", (err: unknown) => {
+    log.warn("migration connection error", { err });
+  });
   try {
     await client.query(`SET lock_timeout = '${LOCK_TIMEOUT}'`);
     await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_KEY]);

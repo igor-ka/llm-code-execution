@@ -5,11 +5,14 @@
  * run skips it. It proves migrate() is idempotent (running twice is a no-op), creates the history
  * tables, and serializes concurrent runners.
  *
- * The error-reporting half runs everywhere against a fake pool, because the failure it pins —
- * a broken connection making ROLLBACK reject — cannot be provoked against a healthy Postgres.
+ * The error-reporting half runs everywhere against a fake pool. A real Postgres *can* stage the
+ * failure it pins — `pg_terminate_backend` from a second connection does it — but not at a
+ * deterministic point in the run, and the interesting instant is the one between a migration
+ * failing and its ROLLBACK. The fake puts the break exactly there.
  */
 import { describe, it, expect, vi } from "vitest";
 import type { Pool } from "pg";
+import { EventEmitter } from "node:events";
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -103,60 +106,88 @@ async function resetSchema(pool: Pool): Promise<void> {
   });
 });
 
+/** A statement failure. `breaksConnection` models the socket dying, not just SQL being rejected. */
+type Failure = { error: Error; breaksConnection?: boolean };
+
 /**
  * A Pool stand-in covering just the surface migrate() touches: connect(), query(), release().
- * `failOn` decides which statements reject, so a test can break the connection at a chosen point.
+ * `failOn` decides which statements fail, so a test can break the connection at a chosen point.
  *
  * Every successful query answers `rowCount: 0` (so the ledger lookup reports "not yet applied"
  * and the run proceeds) with `unlocked: true` (so the advisory-unlock check stays quiet).
+ *
+ * **The client is a real EventEmitter, because that is the mechanism under test.** When pg loses
+ * a connection it rejects the in-flight query *and* emits `'error'` on the client; Node throws on
+ * an unhandled `'error'`, so a client nobody listens to takes the process down. A `migrate()`
+ * that forgets that listener therefore fails here rather than passing on a rejected promise.
+ *
+ * One honest difference: pg emits from its socket handler, where the throw lands as an uncaught
+ * exception and exits the process; this fake throws at the call site instead. The gate is the
+ * same — no listener means failure — and the real process death was confirmed by hand against a
+ * live Postgres with `pg_terminate_backend`.
  */
-function fakePool(failOn: (sql: string) => Error | undefined) {
+function fakePool(failOn: (sql: string) => Failure | undefined) {
   const statements: string[] = [];
-  const client = {
-    query(sql: string) {
+  class FakeClient extends EventEmitter {
+    release = vi.fn();
+    query(sql: string): Promise<unknown> {
       statements.push(sql);
-      const err = failOn(sql);
-      return err
-        ? Promise.reject(err)
-        : Promise.resolve({ rowCount: 0, rows: [{ unlocked: true }] });
-    },
-    release: vi.fn(),
-  };
-  return { statements, pool: { connect: async () => client } as unknown as Pool };
+      const failure = failOn(sql);
+      if (!failure) return Promise.resolve({ rowCount: 0, rows: [{ unlocked: true }] });
+      if (failure.breaksConnection) this.emit("error", failure.error);
+      return Promise.reject(failure.error);
+    }
+  }
+  const client = new FakeClient();
+  return { statements, client, pool: { connect: async () => client } as unknown as Pool };
 }
 
 /**
  * Fails the migration body — identified as the statement right after BEGIN, rather than by its
  * text, so this does not break when 001_history.sql is edited or renamed.
  */
-function failMigrationBody(bodyError: Error, rollbackError?: Error) {
+function failMigrationBody(bodyError: Error, rollbackFailure?: Failure) {
   let nextIsBody = false;
-  return (sql: string): Error | undefined => {
+  return (sql: string): Failure | undefined => {
     if (sql === "BEGIN") {
       nextIsBody = true;
       return undefined;
     }
     if (nextIsBody) {
       nextIsBody = false;
-      return bodyError;
+      return { error: bodyError };
     }
-    if (sql === "ROLLBACK") return rollbackError;
+    if (sql === "ROLLBACK") return rollbackFailure;
     return undefined;
   };
 }
 
 describe("migrate error reporting", () => {
-  it("surfaces the migration error even when the rollback also fails", async () => {
-    // The real shape: Postgres restarts or a proxy drops the connection mid-migration, so the
-    // migration rejects AND the ROLLBACK that follows rejects. An unguarded `await` on the
-    // rollback replaces the original error — and this runs before listen(), on the one client
-    // holding the advisory lock, so that error is the entire diagnostic for a failed boot.
+  it("surfaces the migration error even when the connection dies before the rollback", async () => {
+    // The real shape: a migration fails on a SQL error, then Postgres restarts / a proxy drops
+    // the connection, so the ROLLBACK that follows fails too. Two ways the original error gets
+    // lost — an unguarded `await` on the rollback replacing it, and an unhandled 'error' event
+    // killing the process outright. This runs before listen(), on the one client holding the
+    // advisory lock, so that error is the entire diagnostic for a failed boot.
     const bodyError = new Error('syntax error at or near "CREAT"');
     const { pool } = fakePool(
-      failMigrationBody(bodyError, new Error("Connection terminated unexpectedly")),
+      failMigrationBody(bodyError, {
+        error: new Error("Connection terminated unexpectedly"),
+        breaksConnection: true,
+      }),
     );
 
     await expect(migrate(pool)).rejects.toThrow(bodyError);
+  });
+
+  it("listens for connection errors on the client it checks out", async () => {
+    // States the invariant the test above relies on: pg-pool strips the idle 'error' listener on
+    // acquire, so migrate() must attach its own or a dying connection is an uncaught exception.
+    const { client, pool } = fakePool(() => undefined);
+
+    await migrate(pool);
+
+    expect(client.listenerCount("error")).toBeGreaterThan(0);
   });
 
   it("still attempts the rollback when a migration fails", async () => {
