@@ -539,7 +539,7 @@ where **every** dependency is a patch or minor bump. Majors are always merged by
 a major is where a peer range breaks — #78 raised `vite` without `@vitejs/plugin-react` and died
 at `npm ci`.
 
-Two details in that rule are not decoration:
+Four details in that rule are not decoration:
 
 - **Every dependency, not the PR's highest reported update type.** On security updates Dependabot
   omits `update-type:` from the commit trailer, so the action falls back to parsing versions out
@@ -547,11 +547,21 @@ Two details in that rule are not decoration:
   "Removes `esbuild`". The summary output is the *max* across entries and skips those blanks, so a
   security PR whose only major is an unparseable entry reports minor. The gate reads the
   per-dependency JSON instead and fails closed on a blank, a missing key or malformed input.
-- **`github_actions` never auto-merges.** This workflow pins its own action by SHA with the
-  version in a trailing comment, and Dependabot bumps SHA pins by that comment — so a new
-  third-party action SHA would arrive as a *patch* and merge unread. Nothing else would catch it:
-  `SDLC docs` exits 0 for `dependabot[bot]`, `PR shape` passes, and no `verify.sh` reads workflow
-  files.
+- **An allow-list of ecosystems, not a deny-list.** Only `npm_and_yarn` auto-merges.
+  `github_actions` must not: the workflow pins its own action by SHA with the version in a
+  trailing comment, and Dependabot bumps SHA pins by that comment, so a new third-party action SHA
+  would arrive as a *patch* and merge unread — and `SDLC docs` exits 0 for `dependabot[bot]` while
+  no `verify.sh` reads workflow files. An allow-list also fails closed on ecosystems added later:
+  `docker` is proposed in #110, where a base-image digest bump has the same property.
+- **One commit, or nothing.** `fetch-metadata` verifies the PR author and then reads and
+  signature-checks only `commits[0]`; auto-merge merges HEAD. Requiring a single commit closes the
+  gap between what was inspected and what would merge. Every Dependabot PR this repository has
+  seen carries exactly one commit, so the rule costs nothing.
+- **Arming is undone when a PR stops qualifying.** GitHub disables auto-merge only when someone
+  *without* write permission pushes to the head branch, and Dependabot has write. A grouped PR
+  armed while patch-only and later updated in place to carry a major would otherwise stay armed
+  and merge that major unattended, so the workflow calls `gh pr merge --disable-auto` on any
+  already-armed PR that no longer qualifies.
 
 **What it is not.** It does not weaken any gate. Native auto-merge waits for all four required
 checks *and* for every review thread to be resolved. Copilot reviews every PR including
@@ -570,11 +580,15 @@ to a merge queue, so adopting one means re-authenticating this workflow with a P
 token.
 
 **Security posture — different from every other job here.** `SDLC docs` and `PR shape` run
-scripts from the PR branch under a read-only token. This one inverts both: it holds
-`contents: write` and `pull-requests: write`, and so it checks nothing out and runs no repository
-code. Its only third-party action is pinned to a full commit SHA. It uses `pull_request`, never
+scripts from the PR branch under a read-only token. This one inverts that: it holds
+`pull-requests: write`, and so it checks nothing out and runs no repository code. Its only
+third-party action is pinned to a full commit SHA. It uses `pull_request`, never
 `pull_request_target`. Keep all four of those properties together — each one is load-bearing only
 because the others hold.
+
+`contents: write` is deliberately **not** requested, though GitHub's documented example for this
+task carries it: `gh pr merge --auto` only enables auto-merge, and GitHub performs the merge
+later. `contents: write` is the scope that would let a compromised step push straight to `main`.
 
 ---
 

@@ -152,7 +152,13 @@ git switch -c feat/dependabot-auto-merge origin/main
 Expected: a clean switch. If `git status --short` shows tracked modifications belonging to another
 session, stop and resolve that before going further.
 
-- [ ] **Step 2: Create the workflow file**
+- [x] **Step 2: Create the workflow file**
+
+> **Post-implementation note.** The YAML below is the version this plan was approved with. The
+> `code-review` pass on PR #126 found four real defects in it, so the merged file differs — three
+> gate rules instead of two, a disarm step, `reopened` dropped, and `contents: write` dropped. See
+> [Code review log](#code-review-log) at the end of this document; `.github/workflows/dependabot-auto-merge.yml`
+> is authoritative.
 
 ```yaml
 name: Dependabot auto-merge
@@ -355,16 +361,23 @@ for f in a-minor b-grouped-major c-security-blank d-actions-patch e-missing-key 
 done
 ```
 
-Observed 2026-08-10, exactly as expected:
+Observed 2026-08-10, re-run after the code-review fixes with `packageEcosystem` set to the real
+value Dependabot produces (`npm_and_yarn` — every npm branch is `dependabot/npm_and_yarn/…`) and a
+seventh fixture for the `docker` ecosystem proposed in #110:
 
 ```
 a-minor            eligible
 b-grouped-major    not-eligible: at least one dependency is not patch or minor
 c-security-blank   not-eligible: at least one dependency is not patch or minor
-d-actions-patch    not-eligible: github_actions pins are merged by a human
+d-actions-patch    not-eligible: only npm dependency bumps auto-merge
 e-missing-key      not-eligible: at least one dependency is not patch or minor
 f-empty            not-eligible: no dependency metadata
+g-docker-patch     not-eligible: only npm dependency bumps auto-merge
 ```
+
+> Fixture `f-empty` is defensive rather than reachable: `fetch-metadata` calls `setFailed` on an
+> empty dependency array, so its own step fails and the gate never runs. The branch stays because
+> the same condition also covers non-array input, which *is* reachable.
 
 Then confirm malformed input fails rather than passing:
 
@@ -808,6 +821,67 @@ event; and `GITHUB_TOKEN`-triggered events do not start new workflow runs.
 - **#94's "enforced-layer list should name the new job".** **Decision: not implemented**, recorded
   under *File structure* above with the reasoning, plus a note that the row is separately stale.
 
-Advisory items from the review, also applied: the `gh pr merge --auto` "already mergeable" note in
-the workflow comments, `@dependabot recreate` as the Task 7 fallback, and the corrected reason for
-why an open PR picks up a workflow that is on `main` (the merge commit, not the branch contents).
+Advisory items from the review, also applied: `@dependabot recreate` as the Task 7 fallback, and
+the corrected reason for why an open PR picks up a workflow that is on `main` (the merge commit,
+not the branch contents). The "already mergeable" note was written into the workflow and then
+superseded — see below.
+
+---
+
+## Code review log
+
+`code-review` and `security-review` on PR #126, 2026-08-10. The security review found nothing:
+no checkout, no `${{ }}` interpolated into any `run:` body, the `if:` uses GitHub-expression `==`
+(exact, no glob), fork PRs are capped at a read token regardless of `permissions:`, the action is
+SHA-pinned, and the `verdict` value is one of a fixed set of literals so it cannot forge a second
+`$GITHUB_OUTPUT` line.
+
+`code-review` found four real defects. All four are fixed in the merged workflow:
+
+1. **No disarm path.** Arming is sticky — GitHub disables auto-merge only when someone *without*
+   write permission pushes to the head branch, and Dependabot has write. A grouped PR armed while
+   patch-only and later updated in place to carry a major would have stayed armed and merged that
+   major unattended, which is the exact outcome this workflow exists to prevent. Added a
+   `gh pr merge --disable-auto` step, gated on `github.event.pull_request.auto_merge != null`.
+2. **The gate bound `commits[0]`, auto-merge binds HEAD.** `fetch-metadata` reads and
+   signature-checks only the first commit. Added a single-commit rule; verified that all eleven
+   open Dependabot PRs carry exactly one commit, so it costs nothing.
+3. **The diagnostic jq crashed on the input the verdict handles.** `jq '.[]'` on non-array input
+   exits 5, and under `set -euo pipefail` that failed the step and skipped the `Explain` step —
+   the fail-closed path produced a raw jq trace instead of its own reason. Guarded with
+   `if type == "array"`, and `// "?"` added to `prevVersion`/`newVersion`, which are exactly the
+   fields that are absent in the security-update case the log exists to explain.
+4. **`reopened` made the "already mergeable" case reachable.** Check results survive a
+   close/reopen, so reopening a green PR would run the arm step against an immediately-mergeable
+   PR, where `gh pr merge --auto` errors. Dropped `reopened` from the trigger rather than
+   documenting the case as impossible.
+
+Two further findings were accepted as improvements rather than defects:
+
+5. **Rule 2 was a deny-list.** Blocking `github_actions` admitted every ecosystem added later —
+   and #110 proposes `docker`, where a base-image digest bump has the same "nobody reads it"
+   property. Inverted to an allow-list of `npm_and_yarn`.
+6. **`contents: write` was broader than the operation needs.** `gh pr merge --auto` enables
+   auto-merge; GitHub performs the merge later. Dropped to `pull-requests: write` alone. This is
+   the one change not verified locally — Task 7 is where it is proved. If the arm step fails with
+   a 403 or "Resource not accessible by integration", add `contents: write` back.
+
+**Pushed back on, not applied:**
+
+- *"`docs/sdlc.md`'s claim that `PR shape` passes on Dependabot PRs is false"* — the reviewer
+  constructed a body whose embedded release notes carried `resolve #1234` and showed the script
+  counting three issues. The constructed risk is real, but the claim is not false: the script was
+  run against four real bot bodies including `@anthropic-ai/sdk` 0.68.0 → 0.116.0 (48 minor
+  versions of changelog) and `jsdom` 25 → 30, and all four print "closes no issue" — consistent
+  with the existing verification against #73, #74, #75, #77 and #78 and with `PR shape` reporting
+  SUCCESS on every open bot PR today. The reviewer also called the claim load-bearing for the
+  ecosystem argument; it is not. An *accidental* `PR shape` failure is not somebody reading the
+  diff, so the argument for excluding `github_actions` holds either way.
+- *"Hard-coding the repository slug means a rename silently skips the job"* — true, but the
+  proposed `github.repository_owner` has the same failure mode on a transfer, and the slug is
+  already hard-coded in `scripts/check-pr-shape.sh`. Churn without a fix.
+
+Also applied: a paragraph in `README.md`'s CI section noting that a fourth pull-request workflow
+exists and gates nothing. The reviewer flagged this as a judgment call under the documentation
+rule in `CLAUDE.md`; a workflow that merges to `main` is close enough to "security posture" to
+name.
