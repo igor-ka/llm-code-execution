@@ -1,0 +1,61 @@
+# Scheduled version updates. Security updates are enabled separately in repository settings and
+# ignore `schedule` and `open-pull-requests-limit` here — but they DO honour a `groups` block
+# that sets `applies-to: security-updates`, which is why each npm ecosystem has two.
+#
+# Both package.json files live one level down, so `directory:` must name them explicitly; a
+# single "/" entry silently matches nothing and Dependabot reports no error.
+#
+# Each npm ecosystem declares the SAME patterns twice. `applies-to` defaults to
+# `version-updates`, so a single group would silently not cover security updates — and both
+# PRs that motivated grouping (#77, #78) were security updates. See issue #56, finding 3.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Peer-linked packages must move together. Ungrouped, a vite major lands while its
+      # peers stay pinned and the PR dies at `npm ci`.
+      #
+      # Only `vitest` is a direct dependency here today, so this group is one package for
+      # version updates. It is kept for symmetry and for when vite lands directly.
+      vite-toolchain:
+        patterns:
+          - vite
+          - vitest
+          - "@vitest/*"
+      # The one that actually bites for the backend: `vite` is transitive here, and security
+      # updates are the only path that reaches transitive dependencies.
+      vite-toolchain-security:
+        applies-to: security-updates
+        patterns:
+          - vite
+          - vitest
+          - "@vitest/*"
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # The frontend groups additionally carry @vitejs/* — @vitejs/plugin-react declares a
+      # peer range on vite, and leaving it behind is exactly what broke PR #78.
+      vite-toolchain:
+        patterns:
+          - vite
+          - vitest
+          - "@vitest/*"
+          - "@vitejs/*"
+      vite-toolchain-security:
+        applies-to: security-updates
+        patterns:
+          - vite
+          - vitest
+          - "@vitest/*"
+          - "@vitejs/*"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
