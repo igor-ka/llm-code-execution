@@ -14,7 +14,7 @@
     "test:integration": "tsc -p tsconfig.test.json && vitest run --no-file-parallelism tests/history/pgStore.test.ts tests/history/migrate.test.ts tests/history/isolation.test.ts tests/limits/redisQuota.test.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.68.0",
+    "@anthropic-ai/sdk": "^0.116.0",
     "cors": "^2.8.5",
     "dockerode": "^4.0.2",
     "dotenv": "^16.4.5",
