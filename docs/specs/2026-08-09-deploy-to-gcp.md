@@ -1,7 +1,8 @@
 # Spec: deploy the app so users can reach it
 
 Epic: [#79](https://github.com/igor-ka/llm-code-execution/issues/79) · Status: **all questions
-answered (D1–D10) — ready to plan**
+answered (D1–D10)** · Phase 0 shipped 2026-08-10 ·
+[Phase 1 plan](../plans/2026-08-10-deploy-to-gcp-phase1.md) reviewed and approved
 
 Stack, commands, project layout, code style, and testing strategy are not restated here; they
 live in [`CLAUDE.md`](../../CLAUDE.md) and [`README.md`](../../README.md).
@@ -222,10 +223,22 @@ same PR — the job-name contract applies here too.
 
 ## Open questions
 
-**None — all resolved (D1–D10).** Two items deferred as configuration rather than architecture:
-the Cloud Run instance size (follows from D7 and the concurrency cap — chosen in the plan, verified
-in Phase 2), and the GCP region (must satisfy Cloud Run gen2 + sandboxes preview availability and
-Cloud SQL in one place; a Phase 1 lookup, not a design decision).
+**None — all resolved (D1–D10).** Two items were deferred as configuration rather than
+architecture. One is now closed:
+
+- **GCP region — resolved 2026-08-10: `us-central1`.** The Phase 1 lookup found that Google
+  publishes no region list for the sandboxes preview; the
+  [configuration docs](https://docs.cloud.google.com/run/docs/configuring/services/sandboxes)
+  state the gen2 requirement and the CPU/memory-sharing limitation but say nothing about
+  availability. `us-central1` was chosen as the best available proxy — it has Cloud Run gen2 and
+  Cloud SQL, and it is where previews land first. Accepted cost: ~40 ms of extra latency from
+  Montreal versus `northamerica-northeast1`, and US residency for data the Boundaries section
+  already calls disposable. Held in a single `var.region` so reversing it is one line plus a
+  rebuild. See [P1-D1](../plans/2026-08-10-deploy-to-gcp-phase1.md).
+- **Cloud Run instance size — still open, and deliberately.** It follows from D7 and the
+  concurrency cap, and there is no Cloud Run resource in Phase 1 to attach it to; sizing a service
+  that does not exist would be a guess written in Terraform. Phase 2's plan chooses it and
+  verifies it against real sandbox executions.
 
 ## Residual risk
 
