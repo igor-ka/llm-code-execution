@@ -20,19 +20,21 @@ Bash (gates + bootstrap), GitHub Actions.
 
 | PR | Deliverable | Closes | Depends on |
 | --- | --- | --- | --- |
-| 1 | `infra/` root, `Terraform checks` gate, API enablement | P1-1 | — |
-| 2 | Remote state: `bootstrap.sh`, GCS backend, bootstrap runbook | P1-2 | PR 1 |
-| 3 | Artifact Registry + runtime service account + least-privilege IAM | P1-3 | PR 2 |
-| 4 | Secret Manager containers + population runbook | P1-4 | PR 3 |
-| 5 | Workload Identity Federation for GitHub Actions (keyless) | P1-5 | PR 3 |
-| 6 | Budget alarms, teardown runbook, destroy/rebuild proof, README | P1-6 | PRs 1–5 |
+| 1 | `infra/` root, `Terraform checks` gate, API enablement | #130 | — |
+| 2 | Remote state: `bootstrap.sh`, GCS backend, bootstrap runbook | #131 | PR 1 |
+| 3 | Artifact Registry + runtime service account + least-privilege IAM | #132 | PR 2 |
+| 4 | Secret Manager containers + population runbook | #133 | PR 3 |
+| 5 | Workload Identity Federation for GitHub Actions (keyless) | #134 | PR 3 |
+| 6 | Budget alarms, teardown runbook, destroy/rebuild proof, README | #135 | PRs 1–5 |
 
 PRs 4 and 5 are independent of each other and can land in either order. **PR 1 is one child, not
 two**, even though "the Terraform root" and "the CI gate" are separable: a Terraform root with no
 gate is precisely what D10 refuses, and a gate with nothing to check is not a deliverable. **PR 6
 is one child, not three**, because the budget alarm, the teardown runbook and the destroy/rebuild
-proof are the same claim — S7 and S8 are unprovable apart. Child issues are filed after this plan
-is approved, per `docs/sdlc.md`; the `P1-N` labels above become their numbers.
+proof are the same claim — S7 and S8 are unprovable apart.
+
+Only PR 1 is offline. **PR 2 is where the 90-day trial clock starts** (D2), which is why
+everything that does not need a live project is front-loaded into PR 1.
 
 ---
 
@@ -947,7 +949,7 @@ git add scripts/check-sdlc-sync.sh scripts/tests/check-sdlc-sync.test.sh \
 git commit -m "docs(sdlc): record the third verify.sh and the Terraform checks job"
 git push -u origin feat/infra-terraform-root
 gh pr create --title "feat(infra): the Terraform root and the check that guards it" \
-             --body "Closes #<P1-1>. …"
+             --body "Closes #130. …"
 ```
 
 ### Task 6: Make `Terraform checks` required — after the merge, not before
@@ -1187,7 +1189,7 @@ git commit -m "feat(infra): store terraform state in GCS"
 git add docs/runbooks/gcp-bootstrap.md
 git commit -m "docs(runbooks): bootstrap a GCP project for this repo"
 git push -u origin feat/infra-remote-state
-gh pr create --title "feat(infra): remote state in GCS" --body "Closes #<P1-2>. …"
+gh pr create --title "feat(infra): remote state in GCS" --body "Closes #131. …"
 ```
 
 ---
@@ -1351,7 +1353,7 @@ git add infra/identity.tf infra/outputs.tf
 git commit -m "feat(infra): least-privilege runtime service account"
 git push -u origin feat/infra-registry-identity
 gh pr create --title "feat(infra): artifact registry and the runtime identity" \
-             --body "Closes #<P1-3>. …"
+             --body "Closes #132. …"
 ```
 
 ---
@@ -1490,7 +1492,7 @@ git add infra/secrets.tf docs/runbooks/gcp-bootstrap.md
 git commit -m "feat(infra): secret containers with per-secret access"
 git push -u origin feat/infra-secrets
 gh pr create --title "feat(infra): secret manager containers, payloads out of band" \
-             --body "Closes #<P1-4>. …"
+             --body "Closes #133. …"
 ```
 
 ---
@@ -1646,7 +1648,7 @@ git add infra/wif.tf infra/outputs.tf
 git commit -m "feat(infra): keyless GitHub federation, scoped to main"
 git push -u origin feat/infra-wif
 gh pr create --title "feat(infra): workload identity federation for GitHub Actions" \
-             --body "Closes #<P1-5>. …"
+             --body "Closes #134. …"
 ```
 
 ---
@@ -1940,7 +1942,7 @@ git add README.md infra/README.md
 git commit -m "docs: record the phase 1 foundation in the roadmap"
 git push -u origin feat/infra-budget-teardown
 gh pr create --title "feat(infra): budget alarms and the day-91 teardown" \
-             --body "Closes #<P1-6>. Includes the destroy/rebuild proof for S7 — output below. …"
+             --body "Closes #135. Includes the destroy/rebuild proof for S7 — output below. …"
 ```
 
 ---
