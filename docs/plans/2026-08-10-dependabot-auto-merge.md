@@ -1024,3 +1024,114 @@ and run under `bash -e` (the runner's actual shell) against a stub `gh`:
 | armed by `github-actionsb` | exit 0, treated as a human — the unquoted-`[bot]`-is-a-glob regression |
 
 All six pass. The fifth is the one that was dead code before finding 11.
+
+### Second live run — the fix worked, and exposed one more
+
+After #127 merged as `ea41038`, the three fixtures were rebased again.
+
+**`contents: write` was the answer.** #117 armed successfully:
+`{"mergeMethod":"SQUASH","enabledBy":{"is_bot":true,"login":"app/github-actions"}}`. The claim
+that had been reasoned rather than proven is now proven.
+
+**Both remaining controls held.** #120 (major) was not armed and the run exited 0 — the disarm
+step's "not armed, nothing to disarm" path, which had been failing incorrectly. #98
+(`github_actions`) produced a run in which **both** jobs report `skipped`, so the write-scoped
+`apply` job never starts for that ecosystem.
+
+**And a thirteenth defect, of exactly the kind this plan claimed a unit test could not catch.**
+
+13. **The disarm step keyed on the wrong login string.** It compared
+    `autoMergeRequest.enabledBy.login` against `github-actions[bot]`. `gh` renders a Bot actor as
+    **`app/github-actions`** — the underlying GraphQL `Bot.login` is bare `github-actions`, and
+    neither is the string the code tested. So every bot-armed PR took the "a human armed this,
+    leave it alone" branch, silently reinstating the sticky-arming bug the step exists to
+    prevent. Verified against the live payload: the old expression yields `app/github-actions`
+    and the old comparison sends it down the human branch.
+
+    This is the failure mode named in *How this change is tested* — a wrong constant, where the
+    stub test asserted the same wrong constant the implementation did and passed. The fix keys on
+    `enabledBy.is_bot`, a boolean, which is rendering-independent.
+
+    **The test was strengthened so it could have caught it.** The stub `gh` no longer returns a
+    hand-written answer; it now runs the **real jq expression from the workflow** over **real
+    captured payloads**, including the exact object `gh` returned for #117. A hand-written stub
+    can only encode what the author believes; a captured payload encodes what GitHub actually
+    sends. That distinction is the whole lesson of this defect.
+
+    > **Correction, same day.** When that paragraph was first written the harness lived in a
+    > scratch directory and was never committed — so "the test was strengthened" described
+    > something no reader could run, which the review of #128 caught and was right to call out.
+    > It is now `scripts/tests/dependabot-auto-merge-disarm.test.sh`, ten cases, run by the
+    > `SDLC docs` job, and it was mutation-checked: reverting the `is_bot | type` guard makes two
+    > cases fail, and restoring it makes them pass.
+
+### #94's acceptance criteria — final status
+
+| Criterion | Status |
+| --- | --- |
+| `required_review_thread_resolution` question answered and recorded | ✅ in the issue body, 2026-08-10 |
+| `allow_auto_merge` enabled on the repository | ✅ Task 1 |
+| Workflow arms auto-merge for `dependabot[bot]` patch/minor only | ✅ #126, corrected by #127 and #128 |
+| `--squash`; `fetch-metadata` pinned to a full SHA; no `pull_request_target` | ✅ |
+| **A real patch or minor Dependabot PR merges with no human interaction** | ✅ **PR #117 merged as `8211ee8` at 21:36:05 by `app/github-actions`** |
+| A real **major** Dependabot PR is confirmed *not* to auto-merge | ✅ #120, `not-eligible: at least one dependency is not patch or minor` |
+| `docs/sdlc.md` updated in the same PR | ✅ |
+
+**Task 7 Step 8, answered.** The auto-merge produced **no `push`-side `CI` run on `main`** —
+`8211ee8` has none, while every human-merged commit around it does. This confirms the documented
+rule that `GITHUB_TOKEN`-triggered events do not start new workflow runs. Recorded in
+`docs/sdlc.md` rather than left as folklore.
+
+**Task 7 Step 7b (the eligible → ineligible disarm transition) has still not been exercised
+live.** No open PR has made that transition. The path is covered by
+`scripts/tests/dependabot-auto-merge-disarm.test.sh` and its failure mode is loud, but it has not
+run in production — stated here as a known gap rather than claimed as verified.
+
+### Review of #128 — four more, and one that mattered
+
+`security-review` found nothing: the actor check is not spoofable without write access, and the
+parameter expansions are unquoted-glob-free. `code-review` found four real problems.
+
+14. **`is_bot // false` could not distinguish `false` from absent.** `enabledBy` is a nullable
+    Actor in GraphQL (deleted account, uninstalled app), so `is_bot` can be missing entirely — and
+    a bare `// false` reads that as "a human armed it" and leaves an ineligible PR armed. This is
+    reachable today, not only after a `gh` upgrade. Now `is_bot | type` must be `"boolean"`, and
+    anything else fails the step closed.
+15. **`is_bot` alone matches *any* app.** A maintainer running `@dependabot merge` on a major
+    after reading it would have been silently overridden on the next rebase — the same
+    revoke-a-considered-decision defect the step's own comment warns about, relocated. The check
+    now requires `is_bot` **and** a login of `github-actions` / `app/github-actions`.
+16. **The gate-failure branch disarmed while claiming a judgement it had not made.** An empty
+    verdict means `gate` failed, not that the PR was found ineligible. Disarming is still correct
+    — an unknown verdict must not stay armed — but the log said "the PR no longer qualifies". It
+    now reports which of the two it was.
+17. **A workflow comment claimed #98 "produced no run at all".** False: a job-level `if:`
+    suppresses the *jobs*, not the run. Run 31434426736 exists with both jobs `skipped`. The
+    comment now says that, because someone auditing the allow-list would otherwise look for
+    evidence that does not exist. (The same wrong claim was made to the user in conversation and
+    corrected there.)
+
+18. **"Fail closed" did not fail closed** — Copilot, on the fix for finding 14. The indeterminate
+    branch exited 1 without disarming, which reads as safe and is not: this workflow is
+    deliberately **not a required check**, so a red job blocks nothing and the armed PR merges
+    anyway. Refusing to act is fail-*open* with a red light nobody has to obey. The only lever the
+    workflow actually has is `--disable-auto`, so the indeterminate case now disarms first and
+    fails the job second. Revoking a possible human decision is visible and one click to undo; an
+    unattended merge of an ineligible PR is neither. Four test cases assert the disarm happened,
+    not merely that the exit code was non-zero — the assertion the first version would have
+    passed while being wrong.
+
+Copilot, reviewing the same PR, independently raised the missing-test point and went one further:
+*run it from CI*. Initially the test was committed as a documented pre-push command, on the
+grounds that the auto-merge workflow cannot host it. That reasoning was right about the owner and
+wrong about the conclusion — a test nobody runs automatically is a procedure, not a guarantee, and
+this repository's whole premise is the difference between the two. It now runs as a step in the
+**`SDLC docs`** job, which already has a checkout and a read-only token, runs on every pull
+request, and exists to check that a process change is self-consistent. The test reads files only
+and needs no token.
+
+Also applied: `**is_bot**` inside a code span rendered literally in `docs/sdlc.md`; the
+`GITHUB_TOKEN` claim was narrowed to `push`/`pull_request` since `workflow_dispatch` and
+`repository_dispatch` are documented exceptions; the two-field unpack became `read -r kind who`;
+and the third near-verbatim copy of the bug post-mortem was cut from the workflow comment, which
+now states the decision and points at `docs/sdlc.md`.

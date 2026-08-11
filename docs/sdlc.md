@@ -318,6 +318,12 @@ Details that are easy to get wrong:
   PR-title change. Both jobs' *unit tests* do have a local equivalent, and it is the same file
   CI runs: `./scripts/tests/check-pr-shape.test.sh` and
   `./scripts/tests/check-sdlc-sync.test.sh`.
+
+  A third suite, `./scripts/tests/dependabot-auto-merge-disarm.test.sh`, is run by `SDLC docs`
+  even though it belongs to a different workflow. That workflow gates itself to
+  `dependabot/npm_and_yarn/*` branches, so a PR editing it never executes it, and the test would
+  have no host otherwise. Same file locally and in CI, like the other two. See
+  [Auto-merging dependency bumps](#auto-merging-dependency-bumps).
 - **Dependabot PRs are exempt from `SDLC docs`, and need no exemption from `PR shape`.** The
   first is because `github-actions` bumps touch watched workflow files; the second is because
   bot PRs close no issue and the rule is *at most* one. If someone proposes an actor exemption
@@ -565,11 +571,54 @@ Four details in that rule are not decoration:
   signature-checks only `commits[0]`; auto-merge merges HEAD. Requiring a single commit closes the
   gap between what was inspected and what would merge. Every Dependabot PR this repository has
   seen carries exactly one commit, so the rule costs nothing.
-- **Arming is undone when a PR stops qualifying.** GitHub disables auto-merge only when someone
-  *without* write permission pushes to the head branch, and Dependabot has write. A grouped PR
-  armed while patch-only and later updated in place to carry a major would otherwise stay armed
-  and merge that major unattended, so the workflow calls `gh pr merge --disable-auto` on any
-  already-armed PR that no longer qualifies.
+- **Arming is undone when a PR stops qualifying — but only what the workflow itself armed.**
+  GitHub disables auto-merge only when someone *without* write permission pushes to the head
+  branch, and Dependabot has write. A grouped PR armed while patch-only and later updated in place
+  to carry a major would otherwise stay armed and merge that major unattended, so the workflow
+  calls `gh pr merge --disable-auto` on an already-armed PR that no longer qualifies.
+
+  It decides whose arming it is from **both** `autoMergeRequest.enabledBy.is_bot` and the login,
+  and **fails closed** when it cannot tell. `allow_auto_merge` is repository-wide, so a human can
+  read a major and arm it by hand, and silently revoking that would be its own defect.
+
+  Each half of that rule cost a defect to learn. Keying on the **login alone** failed: the first
+  version compared it against `github-actions[bot]` and never matched, because `gh` renders a Bot
+  actor as `app/github-actions` while the underlying GraphQL `Bot.login` is bare `github-actions`
+  — so every bot-armed PR read as "a human did this, leave it alone". Keying on **`is_bot` alone**
+  fails the other way: it matches *any* app, so a maintainer who runs `@dependabot merge` on a
+  major after reading it would be silently overridden. And `enabledBy` is a **nullable** Actor —
+  a deleted account, an uninstalled app — so `is_bot` can be *absent* rather than false; a bare
+  `// false` would read absent as "human" and leave an ineligible PR armed. The check tests
+  `is_bot | type == "boolean"`.
+
+  When it comes back indeterminate the step **disarms anyway**, then fails the job. Exiting
+  without disarming would not be failing closed, which is what an earlier version called it: this
+  workflow is deliberately not a required check, so a red job blocks nothing and the PR would stay
+  armed and merge. Refusing to act is fail-*open* with a red light nobody has to obey. Revoking a
+  possible human decision is visible and one click to undo; an unattended merge of an ineligible
+  PR is neither.
+
+  Its tests are `scripts/tests/dependabot-auto-merge-disarm.test.sh`, ten cases, run by the
+  **`SDLC docs`** job. That job is a host, not the owner: this workflow gates itself to
+  `dependabot/npm_and_yarn/*` branches, so a PR that edits it never executes it, and the logic
+  would otherwise ship with no automated coverage — which is how a wrong actor constant survived
+  two reviews. `SDLC docs` already has a checkout and a read-only token, runs on every PR, and
+  exists to check that a process change is self-consistent.
+
+  The test extracts the script from the YAML rather than keeping a copy, so the two cannot drift,
+  and stubs `gh` in a way that still runs the real `--jq` expression over payloads captured from
+  real `gh` output. A hand-written stub can only encode what its author already believes, which is
+  exactly how `github-actions[bot]` got past review.
+
+**An auto-merge does not re-run `CI` on `main`.** A `push` or `pull_request` event triggered by
+`GITHUB_TOKEN` does not start a new workflow run (`workflow_dispatch` and `repository_dispatch`
+are the documented exceptions, and neither applies here), and auto-merge armed by this workflow
+merges as `app/github-actions`. Confirmed
+on the first unattended merge: `8211ee8` (PR #117) has no `push`-side CI run, while every
+human-merged commit around it does. That is harmless here — `strict_required_status_checks_policy`
+means the PR's own checks already ran against exactly this base — but it does mean the `main`
+history has gaps in its push-side runs, and anything built later that keys off "CI ran on main"
+must not assume otherwise.
 
 **What it is not.** It does not weaken any gate. Native auto-merge waits for all four required
 checks *and* for every review thread to be resolved. Copilot reviews every PR including
