@@ -110,8 +110,13 @@ check "disarm reports the why"   "$BOT"         0   0  "$V"      0    "$V"
 check "gate failed: still disarms" "$BOT"       0   0  ""        0    "eligibility is unknown"
 check "armed by a human"         "$HUMAN"       0   0  "$V"      0    "leaving it alone"
 check "armed by another bot"     "$OTHER_BOT"   0   0  "$V"      0    "leaving it alone"
-check "enabledBy null"           "$NULL_ACTOR"  0   0  "$V"      1    "could not be identified"
-check "is_bot field absent"      "$NO_IS_BOT"   0   0  "$V"      1    "could not be identified"
+# The indeterminate cases must DISARM and then complain. Exiting without disarming would not be
+# failing closed: this workflow is not a required check, so a red job blocks nothing and the PR
+# would stay armed and merge. Assert the disarm happened, not just the non-zero exit.
+check "enabledBy null disarms"   "$NULL_ACTOR"  0   0  "$V"      1    "auto-merge disarmed"
+check "enabledBy null complains" "$NULL_ACTOR"  0   0  "$V"      1    "could not be identified"
+check "is_bot absent disarms"    "$NO_IS_BOT"   0   0  "$V"      1    "auto-merge disarmed"
+check "indeterminate + gh fails" "$NULL_ACTOR"  0   1  "$V"      1    "FAILED to disarm"
 check "disarm call fails"        "$BOT"         0   1  "$V"      1    "FAILED to disarm"
 check "gh pr view fails"         "$NONE"        4   0  "$V"      1    "refusing to assume"
 

@@ -1111,6 +1111,16 @@ parameter expansions are unquoted-glob-free. `code-review` found four real probl
     evidence that does not exist. (The same wrong claim was made to the user in conversation and
     corrected there.)
 
+18. **"Fail closed" did not fail closed** — Copilot, on the fix for finding 14. The indeterminate
+    branch exited 1 without disarming, which reads as safe and is not: this workflow is
+    deliberately **not a required check**, so a red job blocks nothing and the armed PR merges
+    anyway. Refusing to act is fail-*open* with a red light nobody has to obey. The only lever the
+    workflow actually has is `--disable-auto`, so the indeterminate case now disarms first and
+    fails the job second. Revoking a possible human decision is visible and one click to undo; an
+    unattended merge of an ineligible PR is neither. Four test cases assert the disarm happened,
+    not merely that the exit code was non-zero — the assertion the first version would have
+    passed while being wrong.
+
 Copilot, reviewing the same PR, independently raised the missing-test point and went one further:
 *run it from CI*. Initially the test was committed as a documented pre-push command, on the
 grounds that the auto-merge workflow cannot host it. That reasoning was right about the owner and

@@ -238,22 +238,30 @@ jobs:
             exit 0
           fi
 
-          if [[ "$kind" == "indeterminate" ]]; then
-            echo "auto-merge is armed but the enabling actor could not be identified." >&2
-            echo "Failing closed: disarm it by hand, or fix this step if gh's payload changed." >&2
-            exit 1
-          fi
-
           # Both signals, not either. `is_bot` alone matches ANY app — including a maintainer who
           # deliberately ran `@dependabot merge` on a major after reading it — and silently
           # revoking a considered decision is its own defect. The login alone was the bug in #128.
-          mine=no
+          #
+          # `indeterminate` disarms too, and the reason is worth stating because the obvious
+          # alternative is wrong. An earlier version exited 1 here and called that failing closed.
+          # It is not: this workflow is deliberately NOT a required check, so a red job blocks
+          # nothing — the PR would stay armed and merge. Refusing to act is fail-OPEN with a red
+          # light nobody has to obey. Disarming an actor we cannot identify may revoke a human's
+          # decision, which is visible and recoverable in one click; letting an ineligible PR merge
+          # unattended is neither.
+          disarm=no
+          note=""
           if [[ "$kind" == "bot" ]]; then
             if [[ "$who" == "github-actions" || "$who" == "app/github-actions" ]]; then
-              mine=yes
+              disarm=yes
+              note="this workflow armed it"
             fi
+          elif [[ "$kind" == "indeterminate" ]]; then
+            disarm=yes
+            note="the enabling actor could not be identified"
           fi
-          if [[ "$mine" != "yes" ]]; then
+
+          if [[ "$disarm" != "yes" ]]; then
             echo "auto-merge was armed by '${who}', not by this workflow — leaving it alone."
             echo "Someone who arms auto-merge on an ineligible PR has read the diff; that stands."
             exit 0
@@ -263,12 +271,20 @@ jobs:
           # is still right — an unknown verdict must not stay armed — but the log has to say which
           # it was, or it claims a judgement that was never made.
           reason="${VERDICT:-the gate produced no verdict, so eligibility is unknown}"
-          if gh pr merge --disable-auto "$PR_URL"; then
-            echo "auto-merge disarmed — this workflow armed it, and: ${reason}"
-            exit 0
+          if ! gh pr merge --disable-auto "$PR_URL"; then
+            echo "FAILED to disarm auto-merge armed by '${who}' — ${reason}" >&2
+            exit 1
           fi
-          echo "FAILED to disarm auto-merge armed by '${who}' — ${reason}" >&2
-          exit 1
+          echo "auto-merge disarmed — ${note}, and: ${reason}"
+
+          # Safety first, signal second: the PR is disarmed either way, but an unidentifiable
+          # actor means gh's payload shape moved and this step needs a human.
+          if [[ "$kind" == "indeterminate" ]]; then
+            echo "::warning::auto-merge was disarmed without identifying who armed it — check gh's autoMergeRequest payload shape"
+            echo "disarmed, but the enabling actor could not be identified — fix this step" >&2
+            exit 1
+          fi
+          exit 0
 
       # Prints why a PR was left alone, so "why did this not merge?" is answered in the run log
       # rather than by re-deriving the rule. Majors are the common case here. `!cancelled()` for

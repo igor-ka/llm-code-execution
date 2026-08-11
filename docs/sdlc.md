@@ -589,7 +589,14 @@ Four details in that rule are not decoration:
   major after reading it would be silently overridden. And `enabledBy` is a **nullable** Actor —
   a deleted account, an uninstalled app — so `is_bot` can be *absent* rather than false; a bare
   `// false` would read absent as "human" and leave an ineligible PR armed. The check tests
-  `is_bot | type == "boolean"` and errors out when it is not.
+  `is_bot | type == "boolean"`.
+
+  When it comes back indeterminate the step **disarms anyway**, then fails the job. Exiting
+  without disarming would not be failing closed, which is what an earlier version called it: this
+  workflow is deliberately not a required check, so a red job blocks nothing and the PR would stay
+  armed and merge. Refusing to act is fail-*open* with a red light nobody has to obey. Revoking a
+  possible human decision is visible and one click to undo; an unattended merge of an ineligible
+  PR is neither.
 
   Its tests are `scripts/tests/dependabot-auto-merge-disarm.test.sh`, ten cases, run by the
   **`SDLC docs`** job. That job is a host, not the owner: this workflow gates itself to
