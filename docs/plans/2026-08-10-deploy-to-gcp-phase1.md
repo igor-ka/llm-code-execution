@@ -273,6 +273,20 @@ variable "billing_account" {
   description = "Billing account ID in NNNNNN-NNNNNN-NNNNNN form, for the budget alarms."
 }
 
+variable "trial_start_date" {
+  type        = string
+  description = <<-EOT
+    The date the $300/90-day trial was activated, as YYYY-MM-DD. This is what makes the
+    credit-burn budget measure the TRIAL rather than a calendar month — see budget.tf. It is also
+    the input to the day-91 teardown, so it is recorded in docs/runbooks/gcp-bootstrap.md too.
+  EOT
+
+  validation {
+    condition     = can(regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$", var.trial_start_date))
+    error_message = "trial_start_date must be YYYY-MM-DD."
+  }
+}
+
 variable "github_owner_id" {
   type        = string
   description = <<-EOT
@@ -304,6 +318,7 @@ variable "github_repository" {
 project_id           = "llm-code-exec-CHANGEME"
 region               = "us-central1"
 billing_account      = "000000-000000-000000"
+trial_start_date     = "2026-08-15" # the day the $300/90-day trial was activated
 github_owner_id      = "12536242"
 github_repository_id = "1252938976"
 github_repository    = "igor-ka/llm-code-execution"
@@ -613,15 +628,20 @@ git commit -m "feat(infra): verify.sh with tested repo-specific gates"
 # Exactly the APIs Phase 1 uses. Phase 2 enables its own (run, sqladmin, servicenetworking) in its
 # own plan — an unused enabled API is not a cost, but it is an unexplained line in a review.
 locals {
+  # iamcredentials: token exchange for Workload Identity Federation.
+  # sts: the endpoint WIF trades an OIDC token at.
+  # Comments sit above the list, not as trailing comments inside it: `terraform fmt` aligns a run
+  # of trailing comments and breaks the run at any line without one, so a partly-commented list
+  # reformats on the first `fmt -check` and reddens the gate.
   phase1_apis = [
     "artifactregistry.googleapis.com",
     "billingbudgets.googleapis.com",
     "cloudbilling.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "iam.googleapis.com",
-    "iamcredentials.googleapis.com", # token exchange for Workload Identity Federation
+    "iamcredentials.googleapis.com",
     "secretmanager.googleapis.com",
-    "sts.googleapis.com",            # the STS endpoint WIF trades an OIDC token at
+    "sts.googleapis.com",
   ]
 }
 
@@ -1217,6 +1237,20 @@ resource "google_artifact_registry_repository" "app" {
     }
   }
 
+  # Without this, nothing above ever deletes a tagged image. A KEEP policy only PROTECTS artifacts
+  # from DELETE policies — it deletes nothing on its own — so keep-recent-releases paired only with
+  # delete-untagged would let every tagged image accumulate forever, which is the opposite of this
+  # block's stated purpose. This is the policy that does the work; keep-recent-releases is what
+  # stops it from eating the newest five.
+  cleanup_policies {
+    id     = "delete-old-tagged"
+    action = "DELETE"
+    condition {
+      tag_state  = "TAGGED"
+      older_than = "30d"
+    }
+  }
+
   depends_on = [google_project_service.phase1]
 }
 ```
@@ -1278,7 +1312,9 @@ resource "google_artifact_registry_repository_iam_member" "runtime_reader" {
 ```hcl
 output "registry_url" {
   description = "Docker registry host/path to tag images for. Phase 2 and 3 push here."
-  value       = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.app.repository_id}"
+  # The provider exports this already — hand-assembling "${var.region}-docker.pkg.dev/…" would be
+  # a second copy of Google's URL format, and the copy is the one that goes stale.
+  value = google_artifact_registry_repository.app.registry_uri
 }
 
 output "runtime_service_account" {
@@ -1432,10 +1468,19 @@ authentication for reasons nothing will explain.
 
 - [ ] **Step 5: Extend the bootstrap runbook** — replace section 7's forward reference with the
   real `gcloud secrets versions add` commands, the `printf` warning, and the note that
-  `terraform destroy` deletes them. **Which of the six can actually be populated now is a
-  Phase 1 scope question — see the Plan review log.** `anthropic-api-key` and the three `oidc-*`
-  values exist today; `database-url` needs Cloud SQL (D5, Phase 2) and `redis-url` needs an
-  Upstash instance no phase has yet provisioned (D8).
+  `terraform destroy` deletes them.
+
+  **Terraform creates all six containers; Phase 1 populates only the four whose values exist.**
+  `anthropic-api-key`, `oidc-issuer`, `oidc-audience` and `oidc-jwks-url` come from the repo-root
+  `.env` today. `database-url` has no value until Cloud SQL exists (D5, Phase 2) and `redis-url`
+  needs an Upstash instance no phase has provisioned yet — D8 notes Upstash carries its own
+  provider credential and sits outside `terraform destroy`, so standing it up belongs with the
+  deploy that needs it, not here. Creating the containers now is still the right split: the
+  naming and the per-secret IAM bindings *are* the Phase 1 deliverable, and a secret with zero
+  versions is legal and free.
+
+  §7 must therefore say, explicitly, which two are empty and which phase fills them — an empty
+  container that nobody flagged is exactly the kind of thing Phase 2 discovers at deploy time.
 
 - [ ] **Step 6: Commit and open the PR**
 
@@ -1624,11 +1669,22 @@ gh pr create --title "feat(infra): workload identity federation for GitHub Actio
 # credits are exhausted. A single default budget therefore stays silent through the entire period
 # it is supposed to be watching, then fires once the money is real. That is the wrong alarm.
 #
+# The OTHER default is just as load-bearing and less obvious: with neither calendar_period nor
+# custom_period set, the API applies calendar_period = MONTH. A gross budget of $300 per calendar
+# MONTH would never fire at this project's burn rate (~$8-10/mo), silently reproducing the exact
+# failure this pair exists to prevent. custom_period pins the first budget to the trial itself.
+#
 # Both notify the billing account's admins and users by email, which requires no Pub/Sub topic and
 # no monitoring notification channel. For a single-owner project that is the whole audience.
 
-# 1. Credit burn. EXCLUDE_ALL_CREDITS makes this measure GROSS spend against the $300 grant, which
-#    is the number that answers "how much of the trial is left".
+locals {
+  # tonumber because the API wants integers, not the zero-padded strings the date splits into.
+  trial_start = split("-", var.trial_start_date)
+}
+
+# 1. Credit burn. EXCLUDE_ALL_CREDITS makes this measure GROSS spend against the $300 grant, and
+#    custom_period makes it accumulate across the whole trial — together, the number that answers
+#    "how much of the trial is left".
 resource "google_billing_budget" "credit_burn" {
   billing_account = var.billing_account
   display_name    = "llm-code-execution — trial credit burn"
@@ -1636,6 +1692,17 @@ resource "google_billing_budget" "credit_burn" {
   budget_filter {
     projects               = ["projects/${data.google_project.this.number}"]
     credit_types_treatment = "EXCLUDE_ALL_CREDITS"
+
+    # No end_date: an open-ended custom period accumulates from activation onward, so the budget
+    # keeps answering the question until the project is deleted. Mutually exclusive with
+    # calendar_period, which is the point.
+    custom_period {
+      start_date {
+        year  = tonumber(local.trial_start[0])
+        month = tonumber(local.trial_start[1])
+        day   = tonumber(local.trial_start[2])
+      }
+    }
   }
 
   amount {
@@ -1662,6 +1729,10 @@ resource "google_billing_budget" "credit_burn" {
 # 2. Real money. Credits INCLUDED, so this stays at zero for as long as the credits cover
 #    everything and fires the moment they do not — the day-91 tripwire, and the alarm that fires
 #    if a resource outlives a teardown that was believed complete.
+#
+#    This one KEEPS the default monthly period deliberately: "did I pay anything this month" is a
+#    monthly question, and a monthly reset means it can fire again next month rather than staying
+#    latched after the first dollar.
 resource "google_billing_budget" "real_spend" {
   billing_account = var.billing_account
   display_name    = "llm-code-execution — actual charges"
@@ -1698,10 +1769,13 @@ authenticated principal holds `roles/billing.costsManager` on the billing accoun
 
 ```bash
 gcloud billing budgets list --billing-account=<ACCOUNT_ID> \
-  --format="table(displayName, amount.specifiedAmount.units, budgetFilter.creditTypesTreatment)"
+  --format="table(displayName, amount.specifiedAmount.units, budgetFilter.creditTypesTreatment, budgetFilter.customPeriod.startDate, budgetFilter.calendarPeriod)"
 ```
 
-Expected: two rows, one `EXCLUDE_ALL_CREDITS` at 300 and one default at 1.
+Expected: two rows. The credit-burn row shows `EXCLUDE_ALL_CREDITS`, `300`, the trial start date,
+and an **empty** `calendarPeriod`. The actual-charges row shows `1` and `MONTH`. A `MONTH` on the
+first row means `custom_period` did not take and the alarm is back to being silent for the whole
+trial — the failure this task exists to avoid.
 
 - [ ] **Step 4: Commit**
 
@@ -1723,11 +1797,18 @@ git commit -m "feat(infra): budget alarms for credit burn and real spend"
 2. **What this destroys** — everything, including every secret payload and the entire chat
    history database. Say it in bold at the top; there are no backups by design (spec Boundaries).
 3. **The destroy** — `cd infra && terraform destroy`, then read the plan before confirming.
-4. **The bucket Terraform does not own** — `gcloud storage rm --recursive gs://<project>-tfstate`,
-   with the explanation from P1-D2 and the note that this deletes the state itself, so it is
-   genuinely last.
+4. **The bucket Terraform does not own** —
+   `gcloud storage rm --recursive --all-versions gs://<project>-tfstate`, with the explanation
+   from P1-D2 and the note that this deletes the state itself, so it is genuinely last.
+   `--all-versions` is required, not decorative: `bootstrap.sh` enables object versioning, and
+   without it the noncurrent versions survive and the bucket delete fails.
 5. **The belt-and-braces check** — `gcloud projects delete <project-id>`, which is the only way to
    be certain nothing is left billing. Note that it is reversible for 30 days.
+   **This is also what disposes of the workload identity pool.** Pools soft-delete and reserve
+   their ID for ~30 days, so a `terraform destroy` alone leaves one behind — free, but present,
+   and it will block re-creating a pool with the same ID inside that window. Task 16's rebuild
+   rehearsal deliberately spares the pool for the same reason; say so here so the next reader
+   does not mistake it for something the destroy missed.
 6. **Proving zero** — how to read the billing report a day later, and that the `actual charges`
    budget from Task 14 is the standing alarm if something was missed.
 7. **Rebuilding** — a one-line pointer back to the bootstrap runbook.
@@ -1744,6 +1825,23 @@ git commit -m "docs(runbooks): the day-91 teardown"
 This is the task most likely to be claimed rather than performed. The spec says so in as many
 words. Do it, and paste the real output into the PR body.
 
+> **Why this rehearsal deliberately spares the WIF pool.** Workload identity pools are
+> **soft-deleted**: the ID is reserved for ~30 days and cannot be reused. A full
+> `terraform destroy` followed by `terraform apply` would therefore 409 on
+> `google_iam_workload_identity_pool.github` and the rebuild would be red for a reason that has
+> nothing to do with whether the configuration reproduces.
+>
+> This does not weaken S7, and the wording matters: S7 asks that *"`terraform apply` from an empty
+> project reproduces the environment"* — and an empty project has no soft-deleted pool, so a
+> genuine from-scratch rebuild is unaffected. What cannot be rehearsed is destroy-and-rebuild
+> **into the same project within 30 days**. The real day-91 teardown is unaffected too: it ends in
+> `gcloud projects delete`, which takes the pool with it.
+>
+> Rejected: adding a `random_id` suffix to the pool ID so a rebuild takes a fresh one. That would
+> make `terraform output workload_identity_provider` change value on every rebuild — and Phase 3
+> pins that string in a workflow file. Trading a real property for a rehearsal is the wrong way
+> round.
+
 - [ ] **Step 1: Record what exists**
 
 ```bash
@@ -1752,14 +1850,25 @@ terraform state list | sort > /tmp/before.txt
 cat /tmp/before.txt
 ```
 
-- [ ] **Step 2: Destroy**
+- [ ] **Step 2: Destroy everything except the federation**
+
+`-target` is inclusive, so this names the roots to destroy and Terraform takes their dependents
+with them — which correctly includes the two WIF *bindings* (`ci_writer`, `ci_act_as_runtime`),
+since those reference the registry and the service account. Bindings recreate cleanly; only the
+pool and provider have the soft-delete problem.
 
 ```bash
-terraform destroy
+terraform destroy \
+  -target=google_artifact_registry_repository.app \
+  -target=google_service_account.runtime \
+  -target=google_secret_manager_secret.app \
+  -target=google_billing_budget.credit_burn \
+  -target=google_billing_budget.real_spend
 ```
 
-Expected: every resource destroyed, no errors. The APIs stay enabled by design
-(`disable_on_destroy = false`, Task 3).
+Expected: those resources plus their dependent IAM members destroyed, no errors. The APIs stay
+enabled by design (`disable_on_destroy = false`, Task 3), and the pool, provider and
+`ci_run_admin` binding are untouched.
 
 - [ ] **Step 3: Confirm nothing billable survived**
 
@@ -1768,12 +1877,14 @@ gcloud artifacts repositories list --project=<project-id>
 gcloud secrets list --project=<project-id>
 gcloud iam service-accounts list --project=<project-id>
 gcloud billing budgets list --billing-account=<ACCOUNT_ID>
+gcloud iam workload-identity-pools list --location=global --project=<project-id>
 ```
 
-Expected: the first four are empty or list only Google-managed defaults. The state bucket still
-exists — that is P1-D2, and the teardown runbook removes it separately.
+Expected: the first four are empty or list only Google-managed defaults. The **fifth still lists
+`github`** — that is the point of Step 2's scoping, not a leak; a pool is free. The state bucket
+also still exists, per P1-D2, and the teardown runbook removes it separately.
 
-- [ ] **Step 4: Rebuild from nothing**
+- [ ] **Step 4: Rebuild**
 
 ```bash
 terraform apply
@@ -1785,7 +1896,8 @@ Expected: `diff` prints **nothing**. A non-empty diff means the configuration is
 self-reproducing and S7 is not met — investigate before proceeding rather than explaining it away.
 
 - [ ] **Step 5: Re-populate the secrets** — the destroy removed the payloads with their
-  containers. Re-run the population step from `docs/runbooks/gcp-bootstrap.md` and confirm:
+  containers. Re-run the population step from `docs/runbooks/gcp-bootstrap.md` for the four
+  Phase 1 populates (`database-url` and `redis-url` stay empty until Phase 2) and confirm:
 
 ```bash
 gcloud secrets versions list anthropic-api-key --project=<project-id>
@@ -1900,9 +2012,33 @@ and the jq projection, and the WIF attribute condition (attacked from six angles
 repo rename, a tag named `main`, topic branches, fork PRs, default audience — and it fails closed
 on all of them).
 
-**Escalated to the user — not applied.** Four judgment findings, listed in the handover, on: the
-soft-delete of workload identity pools defeating Task 16's destroy/rebuild proof; the credit-burn
-budget defaulting to a *monthly* period and therefore never firing; the Artifact Registry cleanup
-policy never deleting a tagged image; and which of the six secrets Phase 1 can populate when
-`database-url` and `redis-url` have no value until Phase 2. **Implementation does not start until
-these are decided.**
+**Escalated to the user, and decided 2026-08-10.** Four judgment findings; all four resolved as
+recommended, and folded in:
+
+- **WIF soft-delete vs. the S7 proof** → Task 16 now destroys by `-target`, sparing the pool and
+  provider, and states why in the task and in the teardown runbook. Rejected: a `random_id` suffix
+  on the pool ID, which would change `terraform output workload_identity_provider` on every
+  rebuild — a string Phase 3 pins in a workflow. S7 itself is unaffected: it asks for a rebuild
+  from an *empty project*, which has no soft-deleted pool. Step 3 gained the
+  `gcloud iam workload-identity-pools list` check.
+- **The credit-burn budget would never fire** → `budget_filter.custom_period` pinned to a new
+  `var.trial_start_date`, replacing the API's `calendar_period = MONTH` default. The second budget
+  keeps the monthly period deliberately, so it can re-fire rather than latch. Task 14 Step 3 now
+  asserts an empty `calendarPeriod` on the first budget, because a silent revert to `MONTH` is the
+  whole failure mode.
+- **The registry cleanup policy never deleted a tagged image** → added a `delete-old-tagged`
+  DELETE policy at 30d, which is what makes the KEEP-5 policy do any work.
+- **Secret population scope** → all six containers in Terraform; Phase 1 populates the four whose
+  values exist, and §7 of the bootstrap runbook must name `database-url` and `redis-url` as
+  Phase 2's. Upstash is explicitly not pulled into Phase 1.
+
+Advisory items also applied, being corrections to this plan's own text: `apis.tf` comments moved
+above the list (trailing-comment alignment would have reddened the first `fmt -check`),
+`registry_url` now reads the provider's exported `registry_uri`, and the teardown's
+`gcloud storage rm` gained `--all-versions` for the versioned bucket.
+
+**Advisory not applied:** an ADR recording P1-D2 (state bucket outside Terraform) and P1-D4 (no
+deployer service account — the mechanism behind S9). Both are durable and would be expensive to
+reverse, so the repo's own rule says they deserve one. Phase 0's precedent is that an ADR is its
+own child issue and its own PR (ADR-0004 was #88), so adding it here would make Phase 1 seven PRs
+rather than six. Left as a proposal rather than folded in silently.
