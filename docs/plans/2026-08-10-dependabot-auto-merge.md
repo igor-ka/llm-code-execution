@@ -1061,9 +1061,9 @@ step's "not armed, nothing to disarm" path, which had been failing incorrectly. 
     > **Correction, same day.** When that paragraph was first written the harness lived in a
     > scratch directory and was never committed — so "the test was strengthened" described
     > something no reader could run, which the review of #128 caught and was right to call out.
-    > It is now `scripts/tests/dependabot-auto-merge-disarm.test.sh`, ten cases, and it was
-    > mutation-checked: reverting the `is_bot | type` guard makes two cases fail, and restoring it
-    > makes them pass.
+    > It is now `scripts/tests/dependabot-auto-merge-disarm.test.sh`, ten cases, run by the
+    > `SDLC docs` job, and it was mutation-checked: reverting the `is_bot | type` guard makes two
+    > cases fail, and restoring it makes them pass.
 
 ### #94's acceptance criteria — final status
 
@@ -1110,6 +1110,15 @@ parameter expansions are unquoted-glob-free. `code-review` found four real probl
     comment now says that, because someone auditing the allow-list would otherwise look for
     evidence that does not exist. (The same wrong claim was made to the user in conversation and
     corrected there.)
+
+Copilot, reviewing the same PR, independently raised the missing-test point and went one further:
+*run it from CI*. Initially the test was committed as a documented pre-push command, on the
+grounds that the auto-merge workflow cannot host it. That reasoning was right about the owner and
+wrong about the conclusion — a test nobody runs automatically is a procedure, not a guarantee, and
+this repository's whole premise is the difference between the two. It now runs as a step in the
+**`SDLC docs`** job, which already has a checkout and a read-only token, runs on every pull
+request, and exists to check that a process change is self-consistent. The test reads files only
+and needs no token.
 
 Also applied: `**is_bot**` inside a code span rendered literally in `docs/sdlc.md`; the
 `GITHUB_TOKEN` claim was narrowed to `push`/`pull_request` since `workflow_dispatch` and

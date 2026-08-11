@@ -7,13 +7,12 @@
 # into that job. So this test EXTRACTS the script from the YAML rather than importing it. The copy
 # under test is therefore always the one that ships — there is no second copy to drift.
 #
-# It is NOT wired into CI, and that is not an oversight. The workflow's own job-level `if:`
-# restricts it to `dependabot/npm_and_yarn/*` branches, so a PR that edits this workflow never
-# runs it. Run this by hand before pushing a change to that file:
+# WHERE IT RUNS. The `SDLC docs` job, which is a host rather than the owner: the auto-merge
+# workflow gates itself to `dependabot/npm_and_yarn/*` branches, so a PR that edits it never
+# executes it, and this test would otherwise have nowhere to run. `SDLC docs` already has a
+# checkout and a read-only token and runs on every pull request. Locally:
 #
 #     ./scripts/tests/dependabot-auto-merge-disarm.test.sh
-#
-# It is documented as a pre-push command in docs/sdlc.md alongside the two that CI does run.
 #
 # WHY A STUB `gh` THAT RUNS REAL JQ. The stub does not return a hand-written answer; it runs the
 # actual `--jq` expression the script passes, over payloads captured from real `gh` output. That

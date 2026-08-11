@@ -319,11 +319,10 @@ Details that are easy to get wrong:
   CI runs: `./scripts/tests/check-pr-shape.test.sh` and
   `./scripts/tests/check-sdlc-sync.test.sh`.
 
-  There is a third suite in that directory that **CI never runs**:
-  `./scripts/tests/dependabot-auto-merge-disarm.test.sh`. It is not an exception to the mirroring
-  rule so much as the reverse of one — a local test with no CI counterpart, because the workflow
-  it covers is gated to `dependabot/npm_and_yarn/*` branches and so never executes on a PR that
-  edits it. Run it by hand when touching `.github/workflows/dependabot-auto-merge.yml`; see
+  A third suite, `./scripts/tests/dependabot-auto-merge-disarm.test.sh`, is run by `SDLC docs`
+  even though it belongs to a different workflow. That workflow gates itself to
+  `dependabot/npm_and_yarn/*` branches, so a PR editing it never executes it, and the test would
+  have no host otherwise. Same file locally and in CI, like the other two. See
   [Auto-merging dependency bumps](#auto-merging-dependency-bumps).
 - **Dependabot PRs are exempt from `SDLC docs`, and need no exemption from `PR shape`.** The
   first is because `github-actions` bumps touch watched workflow files; the second is because
@@ -592,13 +591,17 @@ Four details in that rule are not decoration:
   `// false` would read absent as "human" and leave an ineligible PR armed. The check tests
   `is_bot | type == "boolean"` and errors out when it is not.
 
-  Its tests are `scripts/tests/dependabot-auto-merge-disarm.test.sh`. Unlike the other two suites
-  in that directory, **CI does not run this one** — the workflow's own `if:` restricts it to
-  `dependabot/npm_and_yarn/*` branches, so a PR editing the workflow never executes it. Run it by
-  hand before pushing a change to that file. It extracts the script from the YAML rather than
-  keeping a copy, and stubs `gh` in a way that still runs the real `--jq` expression over payloads
-  captured from real `gh` output — a hand-written stub can only encode what its author already
-  believes, which is exactly how the `github-actions[bot]` constant survived review.
+  Its tests are `scripts/tests/dependabot-auto-merge-disarm.test.sh`, ten cases, run by the
+  **`SDLC docs`** job. That job is a host, not the owner: this workflow gates itself to
+  `dependabot/npm_and_yarn/*` branches, so a PR that edits it never executes it, and the logic
+  would otherwise ship with no automated coverage — which is how a wrong actor constant survived
+  two reviews. `SDLC docs` already has a checkout and a read-only token, runs on every PR, and
+  exists to check that a process change is self-consistent.
+
+  The test extracts the script from the YAML rather than keeping a copy, so the two cannot drift,
+  and stubs `gh` in a way that still runs the real `--jq` expression over payloads captured from
+  real `gh` output. A hand-written stub can only encode what its author already believes, which is
+  exactly how `github-actions[bot]` got past review.
 
 **An auto-merge does not re-run `CI` on `main`.** A `push` or `pull_request` event triggered by
 `GITHUB_TOKEN` does not start a new workflow run (`workflow_dispatch` and `repository_dispatch`

@@ -46,6 +46,14 @@ jobs:
           persist-credentials: false
       - name: Self-test
         run: ./scripts/tests/check-sdlc-sync.test.sh
+      # A lodger, and deliberately so. `dependabot-auto-merge.yml` gates itself to
+      # `dependabot/npm_and_yarn/*` branches, so a PR that edits that workflow never executes it —
+      # its disarm logic would otherwise ship with no automated coverage at all, which is how a
+      # wrong actor constant survived two reviews. This job is the right host: it already holds a
+      # read-only token and a checkout, it runs on every pull request, and "a process change is
+      # self-consistent" is exactly what it is for. The test reads only files; it needs no token.
+      - name: Test the Dependabot auto-merge disarm logic
+        run: ./scripts/tests/dependabot-auto-merge-disarm.test.sh
       - name: Check docs/sdlc.md is in sync
         env:
           # Fallback only — the script prefers the merge ref's first parent, which is exact.
