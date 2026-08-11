@@ -318,6 +318,13 @@ Details that are easy to get wrong:
   PR-title change. Both jobs' *unit tests* do have a local equivalent, and it is the same file
   CI runs: `./scripts/tests/check-pr-shape.test.sh` and
   `./scripts/tests/check-sdlc-sync.test.sh`.
+
+  There is a third suite in that directory that **CI never runs**:
+  `./scripts/tests/dependabot-auto-merge-disarm.test.sh`. It is not an exception to the mirroring
+  rule so much as the reverse of one — a local test with no CI counterpart, because the workflow
+  it covers is gated to `dependabot/npm_and_yarn/*` branches and so never executes on a PR that
+  edits it. Run it by hand when touching `.github/workflows/dependabot-auto-merge.yml`; see
+  [Auto-merging dependency bumps](#auto-merging-dependency-bumps).
 - **Dependabot PRs are exempt from `SDLC docs`, and need no exemption from `PR shape`.** The
   first is because `github-actions` bumps touch watched workflow files; the second is because
   bot PRs close no issue and the rule is *at most* one. If someone proposes an actor exemption
@@ -571,16 +578,32 @@ Four details in that rule are not decoration:
   to carry a major would otherwise stay armed and merge that major unattended, so the workflow
   calls `gh pr merge --disable-auto` on an already-armed PR that no longer qualifies.
 
-  It decides whose arming it is from `autoMergeRequest.enabledBy.**is_bot**`, never from the
-  login string. `allow_auto_merge` is repository-wide, so a human can read a major and arm it by
-  hand, and silently revoking that would be its own defect. The first version compared the login
-  against `github-actions[bot]` and never matched — `gh` renders a Bot actor as
-  `app/github-actions`, while the underlying GraphQL `Bot.login` is bare `github-actions`. That
-  turned every bot-armed PR into "a human did this, leave it alone", reinstating the bug the step
-  exists to prevent. Only a live run surfaced it. Key on the boolean.
+  It decides whose arming it is from **both** `autoMergeRequest.enabledBy.is_bot` and the login,
+  and **fails closed** when it cannot tell. `allow_auto_merge` is repository-wide, so a human can
+  read a major and arm it by hand, and silently revoking that would be its own defect.
 
-**An auto-merge does not re-run `CI` on `main`.** Events triggered by `GITHUB_TOKEN` do not start
-new workflow runs, and auto-merge armed by this workflow merges as `app/github-actions`. Confirmed
+  Each half of that rule cost a defect to learn. Keying on the **login alone** failed: the first
+  version compared it against `github-actions[bot]` and never matched, because `gh` renders a Bot
+  actor as `app/github-actions` while the underlying GraphQL `Bot.login` is bare `github-actions`
+  — so every bot-armed PR read as "a human did this, leave it alone". Keying on **`is_bot` alone**
+  fails the other way: it matches *any* app, so a maintainer who runs `@dependabot merge` on a
+  major after reading it would be silently overridden. And `enabledBy` is a **nullable** Actor —
+  a deleted account, an uninstalled app — so `is_bot` can be *absent* rather than false; a bare
+  `// false` would read absent as "human" and leave an ineligible PR armed. The check tests
+  `is_bot | type == "boolean"` and errors out when it is not.
+
+  Its tests are `scripts/tests/dependabot-auto-merge-disarm.test.sh`. Unlike the other two suites
+  in that directory, **CI does not run this one** — the workflow's own `if:` restricts it to
+  `dependabot/npm_and_yarn/*` branches, so a PR editing the workflow never executes it. Run it by
+  hand before pushing a change to that file. It extracts the script from the YAML rather than
+  keeping a copy, and stubs `gh` in a way that still runs the real `--jq` expression over payloads
+  captured from real `gh` output — a hand-written stub can only encode what its author already
+  believes, which is exactly how the `github-actions[bot]` constant survived review.
+
+**An auto-merge does not re-run `CI` on `main`.** A `push` or `pull_request` event triggered by
+`GITHUB_TOKEN` does not start a new workflow run (`workflow_dispatch` and `repository_dispatch`
+are the documented exceptions, and neither applies here), and auto-merge armed by this workflow
+merges as `app/github-actions`. Confirmed
 on the first unattended merge: `8211ee8` (PR #117) has no `push`-side CI run, while every
 human-merged commit around it does. That is harmless here — `strict_required_status_checks_policy`
 means the PR's own checks already ran against exactly this base — but it does mean the `main`

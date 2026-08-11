@@ -1058,6 +1058,13 @@ step's "not armed, nothing to disarm" path, which had been failing incorrectly. 
     can only encode what the author believes; a captured payload encodes what GitHub actually
     sends. That distinction is the whole lesson of this defect.
 
+    > **Correction, same day.** When that paragraph was first written the harness lived in a
+    > scratch directory and was never committed — so "the test was strengthened" described
+    > something no reader could run, which the review of #128 caught and was right to call out.
+    > It is now `scripts/tests/dependabot-auto-merge-disarm.test.sh`, ten cases, and it was
+    > mutation-checked: reverting the `is_bot | type` guard makes two cases fail, and restoring it
+    > makes them pass.
+
 ### #94's acceptance criteria — final status
 
 | Criterion | Status |
@@ -1076,6 +1083,36 @@ rule that `GITHUB_TOKEN`-triggered events do not start new workflow runs. Record
 `docs/sdlc.md` rather than left as folklore.
 
 **Task 7 Step 7b (the eligible → ineligible disarm transition) has still not been exercised
-live.** No open PR has made that transition. The path is covered by the stub test against a real
-captured payload, and its failure mode is loud, but it has not run in production — stated here as
-a known gap rather than claimed as verified.
+live.** No open PR has made that transition. The path is covered by
+`scripts/tests/dependabot-auto-merge-disarm.test.sh` and its failure mode is loud, but it has not
+run in production — stated here as a known gap rather than claimed as verified.
+
+### Review of #128 — four more, and one that mattered
+
+`security-review` found nothing: the actor check is not spoofable without write access, and the
+parameter expansions are unquoted-glob-free. `code-review` found four real problems.
+
+14. **`is_bot // false` could not distinguish `false` from absent.** `enabledBy` is a nullable
+    Actor in GraphQL (deleted account, uninstalled app), so `is_bot` can be missing entirely — and
+    a bare `// false` reads that as "a human armed it" and leaves an ineligible PR armed. This is
+    reachable today, not only after a `gh` upgrade. Now `is_bot | type` must be `"boolean"`, and
+    anything else fails the step closed.
+15. **`is_bot` alone matches *any* app.** A maintainer running `@dependabot merge` on a major
+    after reading it would have been silently overridden on the next rebase — the same
+    revoke-a-considered-decision defect the step's own comment warns about, relocated. The check
+    now requires `is_bot` **and** a login of `github-actions` / `app/github-actions`.
+16. **The gate-failure branch disarmed while claiming a judgement it had not made.** An empty
+    verdict means `gate` failed, not that the PR was found ineligible. Disarming is still correct
+    — an unknown verdict must not stay armed — but the log said "the PR no longer qualifies". It
+    now reports which of the two it was.
+17. **A workflow comment claimed #98 "produced no run at all".** False: a job-level `if:`
+    suppresses the *jobs*, not the run. Run 31434426736 exists with both jobs `skipped`. The
+    comment now says that, because someone auditing the allow-list would otherwise look for
+    evidence that does not exist. (The same wrong claim was made to the user in conversation and
+    corrected there.)
+
+Also applied: `**is_bot**` inside a code span rendered literally in `docs/sdlc.md`; the
+`GITHUB_TOKEN` claim was narrowed to `push`/`pull_request` since `workflow_dispatch` and
+`repository_dispatch` are documented exceptions; the two-field unpack became `read -r kind who`;
+and the third near-verbatim copy of the bug post-mortem was cut from the workflow comment, which
+now states the decision and points at `docs/sdlc.md`.
