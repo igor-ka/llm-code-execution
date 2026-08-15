@@ -23,14 +23,23 @@ if gcloud storage buckets describe "gs://${bucket}" >/dev/null 2>&1; then
   echo "==> gs://${bucket} already exists"
 else
   echo "==> creating gs://${bucket}"
-  # --uniform-bucket-level-access: ACLs are legacy and make "who can read this" unanswerable.
-  # --public-access-prevention: state names every resource in the project. Never public.
   gcloud storage buckets create "gs://${bucket}" \
     --project "$project" \
-    --location "$region" \
-    --uniform-bucket-level-access \
-    --public-access-prevention
+    --location "$region"
 fi
+
+# Applied on EVERY run, not only at creation. "Idempotent" has to mean the bucket converges on the
+# promised posture, not merely that the script exits 0: a bucket that already exists — made by
+# hand, by an older version of this script, or by a teammate — would otherwise keep ACLs and
+# public access exactly as they were while this prints success and Terraform writes state naming
+# every resource in the project into it.
+#
+# --uniform-bucket-level-access: ACLs are legacy and make "who can read this" unanswerable.
+# --public-access-prevention: state names every resource in the project. Never public.
+echo "==> enforcing uniform bucket-level access and public access prevention"
+gcloud storage buckets update "gs://${bucket}" \
+  --uniform-bucket-level-access \
+  --public-access-prevention
 
 # Versioning is the undo button for a corrupted or truncated state file, which is the one failure
 # in Terraform with no other recovery path.
