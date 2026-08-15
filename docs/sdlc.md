@@ -520,7 +520,9 @@ daemon-wide, and `backend/verify.sh`'s `docker` target *builds* a tag and then *
 worktrees verifying at once a fixed `…:verify` tag lets one tree's assertions execute the other
 tree's image — a pass or fail belonging to a different branch. `backend/verify.sh` and
 `frontend/verify.sh` therefore derive their throwaway tags from the checkout's directory name
-(`verify-<dirname>`), which is unique per worktree and deterministic in CI. `infra/verify.sh`
+(`verify-<dirname truncated>-<cksum of the full path>` — the basename alone is neither unique, since
+a worktree may share it with the main checkout, nor bounded against Docker's 128-character tag
+limit), which is unique per worktree and deterministic in CI. `infra/verify.sh`
 needs no equivalent: it builds no image.
 
 **The enforcement:** the `SDLC docs` job — in its own workflow, `.github/workflows/sdlc-docs.yml`

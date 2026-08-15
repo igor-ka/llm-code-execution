@@ -150,7 +150,11 @@ WT_CREATED=""
 
 on_exit() {
   local code=$?
-  [[ -n "$LOCK_DIR" ]] && rmdir "$LOCK_DIR" 2>/dev/null
+  # `|| true` is load-bearing: `rmdir` sits after the final `&&`, so it is NOT exempt from
+  # errexit, and it fails whenever the lock is already gone — which this script itself invites by
+  # advertising `rmdir $LOCK_DIR` as the stale-lock remedy. Without it a failing rmdir kills the
+  # handler before the guidance below prints, and turns a successful run into exit 1.
+  [[ -n "$LOCK_DIR" ]] && { rmdir "$LOCK_DIR" 2>/dev/null || true; }
   [[ $code -eq 0 || -z "$WT_CREATED" ]] && return $code
   {
     echo
@@ -205,15 +209,20 @@ main() {
   fi
 
   # Reading the claims and writing this worktree's own is check-then-act, and two invocations at
-  # once — not far-fetched when the whole point is running several sessions in parallel — can both
-  # see slot 1 free and both take it, colliding on every port and the sandbox image tag. `mkdir`
-  # is atomic on every filesystem that matters, so it is the mutex. Held across the git work too,
-  # because the claim is not durable until `.env` exists.
+  # once — the expected case now that CLAUDE.md asks for a worktree per child issue — can both see
+  # slot 1 free and both take it, colliding on every port and the sandbox image tag. `mkdir` is
+  # atomic on every filesystem that matters, so it is the mutex.
+  #
+  # It is held only until the `.env` write, NOT for the whole run: that file is what `used_slots`
+  # reads, so the claim is durable the moment it lands, and everything after it — `npm ci`, minutes
+  # of it — is per-tree work needing no mutual exclusion. Holding the lock that long would make a
+  # second session fail outright for the duration, which is the opposite of the point.
   LOCK_DIR="$ROOT/.claude/worktrees/.worktree-new.lock"
   mkdir -p "$ROOT/.claude/worktrees"
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    echo "✗ another worktree-new.sh is running (lock: $LOCK_DIR)." >&2
-    echo "  If that is stale — no other run in flight — remove it: rmdir $LOCK_DIR" >&2
+    echo "✗ another worktree-new.sh is claiming a slot (lock: $LOCK_DIR)." >&2
+    echo "  It is held for seconds, not for the install — try again in a moment." >&2
+    echo "  If it is stale — no other run in flight — remove it: rmdir $LOCK_DIR" >&2
     exit 1
   fi
   # ONE exit handler for both jobs — a second `trap … EXIT` would silently replace this one.
@@ -272,12 +281,20 @@ main() {
     ln -sfn "../../../../.claude/settings.local.json" "$dir/.claude/settings.local.json"
 
   stack_env "$slot" "$project" >"$dir/.env"
+  # The claim is durable now — used_slots reads this file — so stop making other sessions wait
+  # through the install. Clearing LOCK_DIR also stops on_exit trying to remove it twice.
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+  LOCK_DIR=""
 
   local auth0=""
   if [[ -f "$ROOT/frontend/.env.local" ]]; then
+    # `=.+` and not just the prefix: frontend/.env.example ships VITE_AUTH0_DOMAIN=,
+    # VITE_AUTH0_CLIENT_ID= and VITE_AUTH0_AUDIENCE= with EMPTY values, so a checkout that copied
+    # the example without filling it in matches three lines while configuring nothing — and the
+    # blocker below, whose whole purpose is catching that, would never fire.
     # `|| true`: grep exits 1 on no match, and under `set -e` that would abort here — AFTER the
     # worktree and branch exist, leaving a half-built tree behind.
-    auth0="$(grep -E '^VITE_AUTH0_' "$ROOT/frontend/.env.local" || true)"
+    auth0="$(grep -E '^VITE_AUTH0_[A-Z_]+=.+' "$ROOT/frontend/.env.local" || true)"
   fi
   if [[ -z "$auth0" ]]; then
     blockers+=("no VITE_AUTH0_* values found in the main checkout's frontend/.env.local, so the SPA
@@ -290,19 +307,28 @@ main() {
   (cd "$dir/backend" && npm ci)
   (cd "$dir/frontend" && npm ci)
 
+  local item
+  # A blocker means the tree exists but cannot run, so DO NOT print ✓ and do not exit 0. The
+  # caller is now often a session following CLAUDE.md's worktree rule rather than a human reading
+  # stderr, and a success status would send it straight into a dead worktree.
+  if ((${#blockers[@]} > 0)); then
+    {
+      echo
+      echo "✗ worktree created at $dir, but it cannot run yet:"
+      for item in "${blockers[@]}"; do echo "  - $item"; done
+      echo
+      echo "  Fix the above and it is ready — nothing else to redo."
+    } >&2
+    # The worktree and its dependencies are fine; only configuration is missing, so suppress
+    # on_exit's "retry the install" advice, which would be the wrong instruction.
+    WT_CREATED=""
+    return 1
+  fi
+
   echo
   echo "✓ worktree ready: $dir"
   echo "  cd $dir && docker compose up --build"
   echo "  then open http://localhost:$(port_for "$BASE_FRONTEND" "$slot")"
-
-  local item
-  if ((${#blockers[@]} > 0)); then
-    {
-      echo
-      echo "⚠ but it will NOT run yet:"
-      for item in "${blockers[@]}"; do echo "  - $item"; done
-    } >&2
-  fi
   if ((${#notes[@]} > 0)); then
     {
       echo

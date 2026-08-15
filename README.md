@@ -175,13 +175,23 @@ To remove one: `docker compose down` inside it, then `git worktree remove <path>
 `git branch -D <branch>` from the main checkout. That frees the slot for the next
 `worktree-new.sh`.
 
+Its `verify.sh` images outlive it, though — the tags are keyed on a path that no longer exists, so
+nothing will ever reuse or replace them. Reclaim the space when you remove a worktree:
+
+```bash
+docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -- "-<the removed dirname>-" |
+  xargs -r docker image rm
+```
+
 The backend warns at startup if a worktree's `.env` claims one slot but points a port, URL or
 sandbox image tag at another. Those are the mistakes with no other symptom: one writes this
 worktree's chat history into slot 0's Postgres, the other executes slot 0's sandbox image.
 
-Both `verify.sh` scripts tag their throwaway images `verify-<checkout-dirname>` for the same
-reason image tags are per-slot: the backend one builds a tag and then runs it, so a fixed tag
-would let two worktrees verifying at once execute each other's images.
+Both `verify.sh` scripts tag their throwaway images `verify-<dirname>-<checksum of the full path>`
+for the same reason image tags are per-slot: the backend one builds a tag and then runs it, so a
+fixed tag would let two worktrees verifying at once execute each other's images. (The bare
+directory name would not do — a worktree can share it with the main checkout, and Docker caps a
+tag at 128 characters.)
 
 ## Run locally without Compose
 
