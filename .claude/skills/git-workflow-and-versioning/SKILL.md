@@ -151,29 +151,52 @@ refactor/<short-description>  → refactor/auth-module
 
 ## Working with Worktrees
 
-For parallel AI agent work, use git worktrees to run multiple branches simultaneously:
+**In this repository, always create a worktree with `scripts/worktree-new.sh` — never with a bare
+`git worktree add`, and never with the built-in worktree tool.** Both of those produce a directory
+that cannot run anything:
+
+- no stack slot, so its ports collide with the main checkout's on all four services;
+- no `node_modules` on either side;
+- none of the gitignored files a worktree does not inherit — `.env.shared` (the API key),
+  `frontend/.env.local` (Auth0), `.claude/settings.local.json` (the permission allowlist, whose
+  absence makes a fresh session re-prompt for everything already granted).
 
 ```bash
-# Create a worktree for a feature branch
-git worktree add ../project-feature-a feature/task-creation
-git worktree add ../project-feature-b feature/user-settings
+# From the MAIN checkout. Branch defaults to feat/<slug>.
+scripts/worktree-new.sh session-search
+scripts/worktree-new.sh migrate-lock fix/migration-advisory-lock
 
-# Each worktree is a separate directory with its own branch
-# Agents can work in parallel without interfering
-ls ../
-  project/              ← main branch
-  project-feature-a/    ← task-creation branch
-  project-feature-b/    ← user-settings branch
+cd .claude/worktrees/session-search
+docker compose up --build        # this worktree's own stack, on its own ports
+```
 
-# When done, merge and clean up
-git worktree remove ../project-feature-a
+The script allocates the lowest free slot, branches off a freshly fetched `origin/main`, supplies
+those files, and installs both sides. It refuses to run from inside a worktree, and it holds a
+lock so two concurrent runs cannot claim the same slot.
+
+**When to use one:** every child issue of a plan — the PR-sized slice. Not for answering a
+question, a one-line doc fix, or anything that will not become its own PR.
+
+**The pool is four slots** (the main checkout plus three), bounded by the frontend origins
+registered in the Auth0 SPA, whose allowed-origins list is exact-match. `scripts/worktree-new.sh`
+fails with a clear message when they are all taken.
+
+When the PR merges, free the slot:
+
+```bash
+cd .claude/worktrees/session-search && docker compose down
+cd -                                              # back to the main checkout
+git worktree remove .claude/worktrees/session-search
+git branch -D feat/session-search
 ```
 
 Benefits:
-- Multiple agents can work on different features simultaneously
-- No branch switching needed (each directory has its own branch)
+- Parallel sessions never fight over one checkout's HEAD — the failure this repo actually hit,
+  where a background review checked out another branch mid-task
+- No branch switching (each directory has its own branch, and its `.env` does not travel with it)
 - If one experiment fails, delete the worktree — nothing is lost
-- Changes are isolated until explicitly merged
+
+See *Parallel worktrees* in `README.md` for the slot table and what each slot publishes.
 
 ## The Save Point Pattern
 

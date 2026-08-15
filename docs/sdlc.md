@@ -187,6 +187,14 @@ human**, even when both buckets come back empty.
 **Skills:** `incremental-implementation`, `test-driven-development`, `security-and-hardening`,
 `debugging-and-error-recovery`, `git-workflow-and-versioning`
 
+**A child issue starts in its own worktree**, created with `scripts/worktree-new.sh <slug>
+[branch]` from the main checkout — never a bare `git worktree add`, which produces a tree with no
+stack slot, no dependencies and none of the gitignored files, so nothing in it runs. The unit is
+the PR-sized slice; a question or a one-line doc fix stays in the main checkout. This is not
+ceremony: several sessions share this checkout, and one switching branches mid-task moves HEAD
+under another. Each worktree also gets its own application stack, which is what makes two slices
+runnable at once — see *Parallel worktrees* in `README.md`.
+
 The inner loop, per slice:
 
 1. **RED** — write a test that fails. For a bug, reproduce it with a failing test first
@@ -194,7 +202,7 @@ The inner loop, per slice:
 2. **GREEN** — the minimum code that passes.
 3. **REFACTOR** — clean up with tests still green.
 4. **Verify** — run the affected side's checks.
-5. **Commit** — one logical change per commit, on a short-lived branch off `main`.
+5. **Commit** — one logical change per commit, on the worktree's short-lived branch off `main`.
 
 Rules that matter most here:
 
