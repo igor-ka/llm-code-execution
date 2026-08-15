@@ -6,6 +6,14 @@ import { dirname, join } from "node:path";
 import { readCspPolicy, installCspHeader, mountSpaFallback } from "../src/staticSite.js";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "public");
+// The same fixture, reached through a dot-prefixed directory. `send` refuses ANY absolute path
+// with a dot-segment in it, so this is the shape that catches an absolute `res.sendFile(...)`.
+const dottedFixtures = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "fixtures",
+  ".dotted",
+  "public",
+);
 
 /** Mirrors server.ts's mount order exactly: header first, routes, then the SPA fallback. */
 function appServing(dir: string) {
@@ -60,6 +68,17 @@ describe("mountStaticSite", () => {
 
   it("serves a deep link with index.html so client-side routing works", async () => {
     const res = await request(appServing(fixtures)).get("/sessions/abc");
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('<div id="root">');
+  });
+
+  // Regression: `res.sendFile(<absolute path>)` makes `send` dot-check every segment of that
+  // path, including ones the request never touched. Serving the app from anywhere under a
+  // hidden directory — a git worktree in `.claude/worktrees/`, a deploy under `/opt/.local/app`
+  // — then 404s every deep link, with a "Not Found" that names no file. Scoping the send to
+  // `root` confines the dotfile guard to the part the request actually controls.
+  it("serves a deep link even when the app lives under a dot-prefixed directory", async () => {
+    const res = await request(appServing(dottedFixtures)).get("/sessions/abc");
     expect(res.status).toBe(200);
     expect(res.text).toContain('<div id="root">');
   });
