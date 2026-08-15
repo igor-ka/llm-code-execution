@@ -145,7 +145,8 @@ backend executes.
 One command, run from the main checkout, creates a worktree that can actually run:
 
 ```bash
-scripts/worktree-new.sh thing
+scripts/worktree-new.sh thing                 # branch feat/thing
+scripts/worktree-new.sh thing fix/some-bug    # or name the branch yourself
 cd .claude/worktrees/thing && docker compose up --build
 ```
 
@@ -166,8 +167,13 @@ secrets, so a copy costs nothing.
 Then it runs `npm ci` on both sides. `node_modules` is deliberately not shared: lockfiles diverge
 per branch, so each worktree installs its own (~284 MB).
 
-To remove one: `docker compose down` inside it, then `git worktree remove <path>` from the main
-checkout. That frees the slot for the next `worktree-new.sh`.
+If either shared file is missing from the main checkout, it says so loudly next to the ✓ rather
+than handing you a worktree that cannot reach Claude or log in. If it fails partway — a registry
+hiccup during `npm ci` — it prints the exact commands to retry or to remove what it created.
+
+To remove one: `docker compose down` inside it, then `git worktree remove <path>` and
+`git branch -D <branch>` from the main checkout. That frees the slot for the next
+`worktree-new.sh`.
 
 The backend warns at startup if a worktree's `.env` claims one slot but points a port, URL or
 sandbox image tag at another. Those are the mistakes with no other symptom: one writes this

@@ -83,17 +83,16 @@ eq "redis url" "REDIS_URL=redis://localhost:6389" "$(grep_line REDIS_URL)"
 # The backend's own stackSlotWarnings() check must find nothing to complain about in a file this
 # script generated. Every variable that check reads has to be present and consistent, or the very
 # first `npm run dev` in a fresh worktree greets you with warnings about the tooling's own output.
+#
+# ONE assertion, not eleven: the missing names are collected so the ✓/✗ and the counters agree
+# with each other. Printing a ✓ after per-name ✗ lines contradicts itself, and inflating `pass`
+# per name makes the suite total meaningless.
+missing=""
 for required in STACK_SLOT COMPOSE_PROJECT_NAME BACKEND_PORT FRONTEND_PORT PG_PORT REDIS_PORT \
   FRONTEND_ORIGIN PORT SANDBOX_IMAGE DATABASE_URL REDIS_URL; do
-  line="$(grep_line "$required")"
-  if [[ -n "$line" ]]; then
-    pass=$((pass + 1))
-  else
-    fail=$((fail + 1))
-    printf '  ✗ generated .env is missing %s\n' "$required"
-  fi
+  [[ -n "$(grep_line "$required")" ]] || missing="$missing $required"
 done
-printf '  ✓ every variable stackSlotWarnings() reads is generated\n'
+eq "every variable stackSlotWarnings() reads is generated" "" "$missing"
 
 # --- frontend_env: the generated frontend/.env.local ---
 fe="$(frontend_env 2 $'VITE_AUTH0_DOMAIN=example.auth0.com\nVITE_AUTH0_CLIENT_ID=abc\n')"
@@ -116,6 +115,16 @@ eq "and the port still lands" "VITE_DEV_PORT=5183" \
 eq "reads its own output" 1 "$(printf '%s\n' "$block" | slot_of)"
 eq "a file with no slot claims nothing" "" "$(printf 'PORT=8000\n' | slot_of)"
 eq "commented-out slots do not count" "" "$(printf '#STACK_SLOT=2\n' | slot_of)"
+eq "the first claim wins when a file was hand-edited" 1 "$(printf 'STACK_SLOT=1\nSTACK_SLOT=2\n' | slot_of)"
+
+# A duplicated STACK_SLOT must not take the whole read down. slot_of is the last command in
+# used_slots' loop body, so a non-zero exit there kills that subshell under errexit and every
+# remaining worktree's claim is silently dropped — free_slot then hands out a slot already in use.
+(
+  set -euo pipefail
+  printf 'STACK_SLOT=1\nSTACK_SLOT=2\nSTACK_SLOT=3\n' | slot_of >/dev/null
+) && eq "reading a duplicated claim exits clean under pipefail" 0 0 ||
+  eq "reading a duplicated claim exits clean under pipefail" 0 1
 
 echo
 printf '  %d passed, %d failed\n' "$pass" "$fail"
