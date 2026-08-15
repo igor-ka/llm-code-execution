@@ -3,6 +3,7 @@ import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { buildCsp } from "./src/csp";
 import { resolveApiBase } from "./src/apiBase";
+import { resolveDevPort } from "./src/devPort";
 
 /**
  * Emit the production CSP alongside the bundle.
@@ -33,6 +34,9 @@ export default defineConfig(({ mode }) => {
   // The production image builds with VITE_API_BASE="" (same-origin API), so connect-src reduces
   // to 'self'; an unset value means a local build, which really does call localhost.
   const apiBase = resolveApiBase(env.VITE_API_BASE);
+  // Slot-derived so two worktrees can serve the SPA at once. `loadEnv` merges prefixed
+  // process.env over the .env files, so Compose can set this without a per-worktree file.
+  const devPort = resolveDevPort(env.VITE_DEV_PORT);
   const prodCsp = buildCsp({ apiBase, auth0Domain, dev: false });
   const devCsp = buildCsp({ apiBase, auth0Domain, dev: true });
 
@@ -41,7 +45,10 @@ export default defineConfig(({ mode }) => {
     // Dev server gets an HMR-compatible policy; `vite preview` (the production-build serving
     // path) gets the strict one.
     server: {
-      port: 5173,
+      port: devPort,
+      // Never silently hop to the next free port: the next port is an origin Auth0 has not
+      // been told about, and the failure would surface as a login error far from its cause.
+      strictPort: true,
       headers: { "Content-Security-Policy": devCsp },
     },
     preview: {
