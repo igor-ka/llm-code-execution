@@ -164,9 +164,9 @@ drifting to a port Auth0 has never heard of. Its leading `\n` is not cosmetic ei
 to a file that does not end in a newline would splice `VITE_DEV_PORT` onto the end of the last
 Auth0 value and break login.
 
-The backend warns at startup if a worktree's `.env` claims one slot but points a service at
-another — the mistake that otherwise writes this worktree's chat history into slot 0's Postgres
-without a word.
+The backend warns at startup if a worktree's `.env` claims one slot but points a port, URL or
+sandbox image tag at another. Those are the mistakes with no other symptom: one writes this
+worktree's chat history into slot 0's Postgres, the other executes slot 0's sandbox image.
 
 `node_modules` is deliberately not shared: lockfiles diverge per branch, so each worktree
 installs its own (~284 MB).
