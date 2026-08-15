@@ -155,7 +155,7 @@ export class DockerBackend implements SandboxBackend {
           stdout: "",
           stderr:
             `[sandbox] image '${this.image}' not found. Build it first: ` +
-            "`docker build -t llm-sandbox:latest backend/sandbox-image`.",
+            `\`docker build -t ${this.image} backend/sandbox-image\`.`,
           exitCode: 1,
           durationMs: elapsedMs(started),
           timedOut: false,
