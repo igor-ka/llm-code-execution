@@ -52,11 +52,23 @@ export default defineConfig(({ mode }) => {
       headers: { "Content-Security-Policy": devCsp },
     },
     preview: {
+      // The SAME slot port as the dev server, not Vite's 4173 default. `preview` and `dev` are
+      // never both running in one worktree, and reusing the port keeps the Auth0 origin pool at
+      // four — a separate preview port per slot would need four more registered origins, and an
+      // unregistered one fails login with no useful error.
+      port: devPort,
+      strictPort: true,
       headers: { "Content-Security-Policy": prodCsp },
     },
     test: {
       environment: "jsdom",
       globals: true,
+      // Pin the API base the unit tests see. `api.ts` and `history.ts` read
+      // `import.meta.env.VITE_API_BASE` at module load, so without this the suite inherits
+      // whatever `.env.local` says — and in a worktree that is the slot's own port, which turns
+      // every URL assertion into a failure about the developer's local config rather than about
+      // the client's URL construction, which is the thing under test.
+      env: { VITE_API_BASE: "http://localhost:8000" },
       setupFiles: "./src/test/setup.ts",
       css: false,
       coverage: {

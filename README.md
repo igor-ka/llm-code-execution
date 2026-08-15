@@ -147,7 +147,7 @@ cd .claude/worktrees/thing
 ln -s ../../../.env.shared .env.shared                                    # the API key, once
 ln -s ../../../../.claude/settings.local.json .claude/settings.local.json # permission allowlist
 cp ../../../frontend/.env.local frontend/.env.local  # copied, not linked: build context
-printf 'VITE_DEV_PORT=5183\nVITE_API_BASE=http://localhost:8010\n' >> frontend/.env.local
+printf '\nVITE_DEV_PORT=5183\nVITE_API_BASE=http://localhost:8010\n' >> frontend/.env.local
 cp ../../../.env.example .env
 # then set STACK_SLOT, COMPOSE_PROJECT_NAME, and every port-derived value:
 # BACKEND_PORT, FRONTEND_PORT, PG_PORT, REDIS_PORT, FRONTEND_ORIGIN, PORT, SANDBOX_IMAGE,
@@ -160,7 +160,13 @@ cp ../../../.env.example .env
 Docker build context, and a symlink pointing outside it does not survive `COPY . .`. Those are
 public SPA values, not secrets, so a copy costs nothing. The `printf` is not optional: the dev
 server uses `strictPort`, so a worktree still carrying slot 0's values fails to bind rather than
-drifting to a port Auth0 has never heard of.
+drifting to a port Auth0 has never heard of. Its leading `\n` is not cosmetic either — appending
+to a file that does not end in a newline would splice `VITE_DEV_PORT` onto the end of the last
+Auth0 value and break login.
+
+The backend warns at startup if a worktree's `.env` claims one slot but points a service at
+another — the mistake that otherwise writes this worktree's chat history into slot 0's Postgres
+without a word.
 
 `node_modules` is deliberately not shared: lockfiles diverge per branch, so each worktree
 installs its own (~284 MB).

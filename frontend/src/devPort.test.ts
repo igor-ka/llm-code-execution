@@ -15,14 +15,13 @@ describe("resolveDevPort", () => {
     expect(resolveDevPort("5183")).toBe(5183);
   });
 
-  // A bad value must not become a *different usable port* silently: with strictPort on,
-  // falling back to 5173 either binds the slot-0 origin Auth0 already knows, or fails the
-  // bind outright. Both are visible; a silent 5174 is not.
-  it("falls back on values that are not usable TCP ports", () => {
-    expect(resolveDevPort("nope")).toBe(DEFAULT_DEV_PORT);
-    expect(resolveDevPort("5183.5")).toBe(DEFAULT_DEV_PORT);
-    expect(resolveDevPort("0")).toBe(DEFAULT_DEV_PORT);
-    expect(resolveDevPort("-1")).toBe(DEFAULT_DEV_PORT);
-    expect(resolveDevPort("65536")).toBe(DEFAULT_DEV_PORT);
+  // Falling back would be worse than failing: 5173 is a real registered origin, so a typo'd
+  // value would quietly serve this worktree on slot 0's port with nothing to notice — Auth0
+  // accepts the origin, and the mistake only surfaces later as a bind conflict in the tree that
+  // actually owns it.
+  it("refuses values that are not usable TCP ports, rather than defaulting", () => {
+    for (const bad of ["nope", "5183.5", "0", "-1", "65536", "51 83"]) {
+      expect(() => resolveDevPort(bad)).toThrow(/VITE_DEV_PORT/);
+    }
   });
 });
