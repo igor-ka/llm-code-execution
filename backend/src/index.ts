@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import { createApp } from "./server.js";
-import { getSettings, assertRedisConfigured } from "./config.js";
+import { getSettings, assertRedisConfigured, stackSlotWarnings } from "./config.js";
 import { makePool } from "./history/pool.js";
 import { migrate } from "./history/migrate.js";
 import { PostgresHistoryStore } from "./history/pgStore.js";
@@ -38,6 +38,10 @@ async function main(): Promise<void> {
   // Deliberately here and not in createApp: createApp is the seam every backend test builds on,
   // so a hard Redis dependency there would become a hard dependency of every unit test (S10).
   assertRedisConfigured(settings);
+
+  // A worktree whose .env claims one slot but points a service at another writes to the wrong
+  // datastore silently. Warn, don't throw: this is a consistency check, not a security control.
+  for (const warning of stackSlotWarnings()) log.warn(`stack slot: ${warning}`);
 
   // One pool for the process: it runs the migrations and then backs the history store. Before
   // this, migrations opened a throwaway pool and createApp() lazily built a second one that

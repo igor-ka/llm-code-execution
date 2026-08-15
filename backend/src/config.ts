@@ -158,6 +158,70 @@ export function assertRedisConfigured(settings: Settings): void {
   }
 }
 
+/** Slot N owns `base + N * SLOT_STEP` for each service — see "Parallel worktrees" in README.md. */
+const SLOT_STEP = 10;
+const SLOT_PORT_BASES: Record<string, number> = {
+  PORT: 8000,
+  FRONTEND_ORIGIN: 5173,
+  DATABASE_URL: 5432,
+  REDIS_URL: 6379,
+};
+
+/**
+ * The local port a value points at, or undefined when there is nothing checkable.
+ *
+ * Non-localhost hosts are skipped deliberately: under Compose these are rewritten to service
+ * names on the compose network (`postgres:5432`), where the host-port scheme does not apply at
+ * all. Only a host-run process uses localhost, and only a host-run process can land on another
+ * slot's datastore.
+ */
+function localPort(name: string, raw: string): number | undefined {
+  if (raw === "") return undefined;
+  if (name === "PORT") {
+    const n = Number(raw);
+    return Number.isInteger(n) ? n : undefined;
+  }
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return undefined;
+  }
+  if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") return undefined;
+  return url.port === "" ? undefined : Number(url.port);
+}
+
+/**
+ * Warn when this worktree's env claims a stack slot its ports do not match.
+ *
+ * `.env` carries nine values that must agree, and the failure when they don't is silent: a
+ * worktree on slot 1 whose DATABASE_URL still says 5432 writes its chat history into slot 0's
+ * Postgres and reports nothing. Warnings rather than a throw — unlike REDIS_URL (D6) this is a
+ * consistency check, not a security control, and a developer may have deliberate reasons to
+ * point one service somewhere else.
+ */
+export function stackSlotWarnings(env: Env = process.env): string[] {
+  const raw = env.STACK_SLOT;
+  if (raw === undefined || raw.trim() === "") return [];
+  const slot = Number(raw);
+  if (!Number.isInteger(slot) || slot < 0) {
+    return [`STACK_SLOT is ${JSON.stringify(raw)}, which is not a slot number; ports unchecked.`];
+  }
+  const warnings: string[] = [];
+  for (const [name, base] of Object.entries(SLOT_PORT_BASES)) {
+    const actual = localPort(name, str(env[name], ""));
+    if (actual === undefined) continue;
+    const expected = base + slot * SLOT_STEP;
+    if (actual !== expected) {
+      warnings.push(
+        `${name} points at port ${actual}, but STACK_SLOT=${slot} owns ${expected}. ` +
+          `This worktree is sharing another slot's service.`,
+      );
+    }
+  }
+  return warnings;
+}
+
 let cached: Settings | undefined;
 
 /** Cached process-wide settings (analog of the lru_cached get_settings()). */
