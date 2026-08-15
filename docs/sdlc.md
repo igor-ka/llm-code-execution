@@ -3,8 +3,8 @@
 How a change gets from an idea to `main` in this repository, and which skill governs each step.
 
 This document is a **contract**. If you change the development process — the skills in
-`.claude/skills/`, either `verify.sh`, anything in `scripts/`, or a workflow in
-`.github/workflows/` — update this file in the same change. The `SDLC docs` CI job enforces it,
+`.claude/skills/`, any of the three `verify.sh` scripts, `infra/tests/`, anything in
+`scripts/`, or a workflow in `.github/workflows/` — update this file in the same change. The `SDLC docs` CI job enforces it,
 and `CLAUDE.md` points here as the source of truth.
 See [Changing this SDLC](#changing-this-sdlc).
 
@@ -490,7 +490,8 @@ This file is the contract, and it is enforced deterministically rather than by g
 **The rule:** a PR that touches any of
 
 - `.claude/skills/**`
-- `backend/verify.sh` or `frontend/verify.sh`
+- `backend/verify.sh`, `frontend/verify.sh` or `infra/verify.sh`
+- `infra/tests/**` — the gate self-tests `infra/verify.sh` runs first
 - `.github/workflows/**`
 - `scripts/**`
 

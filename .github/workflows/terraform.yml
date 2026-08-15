@@ -1,0 +1,55 @@
+name: Terraform
+
+# Its own workflow rather than a job in ci.yml so the Terraform toolchain setup does not sit in
+# the middle of the Node pipeline, and so this job's history is readable on its own.
+#
+# NO `paths:` filter, deliberately. This is a required check, and a workflow-level path filter
+# makes a required check never report at all — which hangs every merge forever. docs/sdlc.md
+# records the same trap for the SDLC docs job. The whole job runs in seconds; it runs on
+# everything.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only. This job never authenticates to GCP: it runs `terraform init -backend=false` and
+# `validate`, which need no credentials. `terraform plan` is deliberately absent — see
+# infra/verify.sh.
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    # The job `name:` is a contract — the "Protect main" ruleset requires it by this exact
+    # string. See docs/sdlc.md.
+    name: Terraform checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          # The wrapper rewrites stdout to feed step outputs, which mangles verify.sh's own
+          # output for no benefit here.
+          terraform_wrapper: false
+      # Named steps calling targets of the shared verify.sh — the same script developers run
+      # locally (`./verify.sh` runs them all). Splitting them gives per-step pass/fail in the log
+      # without a second definition of the checks.
+      - name: Gate self-test
+        run: ./verify.sh selftest
+      - name: Format check
+        run: ./verify.sh fmt
+      - name: Init
+        run: ./verify.sh init
+      - name: Validate
+        run: ./verify.sh validate
+      - name: Gates
+        run: ./verify.sh gates

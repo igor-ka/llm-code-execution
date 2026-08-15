@@ -88,6 +88,58 @@ refutes "a lookalike actor is not exempt" "chore(deps): bump something" "dependa
 # GitHub username) exempt from a required check. Correct today; this is what keeps it correct.
 refutes "a glob-collision actor is not exempt" "chore(deps): bump something" "dependabott"
 
+# --- WATCHED_RE ---
+#
+# The path list is the other half of this script's contract, and until now nothing checked it: a
+# typo in the alternation (a missing backslash, a stray anchor) silently un-watches a path and
+# the failure mode is invisible — PRs go green that should have been red.
+#
+# Extracted from the script rather than duplicated here, because a copy would drift and then
+# assert against itself. Single-quoted assignment on its own line is the shape it has; if that
+# ever changes, this extraction yields empty and every case below fails loudly, which is the
+# correct outcome.
+WATCHED_RE="$(sed -n "s/^WATCHED_RE='\(.*\)'$/\1/p" "$SCRIPT")"
+if [[ -z "$WATCHED_RE" ]]; then
+  bad "WATCHED_RE extraction" "could not parse WATCHED_RE out of $SCRIPT" ""
+fi
+
+# Herestrings, not pipes, for the same reason check-sdlc-sync.sh:78-81 already documents: `grep -q`
+# exits on first match, the writer takes SIGPIPE and returns 141, and this file's `pipefail`
+# (line 17) makes 141 the pipeline's status. In `unwatched()` that inverts to a pass — a gate that
+# cannot fail. The repo has paid for this lesson once already.
+
+# watched <name> <path> — the path must be governed by the SDLC contract.
+watched() {
+  if grep -Eq "$WATCHED_RE" <<<"$2"; then
+    ok "$1"
+  else
+    bad "$1" "expected '$2' to be watched" ""
+  fi
+}
+
+# unwatched <name> <path> — the path must NOT drag docs/sdlc.md into every change.
+unwatched() {
+  if grep -Eq "$WATCHED_RE" <<<"$2"; then
+    bad "$1" "expected '$2' NOT to be watched" ""
+  else
+    ok "$1"
+  fi
+}
+
+watched   "backend/verify.sh is watched"        "backend/verify.sh"
+watched   "frontend/verify.sh is watched"       "frontend/verify.sh"
+watched   "infra/verify.sh is watched"          "infra/verify.sh"
+watched   "infra/tests/ is watched"             "infra/tests/gates.test.sh"
+watched   "workflows are watched"               ".github/workflows/terraform.yml"
+watched   "scripts/ is watched"                 "scripts/check-sdlc-sync.sh"
+
+# The Terraform CONFIG is not a process change. Watching all of infra/ would force a docs/sdlc.md
+# edit on every resource added for the rest of the project's life, and a contract that fires on
+# everything is one people learn to bypass.
+unwatched "infra/*.tf is not watched"           "infra/wif.tf"
+unwatched "infra/bootstrap.sh is not watched"   "infra/bootstrap.sh"
+unwatched "backend source is not watched"       "backend/src/log.ts"
+
 echo
 if [[ "$fail" -gt 0 ]]; then
   echo "✗ ${fail} failed, ${pass} passed"

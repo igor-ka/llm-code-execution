@@ -48,6 +48,10 @@ backend/
 frontend/                    React + Vite UI
   src/                       App.tsx, api.ts, history.ts, components/ (HistorySidebar, SessionView, RunResult)
   verify.sh                  one-command checks (lint + format + vitest + build + docker)
+infra/                       Terraform root for the GCP foundation (Phase 1 — nothing deployed yet)
+  *.tf                       versions/providers/variables + apis; one region, one project
+  tests/gates.test.sh        unit tests for the repo-specific gates, run first by verify.sh
+  verify.sh                  selftest + fmt + init -backend=false + validate + gates (no credentials)
 docker-compose.yml           local dev topology: backend + frontend + postgres + redis + one-shot sandbox-image build
 Dockerfile                   PRODUCTION image: SPA + API in one container, one origin, non-root, no Docker socket
 .dockerignore                build context for the production image (the repo root is that context)
@@ -331,7 +335,7 @@ broken. `VITE_API_BASE` is deliberately empty: the API is same-origin here.
 ## Verification
 
 Each side has a single `verify.sh` that runs everything CI runs — so local and CI can't
-drift (CI invokes the same scripts).
+drift (CI invokes the same scripts). There are three: backend, frontend, and `infra/`.
 
 - **Backend:** `cd backend && ./verify.sh` — installs deps, runs ESLint + Prettier + Vitest,
   type-checks/builds (`tsc`), and builds three Docker images: the dev backend image, the sandbox
@@ -340,7 +344,7 @@ drift (CI invokes the same scripts).
 - **Frontend:** `cd frontend && ./verify.sh` — installs deps, runs ESLint + Prettier +
   Vitest, type-checks/builds, and builds the frontend Docker image.
 
-Both accept `SKIP_INSTALL=1` (reuse the current environment) and `SKIP_DOCKER=1`
+The backend and frontend scripts accept `SKIP_INSTALL=1` (reuse the current environment) and `SKIP_DOCKER=1`
 (host checks only, skip the image build).
 
 CI runs two additional checks that have no local equivalent, because both read pull-request

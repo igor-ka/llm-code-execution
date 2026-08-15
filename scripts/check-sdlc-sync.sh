@@ -20,7 +20,7 @@ cd "$(dirname "$0")/.."
 # all of scripts/: docs/sdlc.md documents the exact semantics of the checks that live there
 # (watched paths, failure messages, escape hatches), so changing one without updating the doc
 # would let the documentation silently desync from the enforcement it describes.
-WATCHED_RE='^(\.claude/skills/|\.github/workflows/|scripts/|backend/verify\.sh$|frontend/verify\.sh$)'
+WATCHED_RE='^(\.claude/skills/|\.github/workflows/|scripts/|backend/verify\.sh$|frontend/verify\.sh$|infra/verify\.sh$|infra/tests/)'
 DOC='docs/sdlc.md'
 
 if [[ "${PR_TITLE:-}" == *"[skip-sdlc-sync]"* ]]; then

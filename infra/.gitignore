@@ -1,0 +1,21 @@
+# Terraform working directory and provider binaries.
+.terraform/
+
+# State. Never committed — it is in GCS, and it contains resource metadata for the whole project.
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+
+# Real variable values (project + billing account IDs). The .example is the committed shape.
+# The .json variants are listed because Terraform loads them identically, and gate_no_state_in_git
+# in verify.sh matches the same set — the two lists are meant to agree.
+terraform.tfvars
+terraform.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+
+crash.log
+crash.*.log
+
+# NOT ignored, deliberately: .terraform.lock.hcl. It is the provider checksum lock and it MUST be
+# committed, or CI resolves a different provider build than the one reviewed here.
