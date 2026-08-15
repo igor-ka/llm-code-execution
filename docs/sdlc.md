@@ -492,7 +492,8 @@ This file is the contract, and it is enforced deterministically rather than by g
 
 - `.claude/skills/**`
 - `backend/verify.sh`, `frontend/verify.sh` or `infra/verify.sh`
-- `infra/tests/**` — the gate self-tests `infra/verify.sh` runs first
+- `infra/tests/**` — the self-tests `infra/verify.sh` runs first: the gates, and `bootstrap.sh`
+  against a fake `gcloud` (a live run proves the script worked that day, not that the next edit is safe)
 - `.github/workflows/**`
 - `scripts/**`
 

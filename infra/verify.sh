@@ -4,7 +4,7 @@
 #
 # Usage: ./verify.sh [target] [dir]
 #   all       (default) selftest + fmt + init + validate + gates
-#   selftest  the unit tests for the gates below
+#   selftest  the unit tests for the gates below, and for bootstrap.sh
 #   fmt       terraform fmt -check -recursive
 #   init      terraform init -backend=false   (no credentials, no state, no network to GCS)
 #   validate  terraform validate
@@ -30,7 +30,10 @@ require_terraform() {
   fi
 }
 
-selftest() { run ./tests/gates.test.sh; }
+selftest() {
+  run ./tests/gates.test.sh
+  run ./tests/bootstrap.test.sh
+}
 fmt() {
   require_terraform
   run terraform fmt -check -recursive
