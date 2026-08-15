@@ -1345,3 +1345,26 @@ for; relocating would have left the bug in place and fought Claude Code's own
 `.claude/worktrees/` convention. The regression test serves the existing fixture through a
 committed `tests/fixtures/.dotted/` directory so it fails on any checkout path, not only a
 hidden one.
+
+**Found while running the PR-1 checks: `frontend/verify.sh` failed in any worktree on slot ≥ 1.**
+`api.ts` and `history.ts` read `import.meta.env.VITE_API_BASE` at module load, so the unit suite
+inherited the slot's port from `frontend/.env.local` and asserted the developer's local config
+instead of the client's URL construction. Pinned with vitest's `test.env`. Same class as the
+dot-path bug: a change that made the tests depend on where they run.
+
+**PR 1 code review (`code-review high`), incorporated 2026-08-13.** No correctness bugs in the
+changed code; the reviewer independently confirmed all three env-precedence claims and the
+`send` dot-check mechanism. Seven findings, six applied — see the commit
+`fix(worktrees): close the silent-misconfiguration paths found in review`.
+
+One finding **deferred to PR 2, deliberately**: `backend/verify.sh` builds and then *runs*
+`llm-code-execution:verify` (`:70`), and those `:verify` tags are daemon-wide, so two worktrees
+running `./verify.sh` concurrently can have one tree's CSP/non-root assertions execute the
+other's image. This is real — and it is the same shared-tag hazard this plan fixes for
+`SANDBOX_IMAGE`. It lands in PR 2 rather than PR 1 because `backend/verify.sh` and
+`frontend/verify.sh` are SDLC-watched paths: touching them requires `docs/sdlc.md` in the same
+PR, which PR 2 already owns and PR 1 otherwise has no business in. Until then the hazard needs
+two worktrees verifying at the same instant, which needs PR 2's tooling to be routine.
+**Add to PR 2:** derive the tag suffix automatically inside both scripts — e.g.
+`basename "$(git rev-parse --show-toplevel)"` — so it is unique per worktree with nothing to
+remember, and deterministic in CI.
