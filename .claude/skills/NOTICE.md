@@ -61,6 +61,11 @@ Of the shared `references/`, only `definition-of-done.md`, `security-checklist.m
   buckets: the reviewer classifies each finding as **mechanical** or **judgment** at source, the
   author applies the mechanical ones and lists them for audit, and the judgment ones block on the
   human. Upstream returned one flat list and escalated all of it.
+- `git-workflow-and-versioning`'s *Working with Worktrees* section was rewritten. Upstream's
+  recipe — `git worktree add ../project-feature-a` — produces a tree with no stack slot, no
+  `node_modules` and none of this repo's gitignored files, so its ports collide with the main
+  checkout's and nothing in it runs. It now routes through `scripts/worktree-new.sh` and states
+  when a worktree is warranted (one per child issue) and what bounds the pool at four.
 - `references/definition-of-done.md` was rewritten around this repo's actual gates — `verify.sh`,
   the INV-1…8 isolation battery, the mandatory `code-review` + `security-review` pass, and the
   README/`docs/sdlc.md` upkeep rules.

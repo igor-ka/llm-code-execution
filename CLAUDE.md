@@ -37,6 +37,26 @@ Which skill when — all vendored in `.claude/skills/`, loaded on demand:
 The standing bar every change clears before it counts as done is
 `.claude/skills/references/definition-of-done.md`.
 
+## Work each child issue in its own worktree
+
+**Start every child issue of a plan in a git worktree, created with `scripts/worktree-new.sh
+<slug> [branch]` from the main checkout.** Not for answering a question, a one-line doc fix, or
+anything that will not become its own PR — those stay in the main checkout.
+
+**Always that script — never a bare `git worktree add`, and never the built-in worktree tool.**
+Both create a directory with no stack slot, no `node_modules`, and none of the gitignored files a
+worktree cannot inherit, so its ports collide with the main checkout's and nothing in it runs. The
+script allocates a slot, links `.env.shared` and `.claude/settings.local.json`, generates `.env`
+and `frontend/.env.local`, and installs both sides.
+
+Why this is a rule and not a preference: several sessions share this checkout, and one switching
+branches mid-task moves HEAD under another. A worktree per slice makes that impossible, and each
+one gets its own stack — see *Parallel worktrees* in `README.md` for the slot table. The pool is
+four (main plus three), bounded by the origins registered in Auth0.
+
+When the PR merges, free the slot: `docker compose down` in the worktree, then `git worktree
+remove <path>` and `git branch -D <branch>` from the main checkout.
+
 ## Checks before pushing
 
 Each side has one script that mirrors CI exactly — run it from that directory:
