@@ -49,9 +49,22 @@ integration() {
   [[ -n "${REDIS_URL:-}" ]]    || echo "==> note: REDIS_URL unset — Redis quota suite will self-skip"
   run npm run test:integration
 }
+# Image tags are daemon-wide, and this target BUILDS a tag and then RUNS it. Two worktrees
+# verifying at the same moment would otherwise share `…:verify`, so one tree's assertions can
+# execute the other tree's image and report a pass or fail that belongs to a different branch.
+# The checkout's directory name is unique per worktree (see "Parallel worktrees" in README.md)
+# and deterministic in CI. Sanitised because a directory name is not necessarily a legal tag.
+verify_tag() {
+  local name
+  name="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
+  printf 'verify-%s\n' "$(printf '%s' "$name" | tr -c '[:alnum:]._-' '-')"
+}
+
 docker_() {
-  run docker build -t llm-code-execution-backend:verify .
-  run docker build -t llm-sandbox:verify ./sandbox-image
+  local tag
+  tag="$(verify_tag)"
+  run docker build -t "llm-code-execution-backend:${tag}" .
+  run docker build -t "llm-sandbox:${tag}" ./sandbox-image
   # The production artifact (repo-root Dockerfile, repo-root context): the SPA and the API in one
   # image. Built here because it is the backend process that serves the SPA.
   #
@@ -62,12 +75,12 @@ docker_() {
     --build-arg VITE_AUTH0_DOMAIN=verify.invalid \
     --build-arg VITE_AUTH0_CLIENT_ID=verify \
     --build-arg VITE_AUTH0_AUDIENCE=https://verify.invalid/api \
-    -t llm-code-execution:verify ..
+    -t "llm-code-execution:${tag}" ..
   # NOTE the `if …; then exit 1; fi` form. `! grep -q …` under `set -e` does NOT abort: POSIX
   # exempts a command whose return value is inverted with `!` from errexit, so the negated
   # assertions silently passed on a bad image. frontend/verify.sh uses the same explicit form for
   # the same reason.
-  run docker run --rm llm-code-execution:verify sh -c '
+  run docker run --rm "llm-code-execution:${tag}" sh -c '
     set -e
     # The CSP must have shipped, and must be the PRODUCTION policy.
     grep -qE "script-src '"'"'self'"'"'\s*(;|$)" /app/public/csp.txt
@@ -111,7 +124,7 @@ docker_() {
   if docker build -f ../Dockerfile \
       --build-arg VITE_AUTH0_DOMAIN=verify.invalid \
       --build-arg VITE_AUTH0_CLIENT_ID=verify \
-      -t llm-code-execution:argcheck .. >/dev/null 2>&1; then
+      -t "llm-code-execution:${tag}-argcheck" .. >/dev/null 2>&1; then
     echo "Dockerfile built with VITE_AUTH0_AUDIENCE empty — the build-arg guard is not enforcing" >&2
     exit 1
   fi

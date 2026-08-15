@@ -142,38 +142,40 @@ cannot be arbitrary.
 a worktree editing `backend/sandbox-image/` would silently change what every *other* worktree's
 backend executes.
 
-To set a worktree up, create it, symlink the shared files, and write its `.env` from
-`.env.example` with the slot's ports:
+One command, run from the main checkout, creates a worktree that can actually run:
 
 ```bash
-git worktree add -b feat/thing .claude/worktrees/thing origin/main
-cd .claude/worktrees/thing
-ln -s ../../../.env.shared .env.shared                                    # the API key, once
-ln -s ../../../../.claude/settings.local.json .claude/settings.local.json # permission allowlist
-cp ../../../frontend/.env.local frontend/.env.local  # copied, not linked: build context
-printf '\nVITE_DEV_PORT=5183\nVITE_API_BASE=http://localhost:8010\n' >> frontend/.env.local
-cp ../../../.env.example .env
-# then set STACK_SLOT, COMPOSE_PROJECT_NAME, and every port-derived value:
-# BACKEND_PORT, FRONTEND_PORT, PG_PORT, REDIS_PORT, FRONTEND_ORIGIN, PORT, SANDBOX_IMAGE,
-# DATABASE_URL, REDIS_URL. Leaving any of them at slot 0 silently points this worktree at
-# slot 0's Postgres, Redis or container names.
-(cd backend && npm ci) && (cd frontend && npm ci)
+scripts/worktree-new.sh thing
+cd .claude/worktrees/thing && docker compose up --build
 ```
 
-`frontend/.env.local` is copied rather than symlinked because `frontend/` is the frontend image's
-Docker build context, and a symlink pointing outside it does not survive `COPY . .`. Those are
-public SPA values, not secrets, so a copy costs nothing. The `printf` is not optional: the dev
-server uses `strictPort`, so a worktree still carrying slot 0's values fails to bind rather than
-drifting to a port Auth0 has never heard of. Its leading `\n` is not cosmetic either — appending
-to a file that does not end in a newline would splice `VITE_DEV_PORT` onto the end of the last
-Auth0 value and break login.
+It allocates the lowest free slot (failing with a clear message when all four are taken), creates
+the branch off a freshly fetched `origin/main`, and supplies the gitignored files a worktree does
+not inherit:
+
+- `.env.shared` and `.claude/settings.local.json` are **symlinked** back to the main checkout, so
+  the API key and your permission allowlist each keep one source of truth. Without the second, a
+  fresh Claude Code session in the worktree re-prompts for everything you have already granted.
+- `.env` and `frontend/.env.local` are **generated** with this slot's ports.
+
+`frontend/.env.local` is generated rather than symlinked because `frontend/` is the frontend
+image's Docker build context, and a symlink pointing outside it does not survive `COPY . .` —
+the containerized frontend would lose its Auth0 configuration. Those are public SPA values, not
+secrets, so a copy costs nothing.
+
+Then it runs `npm ci` on both sides. `node_modules` is deliberately not shared: lockfiles diverge
+per branch, so each worktree installs its own (~284 MB).
+
+To remove one: `docker compose down` inside it, then `git worktree remove <path>` from the main
+checkout. That frees the slot for the next `worktree-new.sh`.
 
 The backend warns at startup if a worktree's `.env` claims one slot but points a port, URL or
 sandbox image tag at another. Those are the mistakes with no other symptom: one writes this
 worktree's chat history into slot 0's Postgres, the other executes slot 0's sandbox image.
 
-`node_modules` is deliberately not shared: lockfiles diverge per branch, so each worktree
-installs its own (~284 MB).
+Both `verify.sh` scripts tag their throwaway images `verify-<checkout-dirname>` for the same
+reason image tags are per-slot: the backend one builds a tag and then runs it, so a fixed tag
+would let two worktrees verifying at once execute each other's images.
 
 ## Run locally without Compose
 
