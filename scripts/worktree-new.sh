@@ -7,7 +7,9 @@
 # permissions it already has) — is missing. This creates the worktree, allocates a stack slot so
 # its ports do not collide with any other tree, supplies those files, and installs dependencies.
 #
-# Usage:  scripts/worktree-new.sh <slug>
+# Usage:  scripts/worktree-new.sh <slug> [branch]
+#   slug       directory under .claude/worktrees/ (letters, digits, dot, dash, underscore)
+#   branch     branch to create (default: feat/<slug>)
 #   SLOT_MAX   highest slot to hand out (default 3 — bounded by the frontend origins registered
 #              in Auth0, whose allowed-origins list is exact-match; see README.md)
 #
@@ -138,6 +140,27 @@ used_slots() {
   done
 }
 
+# State the EXIT trap needs. Global because the trap runs after main() returns, where a `local`
+# is gone and `set -u` would kill the handler before it could release the lock.
+LOCK_DIR=""
+WT_DIR=""
+WT_BRANCH=""
+WT_SLOT=""
+WT_CREATED=""
+
+on_exit() {
+  local code=$?
+  [[ -n "$LOCK_DIR" ]] && rmdir "$LOCK_DIR" 2>/dev/null
+  [[ $code -eq 0 || -z "$WT_CREATED" ]] && return $code
+  {
+    echo
+    echo "✗ failed after the worktree was created. It is still on disk, holding slot ${WT_SLOT}."
+    echo "  Retry the install:  (cd $WT_DIR/backend && npm ci) && (cd $WT_DIR/frontend && npm ci)"
+    echo "  Or remove it:       git -C $ROOT worktree remove --force $WT_DIR && git -C $ROOT branch -D $WT_BRANCH"
+  } >&2
+  return $code
+}
+
 main() {
   local slug="${1:-}" branch="${2:-}"
   # No slashes in the SLUG: it names the directory, and the symlink targets below are literal
@@ -153,6 +176,14 @@ main() {
     exit 2
   fi
   branch="${branch:-feat/$slug}"
+  # The slug regex admits plenty of strings git will not accept as a ref — `a..b`, `name.lock`,
+  # a leading or trailing dot. Ask git rather than reimplementing its rules, and ask now: without
+  # this the failure lands inside `git worktree add`, after the fetch and after this script has
+  # already reported which slot it picked.
+  if ! git check-ref-format --branch "$branch" >/dev/null 2>&1; then
+    echo "✗ '$branch' is not a valid git branch name." >&2
+    exit 2
+  fi
 
   # Run from the main checkout only. In a linked worktree `.git` is a file, not a directory — and
   # creating a worktree from inside one would nest .claude/worktrees/ inside itself.
@@ -173,32 +204,39 @@ main() {
     exit 1
   fi
 
+  # Reading the claims and writing this worktree's own is check-then-act, and two invocations at
+  # once — not far-fetched when the whole point is running several sessions in parallel — can both
+  # see slot 1 free and both take it, colliding on every port and the sandbox image tag. `mkdir`
+  # is atomic on every filesystem that matters, so it is the mutex. Held across the git work too,
+  # because the claim is not durable until `.env` exists.
+  LOCK_DIR="$ROOT/.claude/worktrees/.worktree-new.lock"
+  mkdir -p "$ROOT/.claude/worktrees"
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "✗ another worktree-new.sh is running (lock: $LOCK_DIR)." >&2
+    echo "  If that is stale — no other run in flight — remove it: rmdir $LOCK_DIR" >&2
+    exit 1
+  fi
+  # ONE exit handler for both jobs — a second `trap … EXIT` would silently replace this one.
+  # Its state is GLOBAL, not `local`: an EXIT trap fires after main() has returned, where a local
+  # is already out of scope and `set -u` would abort the handler itself.
+  trap on_exit EXIT
+  WT_DIR="$dir"
+  WT_BRANCH="$branch"
+
   local slot project
   slot="$(free_slot $(used_slots))"
   project="$(project_name "$slot" "$slug")"
+  WT_SLOT="$slot"
 
   echo "==> slot ${slot} — frontend http://localhost:$(port_for "$BASE_FRONTEND" "$slot"), backend :$(port_for "$BASE_BACKEND" "$slot")"
 
   git -C "$ROOT" fetch origin
   git -C "$ROOT" worktree add -b "$branch" "$dir" origin/main
-
-  # From here the worktree and branch exist on disk. Anything that fails later — an npm ci that
-  # hits a registry hiccup is the likely one — would otherwise abort under `set -e` leaving both
-  # behind, and the generated .env makes used_slots count the slot as taken forever while a plain
-  # retry dies on "$dir already exists". Nothing removed automatically: the tree may be worth
-  # keeping and re-running `npm ci` in. Just say how to undo it.
-  cleanup_hint() {
-    local code=$?
-    [[ $code -eq 0 ]] && return 0
-    {
-      echo
-      echo "✗ failed after the worktree was created. It is still on disk, holding slot ${slot}."
-      echo "  Retry the install:  (cd $dir/backend && npm ci) && (cd $dir/frontend && npm ci)"
-      echo "  Or remove it:       git -C $ROOT worktree remove --force $dir && git -C $ROOT branch -D $branch"
-    } >&2
-    return $code
-  }
-  trap cleanup_hint EXIT
+  # From here the worktree and branch exist on disk, so a later failure — an npm ci that hits a
+  # registry hiccup is the likely one — leaves both behind, with the generated .env making
+  # used_slots count the slot as taken forever while a plain retry dies on "already exists".
+  # Nothing is removed automatically: the tree may be worth keeping and re-running `npm ci` in.
+  WT_CREATED=1
 
   # Gitignored files a worktree does not inherit. These two are symlinked rather than copied so
   # the API key and the permission allowlist each keep exactly one source of truth. Relative
@@ -206,15 +244,27 @@ main() {
   # two levels below the root, so $dir needs ../../.. and a file one level inside it needs
   # ../../../.. to reach the root.
   # Collected rather than printed inline: they belong AFTER the npm ci output, next to the ✓, or
-  # nobody sees them. A worktree missing either of these is not "ready" in any useful sense.
-  local -a gaps=()
+  # nobody sees them. `blockers` mean the worktree genuinely cannot run; `notes` are things that
+  # work but are worth knowing. Keeping them apart matters — filing a working setup under "will
+  # not run" is how a warning stops being read.
+  local -a blockers=() notes=()
 
+  # A checkout that has not split its env yet is a supported layout (README, and the
+  # `required: false` on docker-compose's .env.shared entry), so fall back to the root `.env` as
+  # the shared half rather than handing over a worktree with no API key. The ordering makes this
+  # safe: Compose reads .env.shared first and this worktree's .env second, dotenv reads .env
+  # first — either way the slot's own values win over the fat file's slot-0 ones.
   if [[ -f "$ROOT/.env.shared" ]]; then
     ln -sfn "../../../.env.shared" "$dir/.env.shared"
+  elif [[ -f "$ROOT/.env" ]]; then
+    ln -sfn "../../../.env" "$dir/.env.shared"
+    notes+=("the main checkout has no .env.shared, so .env.shared here points at its root .env
+    instead. That works — the slot values in this worktree's own .env still win — but splitting
+    the env (cp .env.shared.example .env.shared, move the shared values across) is tidier.")
   else
-    gaps+=("no .env.shared in the main checkout, so this worktree has NO ANTHROPIC_API_KEY, no
-    OIDC_* config and no sandbox limits — the generated .env carries slot identity only. Split
-    your env first (cp .env.shared.example .env.shared, move the values across), then:
+    blockers+=("no .env.shared and no .env in the main checkout, so this worktree has NO
+    ANTHROPIC_API_KEY, no OIDC_* config and no sandbox limits — the generated .env carries slot
+    identity only. Create one (cp .env.shared.example .env.shared), then:
       ln -s ../../../.env.shared $dir/.env.shared")
   fi
 
@@ -230,7 +280,7 @@ main() {
     auth0="$(grep -E '^VITE_AUTH0_' "$ROOT/frontend/.env.local" || true)"
   fi
   if [[ -z "$auth0" ]]; then
-    gaps+=("no VITE_AUTH0_* values found in the main checkout's frontend/.env.local, so the SPA
+    blockers+=("no VITE_AUTH0_* values found in the main checkout's frontend/.env.local, so the SPA
     will start with an undefined Auth0 domain and client id and login will fail at runtime with
     no diagnostic. Fill in $ROOT/frontend/.env.local, then copy those three lines into
     $dir/frontend/.env.local")
@@ -245,12 +295,19 @@ main() {
   echo "  cd $dir && docker compose up --build"
   echo "  then open http://localhost:$(port_for "$BASE_FRONTEND" "$slot")"
 
-  if ((${#gaps[@]} > 0)); then
+  local item
+  if ((${#blockers[@]} > 0)); then
     {
       echo
-      echo "⚠ but it will not run yet:"
-      local gap
-      for gap in "${gaps[@]}"; do echo "  - $gap"; done
+      echo "⚠ but it will NOT run yet:"
+      for item in "${blockers[@]}"; do echo "  - $item"; done
+    } >&2
+  fi
+  if ((${#notes[@]} > 0)); then
+    {
+      echo
+      echo "note:"
+      for item in "${notes[@]}"; do echo "  - $item"; done
     } >&2
   fi
 }

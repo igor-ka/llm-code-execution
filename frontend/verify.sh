@@ -59,10 +59,14 @@ build() {
 }
 docker_() {
   # Daemon-wide tag, unique per worktree — see the fuller note in backend/verify.sh.
-  local tag
+  # Readable truncated name + a checksum of the FULL path — see the fuller note in
+  # backend/verify.sh for why the basename alone is neither unique nor length-bounded.
   # `printf '%s'` and not a bare pipe from basename: basename emits a trailing newline, which
   # `tr -c` would translate into a dash, so every tag would end in one.
-  tag="verify-$(printf '%s' "$(basename "$CHECKOUT_ROOT")" | tr -c '[:alnum:]._-' '-')"
+  local tag name sum
+  name="$(printf '%s' "$(basename "$CHECKOUT_ROOT")" | tr -c '[:alnum:]._-' '-' | cut -c1-24)"
+  sum="$(printf '%s' "$CHECKOUT_ROOT" | cksum | cut -d' ' -f1)"
+  tag="verify-${name}-${sum}"
   run docker build -t "llm-code-execution-frontend:${tag}" .
 }
 

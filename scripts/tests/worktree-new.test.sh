@@ -14,6 +14,9 @@ WORKTREE_NEW_LIB=1 source ./worktree-new.sh
 # The sourced script runs `set -euo pipefail`, which lands in THIS shell. Errexit has to go
 # back off or the deliberate failure cases below would abort the suite instead of being asserted.
 set +e
+# Pin the pool AFTER sourcing: the script honours an inherited SLOT_MAX, so a developer with
+# SLOT_MAX=4 exported would see the exhaustion assertion below fail for no reason.
+SLOT_MAX=3
 
 pass=0
 fail=0
