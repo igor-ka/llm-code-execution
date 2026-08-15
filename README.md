@@ -66,12 +66,18 @@ Dockerfile                   PRODUCTION image: SPA + API in one container, one o
 ## Setup
 
 ```bash
-cp .env.example .env
-# edit .env and set ANTHROPIC_API_KEY=sk-ant-...
+cp .env.example .env               # this checkout's stack: slot, ports, Compose project
+cp .env.shared.example .env.shared # shared across worktrees: API key, OIDC, limits
+# edit .env.shared and set ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+Two files, because a second worktree needs its own ports but must not need its own copy of your
+API key: `.env.shared` is symlinked into each worktree, `.env` is generated per worktree. A
+single checkout can keep everything in one `.env` if you prefer — `.env.shared` is optional
+everywhere. See [Parallel worktrees](#parallel-worktrees).
+
 The `/api/execute` auth gate is **on by default**. Set the `OIDC_ISSUER`, `OIDC_AUDIENCE`,
-and `OIDC_JWKS_URL` values for your provider (see `.env.example` and the Auth0 tenant setup
+and `OIDC_JWKS_URL` values for your provider (see `.env.shared.example` and the Auth0 tenant setup
 below). To run the backend without an identity provider for local dev, set `AUTH_REQUIRED=false`
 — the endpoint then accepts anonymous requests.
 
@@ -88,7 +94,7 @@ gracefully: the backend **refuses to start**. The per-user request quota is a se
 not an optional feature, so a missing variable must not silently disable it. Compose supplies
 `redis://redis:6379`; a host-run backend needs its own Redis (`docker run -p 6379:6379
 redis:7-alpine` is enough). The `RATE_LIMIT_*` and `SANDBOX_MAX_CONCURRENT` values in
-`.env.example` tune the limits — see *Rate limiting* under Security posture.
+`.env.shared.example` tune the limits — see *Rate limiting* under Security posture.
 
 ## Run (Docker Compose — recommended)
 
@@ -104,16 +110,73 @@ and try a prompt. Because auth is on by default, you'll need the Auth0 setup bel
 that anonymous mode). History data persists in the `pgdata` volume across restarts (`docker
 compose down -v` drops it).
 
+## Parallel worktrees
+
+Two features at once means two git worktrees, and each needs its own stack — the ports are the
+only thing that genuinely collides. Compose already gives each worktree its own containers,
+network and `pgdata` volume, keyed on `COMPOSE_PROJECT_NAME`, and sandbox containers are created
+unnamed with `NetworkMode: "none"`, so those never fight.
+
+Every host-facing port derives from one variable, `STACK_SLOT`, as `base + slot * 10`:
+
+| Slot | Frontend (open this) | Backend API | Postgres | Redis |
+| --- | --- | --- | --- | --- |
+| 0 (main checkout) | http://localhost:5173 | :8000 | :5432 | :6379 |
+| 1 | http://localhost:5183 | :8010 | :5442 | :6389 |
+| 2 | http://localhost:5193 | :8020 | :5452 | :6399 |
+| 3 | http://localhost:5203 | :8030 | :5462 | :6409 |
+
+Each is a self-contained app in its own browser tab: the SPA on `:5183` only ever calls `:8010`,
+whose history lives in the Postgres on `:5442`. You log in per tab — same Auth0 tenant, same
+account, separate origins.
+
+The pool stops at four because **Auth0's allowed origins are an exact-match allowlist** — every
+frontend port has to be registered in the dashboard (see the Auth0 setup above), so the ports
+cannot be arbitrary.
+
+`SANDBOX_IMAGE` is per-slot too (`llm-sandbox:slot1`). Image tags are daemon-wide: without this,
+a worktree editing `backend/sandbox-image/` would silently change what every *other* worktree's
+backend executes.
+
+To set a worktree up, create it, symlink the shared files, and write its `.env` from
+`.env.example` with the slot's ports:
+
+```bash
+git worktree add -b feat/thing .claude/worktrees/thing origin/main
+cd .claude/worktrees/thing
+ln -s ../../../.env.shared .env.shared                                    # the API key, once
+ln -s ../../../../.claude/settings.local.json .claude/settings.local.json # permission allowlist
+cp ../../../frontend/.env.local frontend/.env.local  # copied, not linked: build context
+printf 'VITE_DEV_PORT=5183\nVITE_API_BASE=http://localhost:8010\n' >> frontend/.env.local
+cp ../../../.env.example .env
+# then set STACK_SLOT, COMPOSE_PROJECT_NAME, and every port-derived value:
+# BACKEND_PORT, FRONTEND_PORT, PG_PORT, REDIS_PORT, FRONTEND_ORIGIN, PORT, SANDBOX_IMAGE,
+# DATABASE_URL, REDIS_URL. Leaving any of them at slot 0 silently points this worktree at
+# slot 0's Postgres, Redis or container names.
+(cd backend && npm ci) && (cd frontend && npm ci)
+```
+
+`frontend/.env.local` is copied rather than symlinked because `frontend/` is the frontend image's
+Docker build context, and a symlink pointing outside it does not survive `COPY . .`. Those are
+public SPA values, not secrets, so a copy costs nothing. The `printf` is not optional: the dev
+server uses `strictPort`, so a worktree still carrying slot 0's values fails to bind rather than
+drifting to a port Auth0 has never heard of.
+
+`node_modules` is deliberately not shared: lockfiles diverge per branch, so each worktree
+installs its own (~284 MB).
+
 ## Run locally without Compose
 
 ```bash
 # 1. Build the sandbox execution image (must match SANDBOX_IMAGE in .env)
-docker build -t llm-sandbox:latest backend/sandbox-image
+docker build -t llm-sandbox:slot0 backend/sandbox-image
 
 # 2. Backend
 cd backend
 npm install
-export $(grep -v '^#' ../.env | xargs)   # load env
+# .env.shared first, so this worktree's .env wins on any overlapping key — matching how
+# Compose (later env_file wins) and dotenv (earlier path wins) both resolve the pair.
+export $(grep -hv '^#' ../.env.shared ../.env | xargs)   # load env
 npm run dev            # or: npm run build && npm start
 
 # 3. Frontend (separate terminal)
@@ -137,8 +200,11 @@ API:
    `VITE_AUTH0_AUDIENCE` (e.g. `https://api.<something>.local`). Under **Permissions**, add a
    scope **`execute:code`** — this is the scope the backend requires.
 2. **A Single Page Application** (Applications → Applications). Its **Domain** and **Client ID**
-   are `VITE_AUTH0_DOMAIN` / `VITE_AUTH0_CLIENT_ID`. For local dev, add `http://localhost:5173`
-   to **Allowed Callback URLs**, **Allowed Logout URLs**, and **Allowed Web Origins**.
+   are `VITE_AUTH0_DOMAIN` / `VITE_AUTH0_CLIENT_ID`. For local dev, add **all four slot
+   origins** — `http://localhost:5173`, `:5183`, `:5193`, `:5203` — to **Allowed Callback
+   URLs**, **Allowed Logout URLs**, and **Allowed Web Origins**. These are an exact-match
+   allowlist, so a worktree on an unregistered port fails login with no useful error; register
+   the pool once and every slot works. See [Parallel worktrees](#parallel-worktrees).
 3. **Authorize the SPA to request the API** — once per app, *not* per user. On the SPA, open
    **APIs / API Application Access** and grant it user-delegated access to the API. Without
    this, `/authorize` fails with *"Client … is not authorized to access resource server …"*
