@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+# The numeric GitHub IDs come from:
+#   gh api repos/igor-ka/llm-code-execution --jq '{repo: .id, owner: .owner.id}'
+project_id           = "llm-code-exec-CHANGEME"
+region               = "us-central1"
+billing_account      = "000000-000000-000000"
+trial_start_date     = "2026-08-15" # the day the $300/90-day trial was activated
+github_owner_id      = "12536242"
+github_repository_id = "1252938976"
+github_repository    = "igor-ka/llm-code-execution"

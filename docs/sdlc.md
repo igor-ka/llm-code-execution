@@ -3,8 +3,8 @@
 How a change gets from an idea to `main` in this repository, and which skill governs each step.
 
 This document is a **contract**. If you change the development process — the skills in
-`.claude/skills/`, either `verify.sh`, anything in `scripts/`, or a workflow in
-`.github/workflows/` — update this file in the same change. The `SDLC docs` CI job enforces it,
+`.claude/skills/`, any of the three `verify.sh` scripts, `infra/tests/`, anything in
+`scripts/`, or a workflow in `.github/workflows/` — update this file in the same change. The `SDLC docs` CI job enforces it,
 and `CLAUDE.md` points here as the source of truth.
 See [Changing this SDLC](#changing-this-sdlc).
 
@@ -296,6 +296,7 @@ where it cannot be skipped.
  ./verify.sh  ───── same script ──▶  Backend checks   (install→lint→format→test→build→
                                                        integration→docker)
                                      Frontend checks  (install→lint→format→test→build→docker)
+                                     Terraform checks (selftest→fmt→init→validate→gates)
                                      SDLC docs        (process changes must update docs/sdlc.md)
                                      PR shape         (a PR closes at most one child issue)
                                             │
@@ -307,7 +308,7 @@ where it cannot be skipped.
 Details that are easy to get wrong:
 
 - **Job `name:` values are a contract.** The ruleset requires `Backend checks`,
-  `Frontend checks`, `SDLC docs` and `PR shape` by name. Renaming or removing a job silently
+  `Frontend checks`, `Terraform checks`, `SDLC docs` and `PR shape` by name. Renaming or removing a job silently
   blocks all merges until the ruleset is updated to match. Change what runs *inside* a job
   freely; keep the name stable, or update the ruleset in the same PR.
 - **Never add a CI check without adding it to the matching `verify.sh`, or vice versa.** That
@@ -490,7 +491,8 @@ This file is the contract, and it is enforced deterministically rather than by g
 **The rule:** a PR that touches any of
 
 - `.claude/skills/**`
-- `backend/verify.sh` or `frontend/verify.sh`
+- `backend/verify.sh`, `frontend/verify.sh` or `infra/verify.sh`
+- `infra/tests/**` — the gate self-tests `infra/verify.sh` runs first
 - `.github/workflows/**`
 - `scripts/**`
 

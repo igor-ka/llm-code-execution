@@ -13,8 +13,9 @@ and layout.
 ## Development lifecycle
 
 `docs/sdlc.md` is the full process — phases, gates, how it meets CI, and a worked example.
-**It is a contract:** if you change `.claude/skills/**`, either `verify.sh`,
-`.github/workflows/**`, or anything in `scripts/`, update `docs/sdlc.md` in the same PR.
+**It is a contract:** if you change `.claude/skills/**`, any of the three `verify.sh` scripts,
+`infra/tests/**`, `.github/workflows/**`, or anything in `scripts/`, update `docs/sdlc.md` in
+the same PR.
 The `SDLC docs` CI job enforces this; `[skip-sdlc-sync]` in the PR title is the escape hatch
 for a genuine no-op.
 
@@ -27,6 +28,7 @@ Which skill when — all vendored in `.claude/skills/`, loaded on demand:
 | Writing any logic, or fixing any bug | `test-driven-development` |
 | Any change touching more than one file | `incremental-implementation` |
 | Touching `backend/src/{auth.ts,history/**,sandbox/**}` or `backend/sandbox-image/**` | `security-and-hardening` (threat-model first) |
+| Touching `infra/**` | `security-and-hardening` (threat-model first) — IAM, federation and secrets live here |
 | Tests fail, builds break, behaviour surprises | `debugging-and-error-recovery` |
 | Committing, branching, versioning | `git-workflow-and-versioning` |
 | A decision worth preserving; README/ADR upkeep | `documentation-and-adrs` (ADRs → `docs/adr/`) |
@@ -41,9 +43,11 @@ Each side has one script that mirrors CI exactly — run it from that directory:
 
 - Backend: `cd backend && ./verify.sh`
 - Frontend: `cd frontend && ./verify.sh`
+- Infra: `cd infra && ./verify.sh`
 
-Both accept `SKIP_INSTALL=1` and `SKIP_DOCKER=1`. CI runs these same scripts, so never add
-a check to CI without adding it to the matching `verify.sh` (and vice versa).
+The backend and frontend scripts accept `SKIP_INSTALL=1` and `SKIP_DOCKER=1`; the infra script
+takes neither — it has no install step and builds no image. CI runs these same scripts, so never
+add a check to CI without adding it to the matching `verify.sh` (and vice versa).
 
 ## Review process
 
@@ -100,8 +104,8 @@ nothing a README reader relies on.
 ## CI job names are a contract
 
 The "Protect main" ruleset requires status checks by job name (`Backend checks`,
-`Frontend checks`, `SDLC docs`, `PR shape`). Renaming or removing a CI job breaks merges until
-the ruleset's required checks are updated to match. Change what runs *inside* a job freely; keep
+`Frontend checks`, `SDLC docs`, `PR shape`, `Terraform checks`). Renaming or removing a CI job
+breaks merges until the ruleset's required checks are updated to match. Change what runs *inside* a job freely; keep
 its name stable, or update the ruleset in the same PR.
 
 `SDLC docs` and `PR shape` (PRs only, each in its own workflow) are the two deliberate exceptions
