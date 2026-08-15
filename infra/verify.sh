@@ -58,8 +58,11 @@ validate() {
 # a plan. Payloads arrive via `gcloud secrets versions add` — see docs/runbooks/gcp-bootstrap.md.
 gate_no_secret_versions() {
   local dir="${1:-.}"
-  if grep -REn '^[[:space:]]*resource[[:space:]]+"google_secret_manager_secret_version"' \
-    --include='*.tf' "$dir"; then
+  # Both syntaxes: Terraform loads *.tf.json as configuration too, and a JSON resource keyed
+  # "google_secret_manager_secret_version" passes an HCL-shaped regex while `terraform validate`
+  # accepts it happily. Matching only *.tf left the S6 gate with a file extension for a bypass.
+  if grep -REn '"google_secret_manager_secret_version"' \
+    --include='*.tf' --include='*.tf.json' "$dir"; then
     echo "^^ a google_secret_manager_secret_version resource puts a plaintext secret in Terraform" >&2
     echo "   state, which spec S6 forbids. Add the version with 'gcloud secrets versions add'." >&2
     return 1
@@ -73,8 +76,9 @@ gate_no_secret_versions() {
 # is (P1-D2) — not inside it with a guard rail.
 gate_no_prevent_destroy() {
   local dir="${1:-.}"
-  if grep -REn '^[[:space:]]*prevent_destroy[[:space:]]*=[[:space:]]*true' \
-    --include='*.tf' "$dir"; then
+  # *.tf.json for the same reason as above; in JSON the key/value pair is "prevent_destroy": true.
+  if grep -REn 'prevent_destroy"?[[:space:]]*[:=][[:space:]]*true' \
+    --include='*.tf' --include='*.tf.json' "$dir"; then
     echo "^^ prevent_destroy blocks the day-91 teardown (spec S7). Keep unmanaged things out of" >&2
     echo "   Terraform entirely instead." >&2
     return 1
@@ -88,11 +92,12 @@ gate_no_prevent_destroy() {
 gate_no_state_in_git() {
   local dir="${1:-.}"
   local tracked
-  # '*.auto.tfvars' and '*.auto.tfvars.json' are in this list because .gitignore classifies them
-  # as real variable files too; without them `git add -f infra/prod.auto.tfvars` walks straight
-  # through a gate whose whole job is to stop exactly that.
-  tracked="$(git -C "$dir" ls-files -- '*.tfstate' '*.tfstate.*' 'terraform.tfvars' \
-    'terraform.tfvars.json' '*.auto.tfvars' '*.auto.tfvars.json' 2>/dev/null || true)"
+  # EVERY *.tfvars, not just the auto-loaded names. `prod.tfvars` is not loaded automatically —
+  # it is passed with -var-file — but it holds the same project and billing identifiers, so a
+  # gate that only knows the conventional names protects the file naming rather than the secret.
+  # terraform.tfvars.example survives because it does not end in .tfvars.
+  tracked="$(git -C "$dir" ls-files -- '*.tfstate' '*.tfstate.*' '*.tfvars' '*.tfvars.json' \
+    2>/dev/null || true)"
   if [[ -n "$tracked" ]]; then
     echo "tracked by git but must never be: $tracked" >&2
     echo "   Terraform state and real tfvars carry project and billing identifiers (spec S6)." >&2

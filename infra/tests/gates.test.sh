@@ -89,6 +89,57 @@ git -C "$work/autotfvars" init -q
 git -C "$work/autotfvars" add -A -f
 expect 1 "a tracked *.auto.tfvars fails the gate" "$work/autotfvars"
 
+# --- fixture: a secret VERSION in *.tf.json (S6) ---
+# Terraform loads JSON configuration as readily as HCL, so a gate that only reads *.tf protects
+# a file extension rather than the invariant.
+mkdir -p "$work/jsonversion"
+cat >"$work/jsonversion/main.tf.json" <<'EOF'
+{
+  "resource": {
+    "google_secret_manager_secret_version": {
+      "leak": { "secret": "projects/p/secrets/s", "secret_data": "hunter2" }
+    }
+  }
+}
+EOF
+git -C "$work/jsonversion" init -q
+git -C "$work/jsonversion" add -A
+expect 1 "a secret version in *.tf.json fails the gate" "$work/jsonversion"
+
+# --- fixture: prevent_destroy in *.tf.json (S7) ---
+mkdir -p "$work/jsonprevent"
+cat >"$work/jsonprevent/main.tf.json" <<'EOF'
+{
+  "resource": {
+    "google_storage_bucket": {
+      "keep": { "name": "x", "lifecycle": { "prevent_destroy": true } }
+    }
+  }
+}
+EOF
+git -C "$work/jsonprevent" init -q
+git -C "$work/jsonprevent" add -A
+expect 1 "a prevent_destroy in *.tf.json fails the gate" "$work/jsonprevent"
+
+# --- fixture: a tracked NON-auto-loaded tfvars (S6) ---
+# prod.tfvars is passed with -var-file rather than loaded automatically, but it carries the same
+# project and billing identifiers. A gate that knows only the conventional names guards naming.
+mkdir -p "$work/prodtfvars"
+echo 'resource "google_storage_bucket" "b" { name = "x" }' >"$work/prodtfvars/main.tf"
+echo 'billing_account = "012345-678901-234567"' >"$work/prodtfvars/prod.tfvars"
+git -C "$work/prodtfvars" init -q
+git -C "$work/prodtfvars" add -A -f
+expect 1 "a tracked prod.tfvars fails the gate" "$work/prodtfvars"
+
+# --- fixture: terraform.tfvars.example stays legal ---
+# The committed shape must survive the broadened pattern, or every clone fails its own gate.
+mkdir -p "$work/example"
+echo 'resource "google_storage_bucket" "b" { name = "x" }' >"$work/example/main.tf"
+echo 'project_id = "llm-code-exec-CHANGEME"' >"$work/example/terraform.tfvars.example"
+git -C "$work/example" init -q
+git -C "$work/example" add -A
+expect 0 "terraform.tfvars.example is still allowed" "$work/example"
+
 echo
 echo "passed: $pass  failed: $fail"
 [[ "$fail" -eq 0 ]]

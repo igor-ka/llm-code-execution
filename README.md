@@ -343,6 +343,10 @@ drift (CI invokes the same scripts). There are three: backend, frontend, and `in
   CSP shipped, that the policy names no plaintext origin, and that the runtime user is not root.
 - **Frontend:** `cd frontend && ./verify.sh` — installs deps, runs ESLint + Prettier +
   Vitest, type-checks/builds, and builds the frontend Docker image.
+- **Infra:** `cd infra && ./verify.sh` — runs the gate self-tests, then `terraform fmt -check`,
+  `init -backend=false`, `validate`, and the repo-specific gates. It needs **no credentials** and
+  deliberately runs no `terraform plan`: a plan requires a live project, and planning is a human
+  step in [`docs/runbooks/gcp-bootstrap.md`](docs/runbooks/gcp-bootstrap.md).
 
 The backend and frontend scripts accept `SKIP_INSTALL=1` (reuse the current environment) and `SKIP_DOCKER=1`
 (host checks only, skip the image build).

@@ -6,7 +6,7 @@ variable "project_id" {
     # Google's own rule. Caught here, it is one line of output; caught by the API it is a failed
     # apply partway through a dependency graph.
     condition     = can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]$", var.project_id))
-    error_message = "project_id must be 6-30 chars, lowercase letters/digits/hyphens, starting with a letter."
+    error_message = "project_id must be 6-30 chars of lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit."
   }
 }
 

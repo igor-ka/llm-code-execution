@@ -6,13 +6,14 @@
 *.tfstate.*
 .terraform.tfstate.lock.info
 
-# Real variable values (project + billing account IDs). The .example is the committed shape.
-# The .json variants are listed because Terraform loads them identically, and gate_no_state_in_git
-# in verify.sh matches the same set — the two lists are meant to agree.
-terraform.tfvars
-terraform.tfvars.json
-*.auto.tfvars
-*.auto.tfvars.json
+# Real variable values (project + billing account IDs). The .example is the committed shape and
+# survives because it does not end in .tfvars.
+#
+# EVERY *.tfvars, not only the auto-loaded names: prod.tfvars is passed with -var-file rather than
+# loaded automatically, but it carries the same identifiers. gate_no_state_in_git in verify.sh
+# matches this same set — the two lists are meant to agree.
+*.tfvars
+*.tfvars.json
 
 crash.log
 crash.*.log

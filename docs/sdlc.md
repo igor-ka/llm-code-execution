@@ -296,6 +296,7 @@ where it cannot be skipped.
  ./verify.sh  ───── same script ──▶  Backend checks   (install→lint→format→test→build→
                                                        integration→docker)
                                      Frontend checks  (install→lint→format→test→build→docker)
+                                     Terraform checks (selftest→fmt→init→validate→gates)
                                      SDLC docs        (process changes must update docs/sdlc.md)
                                      PR shape         (a PR closes at most one child issue)
                                             │
@@ -307,7 +308,7 @@ where it cannot be skipped.
 Details that are easy to get wrong:
 
 - **Job `name:` values are a contract.** The ruleset requires `Backend checks`,
-  `Frontend checks`, `SDLC docs` and `PR shape` by name. Renaming or removing a job silently
+  `Frontend checks`, `Terraform checks`, `SDLC docs` and `PR shape` by name. Renaming or removing a job silently
   blocks all merges until the ruleset is updated to match. Change what runs *inside* a job
   freely; keep the name stable, or update the ruleset in the same PR.
 - **Never add a CI check without adding it to the matching `verify.sh`, or vice versa.** That

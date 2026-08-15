@@ -28,6 +28,7 @@ Which skill when — all vendored in `.claude/skills/`, loaded on demand:
 | Writing any logic, or fixing any bug | `test-driven-development` |
 | Any change touching more than one file | `incremental-implementation` |
 | Touching `backend/src/{auth.ts,history/**,sandbox/**}` or `backend/sandbox-image/**` | `security-and-hardening` (threat-model first) |
+| Touching `infra/**` | `security-and-hardening` (threat-model first) — IAM, federation and secrets live here |
 | Tests fail, builds break, behaviour surprises | `debugging-and-error-recovery` |
 | Committing, branching, versioning | `git-workflow-and-versioning` |
 | A decision worth preserving; README/ADR upkeep | `documentation-and-adrs` (ADRs → `docs/adr/`) |
