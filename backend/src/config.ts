@@ -8,10 +8,12 @@
 import { config as loadDotenv } from "dotenv";
 import { resolve } from "node:path";
 
-// Repo-root .env for local dev, matching the README's `export $(... ../.env ...)`.
-// process.env always wins (dotenv does not override) and the file is absent in
-// Docker (env arrives via compose env_file), where this simply no-ops.
-loadDotenv({ path: "../.env" });
+// Repo-root env files for local dev. `.env` carries this worktree's stack identity (slot,
+// ports); `.env.shared` carries everything identical across worktrees (API key, OIDC, limits)
+// and is a symlink inside a worktree, so the key exists once. Most-specific first because
+// dotenv never overrides an already-set key — process.env still wins over both, and in Docker
+// both are absent (env arrives via compose env_file), where this simply no-ops.
+loadDotenv({ path: ["../.env", "../.env.shared"] });
 
 export interface Settings {
   anthropicApiKey: string;
