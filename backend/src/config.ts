@@ -158,29 +158,41 @@ export function assertRedisConfigured(settings: Settings): void {
   }
 }
 
-/** Slot N owns `base + N * SLOT_STEP` for each service — see "Parallel worktrees" in README.md. */
+/**
+ * Slot N owns `base + N * SLOT_STEP` for each service — see "Parallel worktrees" in README.md.
+ *
+ * `PORT` is deliberately absent. Compose pins the container's listener to 8000 regardless of slot
+ * (`docker-compose.yml`, `environment:`) and publishes it on `BACKEND_PORT`, so checking `PORT`
+ * would warn on every single Compose boot of a non-zero slot — and a check that cries wolf on the
+ * normal path teaches you to skip the one that matters. `BACKEND_PORT` carries the same
+ * information from `.env` and is correct in both topologies. A host-run backend that gets `PORT`
+ * wrong is self-revealing anyway: it either collides on bind or its own SPA cannot reach it.
+ */
 const SLOT_STEP = 10;
 const SLOT_PORT_BASES: Record<string, number> = {
-  PORT: 8000,
+  BACKEND_PORT: 8000,
+  FRONTEND_PORT: 5173,
+  PG_PORT: 5432,
+  REDIS_PORT: 6379,
   FRONTEND_ORIGIN: 5173,
   DATABASE_URL: 5432,
   REDIS_URL: 6379,
 };
 
+/** Sandbox image tags follow `…:slot<N>`. Anything else is left alone — a custom image is fine. */
+const SLOT_IMAGE_TAG = /:slot(\d+)$/;
+
 /**
  * The local port a value points at, or undefined when there is nothing checkable.
  *
- * Non-localhost hosts are skipped deliberately: under Compose these are rewritten to service
- * names on the compose network (`postgres:5432`), where the host-port scheme does not apply at
- * all. Only a host-run process uses localhost, and only a host-run process can land on another
- * slot's datastore.
+ * Bare numbers are the `*_PORT` variables. For URLs, non-localhost hosts are skipped
+ * deliberately: under Compose these are rewritten to service names on the compose network
+ * (`postgres:5432`), where the host-port scheme does not apply at all. Only a host-run process
+ * uses localhost, and only a host-run process can land on another slot's datastore.
  */
-function localPort(name: string, raw: string): number | undefined {
+function localPort(raw: string): number | undefined {
   if (raw === "") return undefined;
-  if (name === "PORT") {
-    const n = Number(raw);
-    return Number.isInteger(n) ? n : undefined;
-  }
+  if (/^\d+$/.test(raw)) return Number(raw);
   let url: URL;
   try {
     url = new URL(raw);
@@ -209,7 +221,7 @@ export function stackSlotWarnings(env: Env = process.env): string[] {
   }
   const warnings: string[] = [];
   for (const [name, base] of Object.entries(SLOT_PORT_BASES)) {
-    const actual = localPort(name, str(env[name], ""));
+    const actual = localPort(str(env[name], ""));
     if (actual === undefined) continue;
     const expected = base + slot * SLOT_STEP;
     if (actual !== expected) {
@@ -218,6 +230,23 @@ export function stackSlotWarnings(env: Env = process.env): string[] {
           `This worktree is sharing another slot's service.`,
       );
     }
+  }
+
+  // The image tag is the one non-port value that matters here, and it is the one whose mistake is
+  // worst: image tags are daemon-wide, so a slot-1 worktree left on slot 0's tag executes slot 0's
+  // sandbox image — defeating the isolation the per-slot tag exists to provide.
+  const image = str(env.SANDBOX_IMAGE, "");
+  const tagged = SLOT_IMAGE_TAG.exec(image);
+  if (tagged && Number(tagged[1]) !== slot) {
+    warnings.push(
+      `SANDBOX_IMAGE is "${image}", but STACK_SLOT=${slot} owns ":slot${slot}". ` +
+        `This worktree would execute another slot's sandbox image.`,
+    );
+  } else if (!tagged && image !== "" && slot !== 0) {
+    warnings.push(
+      `SANDBOX_IMAGE is "${image}", which carries no ":slot${slot}" tag, so it is shared with ` +
+        `every other worktree on this Docker daemon.`,
+    );
   }
   return warnings;
 }

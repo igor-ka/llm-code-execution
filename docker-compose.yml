@@ -90,9 +90,14 @@ services:
       dockerfile: Dockerfile
     environment:
       VITE_API_BASE: http://localhost:${BACKEND_PORT:-8000}
-      # Vite binds this inside the container too, so the mapping is port:port. `loadEnv` merges
-      # prefixed process.env over the .env files, so this wins over a copied-in .env.local.
+      # `loadEnv` merges prefixed process.env over the .env files, so this wins over the
+      # .env.local copied into the image.
       VITE_DEV_PORT: "${FRONTEND_PORT:-5173}"
+    # The ONE service whose container-internal port follows the slot (every other service keeps a
+    # fixed internal port and varies only the host side). Vite's HMR client derives its websocket
+    # URL from the configured server port, so under an uneven mapping the browser would load the
+    # page from the host port and then fail to reach HMR on the container's. A 1:1 mapping keeps
+    # browser origin, container listener and HMR client in agreement.
     ports:
       - "${FRONTEND_PORT:-5173}:${FRONTEND_PORT:-5173}"
     depends_on:
