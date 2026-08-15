@@ -13,7 +13,7 @@ GitHub Actions authenticates through Workload Identity Federation directly again
 it needs — no deployer service account, therefore no key to leak. A new `infra/verify.sh` and a
 `Terraform checks` CI job mirror each other from the first `.tf` file, per spec D10.
 
-**Tech Stack:** Terraform ~> 1.15, `hashicorp/google` ~> 7.42, `gcloud` CLI, GCS remote state,
+**Tech Stack:** Terraform ~> 1.15.0, `hashicorp/google` ~> 7.42, `gcloud` CLI, GCS remote state,
 Bash (gates + bootstrap), GitHub Actions.
 
 **PR boundaries:** six PRs, one child issue each, in this order:
@@ -88,9 +88,10 @@ impersonated service account, and if Phase 3 hits that, adding one is additive �
 provider here do not change.
 
 **P1-D5 — Least privilege is granted per resource, never per project.** The runtime identity gets
-`roles/secretmanager.secretAccessor` on each secret individually and
-`roles/artifactregistry.reader` on the one repository. No project-level role bindings appear in
-this plan.
+`roles/secretmanager.secretAccessor` on each secret individually, and **nothing on the registry**:
+Cloud Run pulls images as the service agent, not as the service's identity, so a reader binding
+here would only widen what a compromised application process can reach. No project-level role
+bindings appear in this plan.
 
 **P1-D6 — Two budgets, not one.** A budget that includes credits reports ≈ $0 until the credits
 are gone, so a single credit-inclusive alarm fires only once the money is real — too late to be
@@ -231,7 +232,10 @@ mkdir -p infra/tests
 # by a NEWER minor than the binary in hand, so pinning exactly would break the first machine that
 # upgraded. The provider is pinned to a minor range because a major bump renames resources.
 terraform {
-  required_version = "~> 1.15"
+  # `~> 1.15.0`, NOT `~> 1.15`: the two-component form permits 1.16, which can upgrade the
+  # state file to a version a 1.15.x workstation cannot read — and CI initializes with
+  # `-backend=false`, so it would never catch the mismatch. Bump this and the CI pin together.
+  required_version = "~> 1.15.0"
 
   required_providers {
     google = {
@@ -330,7 +334,15 @@ variable "github_repository_id" {
 
 variable "github_repository" {
   type        = string
-  description = "owner/repo, used only for readable resource descriptions — never as a trust boundary."
+  description = <<-EOT
+    owner/repo. SECURITY-SENSITIVE: this is interpolated into local.github_principal as
+    attribute.repository/<value>, so it decides which repository's Actions may assume the roles
+    granted in wif.tf. It is a trust boundary, not a label.
+
+    Renaming the repository on GitHub breaks federation until this value is updated and applied —
+    the numeric github_repository_id keeps the OWNER pinned across a rename, but the principalSet
+    matches on this string.
+  EOT
 }
 ```
 
@@ -569,7 +581,11 @@ gate_no_prevent_destroy() {
 gate_no_state_in_git() {
   local dir="${1:-.}"
   local tracked
-  tracked="$(git -C "$dir" ls-files -- '*.tfstate' '*.tfstate.*' 'terraform.tfvars' 2>/dev/null || true)"
+  # '*.auto.tfvars' and '*.auto.tfvars.json' are in this list because .gitignore classifies them
+  # as real variable files too; without them `git add -f infra/prod.auto.tfvars` walks straight
+  # through a gate whose whole job is to stop exactly that.
+  tracked="$(git -C "$dir" ls-files -- '*.tfstate' '*.tfstate.*' 'terraform.tfvars' \
+    'terraform.tfvars.json' '*.auto.tfvars' '*.auto.tfvars.json' 2>/dev/null || true)"
   if [[ -n "$tracked" ]]; then
     echo "tracked by git but must never be: $tracked" >&2
     echo "   Terraform state and real tfvars carry project and billing identifiers (spec S6)." >&2
@@ -1260,7 +1276,7 @@ resource "google_artifact_registry_repository" "app" {
       tag_state = "UNTAGGED"
       # A grace period, not zero: an untagged image is briefly the normal state during a push,
       # and deleting one mid-push is a race the registry should not be asked to win.
-      older_than = "7d"
+      older_than = "604800s" # protobuf Duration — a "7d" suffix is rejected
     }
   }
 
@@ -1274,7 +1290,7 @@ resource "google_artifact_registry_repository" "app" {
     action = "DELETE"
     condition {
       tag_state  = "TAGGED"
-      older_than = "30d"
+      older_than = "2592000s" # protobuf Duration — a "30d" suffix is rejected
     }
   }
 
@@ -1322,14 +1338,16 @@ resource "google_service_account" "runtime" {
   depends_on = [google_project_service.phase1]
 }
 
-# Pulling the image is scoped to the ONE repository, not to roles/artifactregistry.reader at the
-# project level. There is one repository today; the difference matters the moment there are two.
-resource "google_artifact_registry_repository_iam_member" "runtime_reader" {
-  location   = google_artifact_registry_repository.app.location
-  repository = google_artifact_registry_repository.app.name
-  role       = "roles/artifactregistry.reader"
-  member     = "serviceAccount:${google_service_account.runtime.email}"
-}
+# NO artifactregistry.reader for the runtime identity — deliberately.
+#
+# Cloud Run pulls the image with the Cloud Run SERVICE AGENT
+# (service-<number>@serverless-robot-prod.iam.gserviceaccount.com), not with the service's runtime
+# identity, and in a same-project setup that agent already holds the access. Granting the runtime
+# SA a reader role would hand a compromised application process the ability to enumerate and pull
+# every image in the repository, buying nothing — which is exactly what P1-D5 exists to prevent.
+#
+# If Phase 2 ever pulls from a DIFFERENT project, it is the service agent of the consuming
+# project that needs the grant, still not this identity.
 ```
 
 - [ ] **Step 2: Write the outputs**
@@ -1836,8 +1854,11 @@ git commit -m "feat(infra): budget alarms for credit burn and real spend"
    and it will block re-creating a pool with the same ID inside that window. Task 16's rebuild
    rehearsal deliberately spares the pool for the same reason; say so here so the next reader
    does not mistake it for something the destroy missed.
-6. **Proving zero** — how to read the billing report a day later, and that the `actual charges`
-   budget from Task 14 is the standing alarm if something was missed.
+6. **Proving zero** — how to read the billing report a day later. Note explicitly that **no budget
+   survives to alarm on it**: both `google_billing_budget` resources are destroyed by the teardown
+   above, so the day-later billing check is the *only* backstop and skipping it means a missed
+   resource bills silently. (Keeping a budget alive would contradict "zero billable resources"
+   just as much — the fix is to read the report, not to leave an alarm behind.)
 7. **Rebuilding** — a one-line pointer back to the bootstrap runbook.
 
 - [ ] **Step 2: Commit**
@@ -1879,13 +1900,22 @@ cat /tmp/before.txt
 
 - [ ] **Step 2: Destroy everything except the federation**
 
-`-target` is inclusive, so this names the roots to destroy and Terraform takes their dependents
-with them — which correctly includes the two WIF *bindings* (`ci_writer`, `ci_act_as_runtime`),
-since those reference the registry and the service account. Bindings recreate cleanly; only the
-pool and provider have the soft-delete problem.
+**Name every address explicitly, including the IAM members.** Do not rely on `-target` sweeping up
+dependents: `-target` is documented to pull in the resources a target *depends on*, and whether it
+also pulls in resources that depend on it is exactly the kind of subtlety that differs between
+versions and is miserable to debug against a live project. Enumerating costs one line each and is
+correct under either reading. An IAM member left behind here is worse than a leftover resource: its
+state entry survives while its parent is gone, and the next `apply` fails on a stale reference.
+
+Only the pool and provider are spared, for the soft-delete reason above.
 
 ```bash
-terraform destroy \
+# Plan FIRST and read it. A targeted destroy is the one operation here that can silently do less
+# than you meant; `terraform state list` after the fact tells you what survived, which is too late.
+terraform plan -destroy \
+  -target=google_artifact_registry_repository_iam_member.ci_writer \
+  -target=google_service_account_iam_member.ci_act_as_runtime \
+  -target=google_secret_manager_secret_iam_member.runtime_accessor \
   -target=google_artifact_registry_repository.app \
   -target=google_service_account.runtime \
   -target=google_secret_manager_secret.app \
@@ -1893,9 +1923,17 @@ terraform destroy \
   -target=google_billing_budget.real_spend
 ```
 
-Expected: those resources plus their dependent IAM members destroyed, no errors. The APIs stay
-enabled by design (`disable_on_destroy = false`, Task 3), and the pool, provider and
-`ci_run_admin` binding are untouched.
+Confirm the plan destroys exactly those addresses and nothing federation-related, then re-run the
+same command as `terraform destroy` (same `-target` flags, `-auto-approve` omitted so you approve
+it by hand).
+
+Expected: those resources destroyed, no errors. The APIs stay enabled by design
+(`disable_on_destroy = false`, Task 3), and the pool, provider and `ci_run_admin` binding are
+untouched.
+
+If an address in the list does not exist in this configuration under that exact name, fix the list
+rather than dropping the flag — a `-target` for a nonexistent address is a no-op warning, not an
+error, so a typo here fails silently.
 
 - [ ] **Step 3: Confirm nothing billable survived**
 
@@ -1979,7 +2017,7 @@ Beyond `.claude/skills/references/definition-of-done.md`, this phase is done whe
 | Spec criterion | How this plan satisfies it |
 | --- | --- |
 | S6 (no secret in state) | Structural: only containers in Terraform, payloads via `gcloud`, and a tested gate that fails the build if a version resource is ever added. Verified by `terraform state pull \| grep`. |
-| S7 (apply/destroy reproduce) | Task 16 destroys and rebuilds, diffing `terraform state list` before and after. |
+| S7 (apply/destroy reproduce) | **Half proven here, half deferred.** Task 16 destroys and rebuilds all non-federation resources, diffing `terraform state list` — that is the *reproduce* half. The *zero billable resources* half is NOT proven by that rehearsal: it spares the WIF pool (soft-delete) and the state bucket (P1-D2). Both are removed only by the Task 15 teardown, which ends in `gcloud projects delete`; S7 closes when that runbook is executed on day 91, not here. |
 | S8 (budget alarm, teardown runbook) | Task 14's two budgets and Task 15's runbook. |
 | S9 (no long-lived key) | No deployer service account exists to hold one (P1-D4). |
 | S11 (verify.sh / CI parity) | `infra/verify.sh` and `.github/workflows/terraform.yml` run the same targets; `docs/sdlc.md` updated in PR 1 with the watched-path change enforcing it. |
