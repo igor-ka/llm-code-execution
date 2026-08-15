@@ -65,8 +65,16 @@ integration() {
 # `|| pwd` fallback, which would be worse than useless — this script cds to its own directory
 # first, so the fallback would resolve to `backend` on every machine and silently restore the
 # very collision this exists to prevent.
+# A basename alone is neither unique nor bounded: `worktree-new.sh llm-code-execution` would give
+# a worktree the same basename as the main checkout, restoring the collision, and Docker caps a
+# tag at 128 characters — which `${tag}-argcheck` below would breach for a long directory name.
+# So: a readable, truncated name for humans plus a checksum of the FULL path for uniqueness.
+# `cksum` rather than shasum/sha1sum because it is POSIX and present on both macOS and CI.
 verify_tag() {
-  printf 'verify-%s\n' "$(printf '%s' "$(basename "$CHECKOUT_ROOT")" | tr -c '[:alnum:]._-' '-')"
+  local name sum
+  name="$(printf '%s' "$(basename "$CHECKOUT_ROOT")" | tr -c '[:alnum:]._-' '-' | cut -c1-24)"
+  sum="$(printf '%s' "$CHECKOUT_ROOT" | cksum | cut -d' ' -f1)"
+  printf 'verify-%s-%s\n' "$name" "$sum"
 }
 
 docker_() {
