@@ -81,7 +81,6 @@ export function mountSpaFallback(app: Express, publicDir: string): void {
     return serveAssets(req, res, next);
   });
 
-  const indexHtml = join(publicDir, "index.html");
   app.use((req: Request, res: Response, next: NextFunction) => {
     // Only GET/HEAD reach the SPA; anything else unmatched is a genuine 404/405.
     if (req.method !== "GET" && req.method !== "HEAD") return next();
@@ -95,6 +94,11 @@ export function mountSpaFallback(app: Express, publicDir: string): void {
     // a stale index.html asks for a purged /assets/index-abc123.js and receives HTML with a 200,
     // failing later as an opaque module-parse error instead of an honest missing-asset 404.
     if (posix.basename(path).includes(".")) return next();
-    res.sendFile(indexHtml);
+    // `root` + a relative name, NOT an absolute path. Handed an absolute path, `send` applies
+    // its dotfile guard to EVERY segment of it — including ones no request ever touched — so an
+    // app served from under any hidden directory (a git worktree in `.claude/worktrees/`, a
+    // deploy under `/opt/.local/app`) 404s every deep link. Scoping to `root` confines that
+    // guard to the part the request actually controls, which is the only part it was for.
+    res.sendFile("index.html", { root: publicDir });
   });
 }
