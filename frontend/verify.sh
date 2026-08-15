@@ -52,7 +52,13 @@ build() {
     exit 1
   fi
 }
-docker_() { run docker build -t llm-code-execution-frontend:verify .; }
+docker_() {
+  # Daemon-wide tag, unique per worktree — see the same note in backend/verify.sh.
+  local name tag
+  name="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
+  tag="verify-$(printf '%s' "$name" | tr -c '[:alnum:]._-' '-')"
+  run docker build -t "llm-code-execution-frontend:${tag}" .
+}
 
 all() {
   [[ "${SKIP_INSTALL:-}" == "1" ]] || install

@@ -502,6 +502,26 @@ That last entry is deliberate: this document describes the exact semantics of th
 `scripts/` — their watched paths, failure messages and escape hatches — so a change to one that
 skipped the doc would leave the two silently disagreeing.
 
+`scripts/` also holds **developer tooling that is not a CI check**: `scripts/worktree-new.sh`
+creates a git worktree with its own application stack. The watched-path rule covers it too, and
+that is the right outcome rather than an accident — the stack-slot contract it encodes (which
+ports a slot owns, and the Auth0 origins that bound the pool) is process. A change to it that
+skipped the docs would leave `README.md`'s slot table and `backend/src/config.ts`'s
+`stackSlotWarnings()` describing a scheme the script no longer implements.
+
+Its unit tests, `scripts/tests/worktree-new.test.sh`, run **locally only** — CI never creates a
+worktree, so there is nothing there for them to protect. That is why they are absent from the two
+jobs named above, and why they are **not** an exception to the `verify.sh` mirroring rule: there
+is no CI check to mirror. Run them before pushing a change to the script.
+
+One consequence of that tooling reaches the `verify.sh` scripts. Docker image tags are
+daemon-wide, and `backend/verify.sh`'s `docker` target *builds* a tag and then *runs* it. With two
+worktrees verifying at once a fixed `…:verify` tag lets one tree's assertions execute the other
+tree's image — a pass or fail belonging to a different branch. `backend/verify.sh` and
+`frontend/verify.sh` therefore derive their throwaway tags from the checkout's directory name
+(`verify-<dirname>`), which is unique per worktree and deterministic in CI. `infra/verify.sh`
+needs no equivalent: it builds no image.
+
 **The enforcement:** the `SDLC docs` job — in its own workflow, `.github/workflows/sdlc-docs.yml`
 — runs `scripts/check-sdlc-sync.sh`, which diffs the PR against its base and fails with a message
 naming the files that changed. Pull requests only, since it needs a base to compare against.
