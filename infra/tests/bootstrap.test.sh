@@ -35,11 +35,16 @@ trap 'rm -rf "$work"' EXIT
 make_fake_gcloud() {
   local describe_exit="$1"
   mkdir -p "$work/bin"
+  local bucket_project="${2:-530312723651}"
+  local bucket_location="${3:-US-CENTRAL1}"
   cat >"$work/bin/gcloud" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$work/calls.log"
 case "\$*" in
-  *"buckets describe"*) exit $describe_exit ;;
+  *"buckets describe"*"projectNumber"*) echo "$bucket_project"; exit 0 ;;
+  *"buckets describe"*"location"*)      echo "$bucket_location"; exit 0 ;;
+  *"buckets describe"*)                 exit $describe_exit ;;
+  *"projects describe"*)                echo "530312723651"; exit 0 ;;
 esac
 exit 0
 EOF
@@ -92,6 +97,40 @@ if logged "--lifecycle-file"; then
   ok "existing bucket still gets the lifecycle cap"
 else
   bad "existing bucket still gets the lifecycle cap" "$(cat "$work/calls.log")"
+fi
+
+# --- the existing bucket belongs to a DIFFERENT project ------------------------------------------
+# Bucket names are global, so a describe that succeeds proves visibility, not ownership. Pointing
+# state at someone else's bucket survives the day-91 `gcloud projects delete` — a silent leak of
+# exactly the kind S7 exists to prevent.
+make_fake_gcloud 0 "999999999999" "US-CENTRAL1"
+if run_bootstrap; then
+  bad "a bucket owned by another project is refused" "$(cat "$work/out.txt")"
+else
+  ok "a bucket owned by another project is refused"
+fi
+if logged "--public-access-prevention"; then
+  bad "no hardening is applied to a foreign bucket" "$(cat "$work/calls.log")"
+else
+  ok "no hardening is applied to a foreign bucket"
+fi
+
+# --- the existing bucket is in a DIFFERENT region -------------------------------------------------
+make_fake_gcloud 0 "530312723651" "EUROPE-WEST1"
+if run_bootstrap; then
+  bad "a bucket in the wrong region is refused" "$(cat "$work/out.txt")"
+else
+  ok "a bucket in the wrong region is refused"
+fi
+
+# --- region comparison is case-insensitive --------------------------------------------------------
+# The API answers US-CENTRAL1; the argument is us-central1. macOS ships bash 3.2, where ${var^^}
+# is a syntax error rather than a no-op, so this case also pins the portable implementation.
+make_fake_gcloud 0 "530312723651" "us-central1"
+if run_bootstrap; then
+  ok "region comparison ignores case"
+else
+  bad "region comparison ignores case" "$(cat "$work/out.txt")"
 fi
 
 # --- a gcloud failure must not be swallowed ------------------------------------------------------

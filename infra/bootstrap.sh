@@ -21,6 +21,35 @@ fi
 # No --project on describe: bucket names are global, and the flag is not accepted here.
 if gcloud storage buckets describe "gs://${bucket}" >/dev/null 2>&1; then
   echo "==> gs://${bucket} already exists"
+
+  # A successful describe proves only that a bucket with this GLOBAL name exists and that you can
+  # see it — not that it is yours, in this project, or in this region. Without this check a stale
+  # project ID on the command line (or a bucket left behind by an earlier project of your own)
+  # would be hardened and then handed Terraform's state, which the day-91 `gcloud projects delete`
+  # would not remove. State outside the project the teardown deletes is precisely the leak S7
+  # exists to prevent, and it would be silent.
+  #
+  # projectNumber is only in the --raw (JSON API) projection; the default projection omits it.
+  actual="$(gcloud storage buckets describe "gs://${bucket}" --raw --format='value(projectNumber)')"
+  expected="$(gcloud projects describe "$project" --format='value(projectNumber)')"
+  actual_location="$(gcloud storage buckets describe "gs://${bucket}" --format='value(location)')"
+
+  if [[ "$actual" != "$expected" ]]; then
+    echo "gs://${bucket} belongs to project number ${actual}, not ${expected} (${project})." >&2
+    echo "   Bucket names are global. Refusing to point Terraform state at a bucket this" >&2
+    echo "   project does not own — the teardown would never delete it." >&2
+    exit 1
+  fi
+  # `tr`, not ${var^^}: macOS ships bash 3.2, where the case-conversion expansion is a syntax
+  # error rather than a no-op — every developer on a Mac would hit it on their second run.
+  actual_upper="$(printf '%s' "$actual_location" | tr '[:lower:]' '[:upper:]')"
+  region_upper="$(printf '%s' "$region" | tr '[:lower:]' '[:upper:]')"
+  if [[ "$actual_upper" != "$region_upper" ]]; then
+    echo "gs://${bucket} is in ${actual_location}, not ${region}." >&2
+    echo "   Refusing to continue: the region is pinned in var.region and a split location" >&2
+    echo "   makes the teardown's accounting wrong." >&2
+    exit 1
+  fi
 else
   echo "==> creating gs://${bucket}"
   gcloud storage buckets create "gs://${bucket}" \
