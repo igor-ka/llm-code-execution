@@ -129,6 +129,33 @@ eq "the first claim wins when a file was hand-edited" 1 "$(printf 'STACK_SLOT=1\
 ) && eq "reading a duplicated claim exits clean under pipefail" 0 0 ||
   eq "reading a duplicated claim exits clean under pipefail" 0 1
 
+# --- the Auth0 detection that decides whether a worktree is usable ---
+#
+# frontend/.env.example ships the three VITE_AUTH0_* names with EMPTY values, so a checkout that
+# copied the example without filling it in matches on the prefix alone. The blocker exists to
+# catch exactly that case, so prefix matching would disable the check it guards.
+auth0_lines() { grep -E '^VITE_AUTH0_[A-Z_]+=.+' || true; }
+
+eq "a filled-in file is detected" "VITE_AUTH0_DOMAIN=x.auth0.com" \
+  "$(printf 'VITE_AUTH0_DOMAIN=x.auth0.com\n' | auth0_lines)"
+eq "the unfilled example is NOT mistaken for configuration" "" \
+  "$(printf 'VITE_AUTH0_DOMAIN=\nVITE_AUTH0_CLIENT_ID=\nVITE_AUTH0_AUDIENCE=\n' | auth0_lines)"
+eq "a partially filled file yields only the real values" "VITE_AUTH0_CLIENT_ID=abc" \
+  "$(printf 'VITE_AUTH0_DOMAIN=\nVITE_AUTH0_CLIENT_ID=abc\n' | auth0_lines)"
+
+# --- the lock release must not abort the exit handler ---
+#
+# `rmdir` sits after the final `&&` in on_exit, so it is NOT exempt from errexit: a lock already
+# removed by hand — which the script itself suggests as the stale-lock remedy — would otherwise
+# kill the handler before its guidance prints, and turn a successful run into exit 1.
+(
+  set -euo pipefail
+  LOCK_DIR="/nonexistent/lock/path"
+  [[ -n "$LOCK_DIR" ]] && { rmdir "$LOCK_DIR" 2>/dev/null || true; }
+  exit 0
+) && eq "removing an already-gone lock does not abort the handler" 0 0 ||
+  eq "removing an already-gone lock does not abort the handler" 0 1
+
 echo
 printf '  %d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
