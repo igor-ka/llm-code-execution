@@ -4,6 +4,11 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     env_file:
+      # Shared across worktrees (API key, OIDC, limits). Optional so a single-tree checkout
+      # with one fat .env, and CI, both keep working with no such file.
+      - path: .env.shared
+        required: false
+      # This worktree's stack identity. Listed second so it wins on any overlapping key.
       - .env
     environment:
       # Inside the container the frontend is reached from the browser, so CORS uses the
@@ -19,7 +24,7 @@ services:
       # below, the README's curl commands and the SPA's VITE_API_BASE default all keep working.
       PORT: "8000"
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     volumes:
       # The backend launches *sibling* sandbox containers via the host Docker daemon.
       # This is the local-dev seam that a CloudRunBackend would replace in GCP.
@@ -55,9 +60,10 @@ services:
       POSTGRES_DB: app
     volumes:
       - pgdata:/var/lib/postgresql/data
-    # Exposed on the host so local integration tests can reach it at localhost:5432.
+    # Exposed on the host so local integration tests can reach it. The host port is
+    # slot-derived so two worktrees' stacks do not fight over 5432.
     ports:
-      - "5432:5432"
+      - "${PG_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U app -d app"]
       interval: 5s
@@ -69,9 +75,9 @@ services:
   # over-allowance. (The backend still refuses to boot without this service — D6.)
   redis:
     image: redis:7-alpine
-    # Exposed on the host so local integration tests can reach it at localhost:6379.
+    # Exposed on the host so local integration tests can reach it; slot-derived like Postgres.
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -83,9 +89,12 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     environment:
-      VITE_API_BASE: http://localhost:8000
+      VITE_API_BASE: http://localhost:${BACKEND_PORT:-8000}
+      # Vite binds this inside the container too, so the mapping is port:port. `loadEnv` merges
+      # prefixed process.env over the .env files, so this wins over a copied-in .env.local.
+      VITE_DEV_PORT: "${FRONTEND_PORT:-5173}"
     ports:
-      - "5173:5173"
+      - "${FRONTEND_PORT:-5173}:${FRONTEND_PORT:-5173}"
     depends_on:
       - backend
 
