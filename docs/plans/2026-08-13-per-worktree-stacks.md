@@ -1368,3 +1368,35 @@ two worktrees verifying at the same instant, which needs PR 2's tooling to be ro
 **Add to PR 2:** derive the tag suffix automatically inside both scripts — e.g.
 `basename "$(git rev-parse --show-toplevel)"` — so it is unique per worktree with nothing to
 remember, and deterministic in CI.
+
+---
+
+**PR 2 (#141), 2026-08-15 — shipped, with both reviews incorporated.**
+
+The deferred `verify.sh` tag fix landed here as planned, though not in the form the note above
+suggested: `git rev-parse --show-toplevel` was replaced by a root captured from the script's own
+location (correct in an exported tree, and it cannot depend on how the script was invoked), and
+the basename alone turned out to be neither unique — `worktree-new.sh llm-code-execution` would
+give a worktree the main checkout's tag — nor bounded against Docker's 128-character tag limit.
+The tag is now `verify-<name-truncated>-<cksum of the full path>`.
+
+`code-review high` returned seven findings, all applied. Every one was the same shape as PR 1's:
+a mistake with no signal. The two that mattered most were `slot_of` piping sed into `head -1`
+(under the inherited `pipefail`, a SIGPIPE can kill `used_slots` mid-loop, dropping claims and
+handing out a slot twice) and the script reporting `✓ worktree ready` for a tree with no API key.
+
+Copilot then found six more on the fixes themselves, all applied. The significant one was that
+slot allocation is check-then-act: two concurrent runs could both claim the same slot. That is now
+serialised behind an atomic `mkdir` lock spanning the read and the `.env` write. It also correctly
+pushed back on the "warn about a missing `.env.shared`" approach — the unsplit layout is
+documented as supported, so `.env.shared` now falls back to a symlink to the root `.env`, which
+the env-file ordering makes safe in both topologies.
+
+Four defects were caught in the fixes themselves while verifying them, which is the argument for
+running the checks rather than reasoning about them: `${BASH_SOURCE[0]}` broke under
+`backend/verify.sh` invoked from the repo root; `basename`'s trailing newline was translated into
+a dash by `tr -c`, so every tag ended in one; the EXIT trap read `local`s that were out of scope
+by the time it fired, so `set -u` killed the handler before it released the lock; and the
+`.env` fallback was filed under "will NOT run yet" when it does in fact run.
+
+Epic #136 complete.
