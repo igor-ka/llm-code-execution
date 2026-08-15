@@ -66,7 +66,8 @@ is where previews land first; Google publishes no region list for the sandboxes 
 requirement and the resource-sharing limitation but no regions), so "the region previews reach
 first" is the best available proxy. Cost: ~40 ms of extra latency from Montreal versus
 `northamerica-northeast1`, and US data residency for disposable learning data. Every resource
-reads `var.region`, so reversing this is a one-line change plus a rebuild.
+reads `var.region`, so reversing this is a one-line change plus a rebuild — which is why
+Prerequisite 9 probes the sandbox flag in this region *before* PR 3 pins anything to it.
 
 **P1-D2 — The state bucket is not Terraform-managed.** It is created by `infra/bootstrap.sh` and
 deleted by the teardown runbook as its last step. A bucket managed by the state it stores makes
@@ -131,6 +132,30 @@ gcloud services enable cloudresourcemanager.googleapis.com serviceusage.googleap
    `apis.tf` can never get far enough to fix. Idempotent, so it costs nothing if they were already
    on.
 8. `gcloud auth login` and `gcloud auth application-default login` — Terraform reads the latter.
+9. **Confirm Cloud Run sandboxes actually exist in `var.region` before anything pins it.** Five
+   minutes, no meaningful spend, and it converts the epic's largest open assumption into a fact
+   while reversing it is still cheap:
+
+```bash
+gcloud beta run deploy sandbox-probe --region us-central1 \
+  --image us-docker.pkg.dev/cloudrun/container/hello \
+  --execution-environment gen2 --sandbox-launcher --no-allow-unauthenticated --quiet
+gcloud beta run services describe sandbox-probe --region us-central1 \
+  --format='value(spec.template.spec.containers[0].sandboxLauncher)'   # expect: True
+gcloud run services delete sandbox-probe --region us-central1 --quiet
+```
+
+   **Why here and not in Phase 2.** [D6](../specs/2026-08-09-deploy-to-gcp.md) rests the entire
+   sandbox design on a **public-preview** feature, and P1-D1 picks the region by proxy because
+   Google publishes no availability list for it. From PR 3 onward this plan pins `var.region` into
+   the registry, the secrets and the federation; P1-D1's "one line plus a rebuild" stays true only
+   while there is nothing to rebuild. Discovering in Phase 2 that the flag is rejected here would
+   invalidate the region *after* the secrets are populated.
+
+   If the deploy is rejected — unknown flag, or the region is not supported — **stop and raise it**
+   rather than continuing. The choices are a different region (change `var.region`, nothing else)
+   or falling back to the Cloud Run Jobs backend D6 rejected, and both are decisions, not
+   adjustments.
 
 ---
 
