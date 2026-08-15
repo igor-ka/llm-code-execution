@@ -25,6 +25,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# The checkout root, captured AFTER the cd above so it cannot depend on how this script was
+# invoked: cwd is now the script's own directory, so the root is simply its parent. The
+# basename is unique per worktree, which is what scopes the throwaway image tags below.
+CHECKOUT_ROOT="$(cd .. && pwd)"
+
 run() {
   echo
   echo "==> $*"
@@ -54,10 +59,14 @@ integration() {
 # execute the other tree's image and report a pass or fail that belongs to a different branch.
 # The checkout's directory name is unique per worktree (see "Parallel worktrees" in README.md)
 # and deterministic in CI. Sanitised because a directory name is not necessarily a legal tag.
+#
+# Derived from CHECKOUT_ROOT above, NOT from `git rev-parse --show-toplevel`: the name is then
+# correct in an exported tree or source archive too, where there is no git. And NOT from a
+# `|| pwd` fallback, which would be worse than useless — this script cds to its own directory
+# first, so the fallback would resolve to `backend` on every machine and silently restore the
+# very collision this exists to prevent.
 verify_tag() {
-  local name
-  name="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
-  printf 'verify-%s\n' "$(printf '%s' "$name" | tr -c '[:alnum:]._-' '-')"
+  printf 'verify-%s\n' "$(printf '%s' "$(basename "$CHECKOUT_ROOT")" | tr -c '[:alnum:]._-' '-')"
 }
 
 docker_() {

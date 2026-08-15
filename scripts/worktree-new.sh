@@ -30,7 +30,14 @@ BASE_REDIS=6379
 port_for() { echo $(($1 + $2 * SLOT_STEP)); }
 
 # slot_of — read a .env on stdin, print the slot it claims (nothing if it claims none).
-slot_of() { sed -nE 's/^STACK_SLOT=([0-9]+).*/\1/p' | head -1; }
+#
+# `q` inside sed rather than `| head -1`: under `set -o pipefail` a hand-edited .env with two
+# STACK_SLOT lines can leave sed killed by SIGPIPE (141), which becomes the pipeline's status and,
+# since this is the last command in used_slots' loop body, kills that subshell mid-iteration.
+# Every remaining worktree's claim is then dropped and free_slot hands out a slot that is already
+# taken — the one invariant this whole design exists to hold. Same hazard scripts/check-sdlc-sync.sh
+# documents for `grep -q` on a large diff.
+slot_of() { sed -nE '/^STACK_SLOT=/{s/^STACK_SLOT=([0-9]+).*/\1/p;q;}'; }
 
 # free_slot <used-slot>... -> the lowest slot in 1..SLOT_MAX that is not in use.
 # Slot 0 is reserved for the main checkout, whose ports the README and every curl example name.
@@ -132,13 +139,20 @@ used_slots() {
 }
 
 main() {
-  local slug="${1:-}"
-  # No slashes: the symlink targets below are literal `../..` chains, correct only for a single
-  # directory level under .claude/worktrees/.
+  local slug="${1:-}" branch="${2:-}"
+  # No slashes in the SLUG: it names the directory, and the symlink targets below are literal
+  # `../..` chains, correct only for a single level under .claude/worktrees/. The BRANCH is a
+  # separate argument precisely so `fix/…`, `chore/…` and `docs/…` are reachable — the slug's
+  # own restriction must not dictate the branch namespace.
   if [[ ! "$slug" =~ ^[A-Za-z0-9._-]+$ ]]; then
-    echo "usage: scripts/worktree-new.sh <slug>   (letters, digits, dot, dash, underscore)" >&2
+    {
+      echo "usage: scripts/worktree-new.sh <slug> [branch]"
+      echo "  slug    directory under .claude/worktrees/ (letters, digits, dot, dash, underscore)"
+      echo "  branch  branch to create (default: feat/<slug>)"
+    } >&2
     exit 2
   fi
+  branch="${branch:-feat/$slug}"
 
   # Run from the main checkout only. In a linked worktree `.git` is a file, not a directory — and
   # creating a worktree from inside one would nest .claude/worktrees/ inside itself.
@@ -152,6 +166,12 @@ main() {
     echo "✗ $dir already exists." >&2
     exit 1
   fi
+  # Pre-flight, like the $dir check: otherwise `git worktree add -b` aborts AFTER the fetch and
+  # surfaces git's error instead of this one.
+  if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$branch"; then
+    echo "✗ branch '$branch' already exists. Pass a different one: worktree-new.sh $slug <branch>" >&2
+    exit 1
+  fi
 
   local slot project
   slot="$(free_slot $(used_slots))"
@@ -160,14 +180,44 @@ main() {
   echo "==> slot ${slot} — frontend http://localhost:$(port_for "$BASE_FRONTEND" "$slot"), backend :$(port_for "$BASE_BACKEND" "$slot")"
 
   git -C "$ROOT" fetch origin
-  git -C "$ROOT" worktree add -b "feat/$slug" "$dir" origin/main
+  git -C "$ROOT" worktree add -b "$branch" "$dir" origin/main
+
+  # From here the worktree and branch exist on disk. Anything that fails later — an npm ci that
+  # hits a registry hiccup is the likely one — would otherwise abort under `set -e` leaving both
+  # behind, and the generated .env makes used_slots count the slot as taken forever while a plain
+  # retry dies on "$dir already exists". Nothing removed automatically: the tree may be worth
+  # keeping and re-running `npm ci` in. Just say how to undo it.
+  cleanup_hint() {
+    local code=$?
+    [[ $code -eq 0 ]] && return 0
+    {
+      echo
+      echo "✗ failed after the worktree was created. It is still on disk, holding slot ${slot}."
+      echo "  Retry the install:  (cd $dir/backend && npm ci) && (cd $dir/frontend && npm ci)"
+      echo "  Or remove it:       git -C $ROOT worktree remove --force $dir && git -C $ROOT branch -D $branch"
+    } >&2
+    return $code
+  }
+  trap cleanup_hint EXIT
 
   # Gitignored files a worktree does not inherit. These two are symlinked rather than copied so
   # the API key and the permission allowlist each keep exactly one source of truth. Relative
   # targets — an absolute one would break if the checkout were ever moved. `.claude/worktrees/` is
   # two levels below the root, so $dir needs ../../.. and a file one level inside it needs
   # ../../../.. to reach the root.
-  [[ -f "$ROOT/.env.shared" ]] && ln -sfn "../../../.env.shared" "$dir/.env.shared"
+  # Collected rather than printed inline: they belong AFTER the npm ci output, next to the ✓, or
+  # nobody sees them. A worktree missing either of these is not "ready" in any useful sense.
+  local -a gaps=()
+
+  if [[ -f "$ROOT/.env.shared" ]]; then
+    ln -sfn "../../../.env.shared" "$dir/.env.shared"
+  else
+    gaps+=("no .env.shared in the main checkout, so this worktree has NO ANTHROPIC_API_KEY, no
+    OIDC_* config and no sandbox limits — the generated .env carries slot identity only. Split
+    your env first (cp .env.shared.example .env.shared, move the values across), then:
+      ln -s ../../../.env.shared $dir/.env.shared")
+  fi
+
   [[ -f "$ROOT/.claude/settings.local.json" ]] &&
     ln -sfn "../../../../.claude/settings.local.json" "$dir/.claude/settings.local.json"
 
@@ -179,6 +229,12 @@ main() {
     # worktree and branch exist, leaving a half-built tree behind.
     auth0="$(grep -E '^VITE_AUTH0_' "$ROOT/frontend/.env.local" || true)"
   fi
+  if [[ -z "$auth0" ]]; then
+    gaps+=("no VITE_AUTH0_* values found in the main checkout's frontend/.env.local, so the SPA
+    will start with an undefined Auth0 domain and client id and login will fail at runtime with
+    no diagnostic. Fill in $ROOT/frontend/.env.local, then copy those three lines into
+    $dir/frontend/.env.local")
+  fi
   frontend_env "$slot" "$auth0" >"$dir/frontend/.env.local"
 
   (cd "$dir/backend" && npm ci)
@@ -188,6 +244,15 @@ main() {
   echo "✓ worktree ready: $dir"
   echo "  cd $dir && docker compose up --build"
   echo "  then open http://localhost:$(port_for "$BASE_FRONTEND" "$slot")"
+
+  if ((${#gaps[@]} > 0)); then
+    {
+      echo
+      echo "⚠ but it will not run yet:"
+      local gap
+      for gap in "${gaps[@]}"; do echo "  - $gap"; done
+    } >&2
+  fi
 }
 
 if [[ "${WORKTREE_NEW_LIB:-}" != "1" ]]; then

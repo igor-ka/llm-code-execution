@@ -23,6 +23,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# The checkout root, captured AFTER the cd above so it cannot depend on how this script was
+# invoked: cwd is now the script's own directory, so the root is simply its parent. The
+# basename is unique per worktree, which is what scopes the throwaway image tags below.
+CHECKOUT_ROOT="$(cd .. && pwd)"
+
 run() {
   echo
   echo "==> $*"
@@ -53,10 +58,11 @@ build() {
   fi
 }
 docker_() {
-  # Daemon-wide tag, unique per worktree — see the same note in backend/verify.sh.
-  local name tag
-  name="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
-  tag="verify-$(printf '%s' "$name" | tr -c '[:alnum:]._-' '-')"
+  # Daemon-wide tag, unique per worktree — see the fuller note in backend/verify.sh.
+  local tag
+  # `printf '%s'` and not a bare pipe from basename: basename emits a trailing newline, which
+  # `tr -c` would translate into a dash, so every tag would end in one.
+  tag="verify-$(printf '%s' "$(basename "$CHECKOUT_ROOT")" | tr -c '[:alnum:]._-' '-')"
   run docker build -t "llm-code-execution-frontend:${tag}" .
 }
 
