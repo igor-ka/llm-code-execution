@@ -15,6 +15,7 @@ dist/
 # Env & secrets
 .env
 .env.local
+.env.shared
 
 # OS / editor
 .DS_Store
