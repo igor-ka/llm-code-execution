@@ -63,8 +63,8 @@ variable "github_repository" {
 }
 
 variable "billing_currency" {
-  type    = string
-  default = "CAD"
+  type        = string
+  default     = "CAD"
   description = <<-EOT
     ISO currency of the billing account, which a budget MUST match. Google rejects any other with
     a bare `INVALID_ARGUMENT` that names no field — a minimal budget fails identically to a
@@ -75,8 +75,8 @@ variable "billing_currency" {
 }
 
 variable "trial_credit_amount" {
-  type    = string
-  default = "300"
+  type        = string
+  default     = "300"
   description = <<-EOT
     Size of the free-trial grant, in billing_currency, for the credit-burn budget to measure
     against. Google advertises the trial as "$300 USD or local equivalent", so on a non-USD
