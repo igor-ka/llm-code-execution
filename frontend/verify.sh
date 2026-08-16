@@ -3,7 +3,7 @@
 # CI runs the SAME script (see .github/workflows/ci.yml), so local and CI can't drift.
 #
 # Usage: ./verify.sh [target]
-#   all      (default) install + lint + format + test + build + docker + audit
+#   all      (default) audit + install + lint + format + test + build + docker
 #   audit    npm audit (fails on high+ advisories)
 #   install  npm ci
 #   lint     eslint
@@ -12,7 +12,7 @@
 #   build    tsc -b && vite build (+ assert the production CSP shipped)
 #   docker   build the frontend image
 #
-# CI invokes the individual targets as separate named steps (Install / Audit / Lint / Format /
+# CI invokes the individual targets as separate named steps (Audit / Install / Lint / Format /
 # Test / Build / Docker build) so each gets its own pass/fail and timing in the job log,
 # while the job stays a single check. If you later want each target as its own line on the
 # GitHub *checks screen*, split them into separate jobs that each call `./verify.sh <target>`
@@ -94,17 +94,20 @@ docker_() {
 }
 
 all() {
+  # FIRST, before install: `npm ci` runs dependency lifecycle scripts, so auditing afterwards
+  # lets a package with a known install-time vulnerability execute before the gate can reject it.
+  # The audit reads the committed lockfile and needs no node_modules, so it can go first — and a
+  # security gate that fails closed is worth more than a tidy ordering.
+  #
+  # The cost is that a registry outage aborts the pass before the offline checks run. Reach for a
+  # single target then (`./verify.sh test`), which is what the per-target dispatch is for.
+  audit
   [[ "${SKIP_INSTALL:-}" == "1" ]] || install
   lint
   format
   test_
   build
   [[ "${SKIP_DOCKER:-}" == "1" ]] || docker_
-  # LAST, not first. It is the only target that needs the network, and a registry blip
-  # exits non-zero exactly like a real advisory. Run earlier it would abort the whole
-  # local pass — including the checks that work offline from node_modules — over an
-  # outage that says nothing about this change.
-  audit
 }
 
 target="${1:-all}"

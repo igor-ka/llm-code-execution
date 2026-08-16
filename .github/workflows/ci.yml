@@ -61,10 +61,10 @@ jobs:
       # Named steps that each call a target of the shared verify.sh — the same script
       # developers run locally (`./verify.sh` runs them all). Splitting the targets here
       # gives per-step pass/fail and timing in the job log without a second definition.
-      - name: Install
-        run: ./verify.sh install
       - name: Audit
         run: ./verify.sh audit
+      - name: Install
+        run: ./verify.sh install
       - name: Lint
         run: ./verify.sh lint
       - name: Format check
@@ -101,10 +101,10 @@ jobs:
       # Named steps that each call a target of the shared verify.sh — the same script
       # developers run locally (`./verify.sh` runs them all). Splitting the targets here
       # gives per-step pass/fail and timing in the job log without a second definition.
-      - name: Install
-        run: ./verify.sh install
       - name: Audit
         run: ./verify.sh audit
+      - name: Install
+        run: ./verify.sh install
       - name: Lint
         run: ./verify.sh lint
       - name: Format check
