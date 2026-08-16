@@ -1,8 +1,10 @@
 # The identity the Cloud Run service RUNS as — not the identity that deploys it. Cloud Run's
 # default is the Compute Engine default service account, which holds project Editor: a
 # compromised app process would inherit the ability to rewrite the whole project. This account
-# starts with nothing and is granted exactly one thing, per-resource (P1-D5): read the secrets it
-# needs. Those grants live in secrets.tf, next to the secrets they name.
+# starts with nothing, and as of this file it HAS nothing — no bindings accompany it here.
+#
+# Its only grants will be per-secret accessor bindings, added by #133 in secrets.tf next to the
+# secrets they name (P1-D5: per resource, never per project).
 resource "google_service_account" "runtime" {
   account_id   = "app-runtime"
   display_name = "Cloud Run runtime identity"
