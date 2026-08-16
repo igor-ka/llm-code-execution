@@ -159,3 +159,17 @@ describe("publicDir", () => {
     expect(loadSettings({ PUBLIC_DIR: "./public" }).publicDir).toBe(resolve("./public"));
   });
 });
+
+describe("sandboxBackend", () => {
+  it("defaults to docker, so local runs and existing tests are unchanged", () => {
+    expect(loadSettings({}).sandboxBackend).toBe("docker");
+  });
+
+  it("is cloudrun when SANDBOX_BACKEND=cloudrun", () => {
+    expect(loadSettings({ SANDBOX_BACKEND: "cloudrun" }).sandboxBackend).toBe("cloudrun");
+  });
+
+  it("falls back to docker for an unrecognized value", () => {
+    expect(loadSettings({ SANDBOX_BACKEND: "firecracker" }).sandboxBackend).toBe("docker");
+  });
+});

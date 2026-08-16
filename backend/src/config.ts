@@ -41,6 +41,7 @@ export interface Settings {
   quotaSustained: number;
   quotaSustainedWindowSeconds: number;
   sandboxMaxConcurrent: number;
+  sandboxBackend: "docker" | "cloudrun"; // "cloudrun" requires --sandbox-launcher on the service
 }
 
 type Env = Record<string, string | undefined>;
@@ -136,6 +137,10 @@ export function loadSettings(env: Env = process.env): Settings {
       3600,
     ),
     sandboxMaxConcurrent: posInt("SANDBOX_MAX_CONCURRENT", env.SANDBOX_MAX_CONCURRENT, 4),
+    // Defaults to docker so every local run and every existing test is unchanged. The deployed
+    // service sets SANDBOX_BACKEND=cloudrun explicitly — defaulting to "cloudrun" would make a
+    // misconfigured local run fail with a missing CLI instead of an obvious message.
+    sandboxBackend: str(env.SANDBOX_BACKEND, "docker") === "cloudrun" ? "cloudrun" : "docker",
   };
 }
 
