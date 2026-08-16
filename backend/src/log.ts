@@ -84,7 +84,19 @@ function fromError(err: Error, depth = 0): Record<string, unknown> {
     // Error has none, so an Error-valued property would serialize as `{}` — a line that LOOKS
     // like it captured the failure while holding nothing. node-redis hangs `originalError` and
     // `socketError` off its errors exactly this way.
-    out[key] = value instanceof Error ? fromError(value, depth + 1) : safeValue(value, new Set());
+    //
+    // The cap is applied HERE, not at the shared check below: that one runs after this loop, so
+    // it cannot gate the loop's own recursion. `err.originalError = err` would otherwise recurse
+    // until the stack blew and the entry collapsed to `unserializableFields`, losing even the
+    // message. At the cap, keep the shallow identity rather than dropping the field.
+    if (value instanceof Error) {
+      out[key] =
+        depth < MAX_CAUSE_DEPTH
+          ? fromError(value, depth + 1)
+          : { message: value.message, name: value.name };
+      continue;
+    }
+    out[key] = safeValue(value, new Set());
   }
   out.message = err.message;
   out.stack = err.stack;
