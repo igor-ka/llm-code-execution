@@ -171,8 +171,13 @@ docker compose up --build        # this worktree's own stack, on its own ports
 ```
 
 The script allocates the lowest free slot, branches off a freshly fetched `origin/main`, supplies
-those files, and installs both sides. It refuses to run from inside a worktree, and it holds a
-lock so two concurrent runs cannot claim the same slot.
+those files, and installs both sides. It refuses to run from inside a worktree, and concurrent
+runs queue briefly for the slot claim rather than colliding on it.
+
+**It exits non-zero rather than claiming success on a worktree that cannot run** — if the shared
+env or the Auth0 values are absent, or merely unfilled (a copied `.env.shared.example` looks
+identical to a configured one), it prints no ✓, names exactly what is missing, and returns 1.
+Check the exit status; do not assume the tree is usable because the command finished.
 
 **When to use one:** every child issue of a plan — the PR-sized slice. Not for answering a
 question, a one-line doc fix, or anything that will not become its own PR.
