@@ -32,19 +32,50 @@ const beforeDotenv: Record<string, string | undefined> = {
   REDIS_URL: process.env.REDIS_URL,
 };
 
-/** The pinned values, straight from the config under test. */
-async function pinned(): Promise<Record<string, string>> {
+/**
+ * Every project's pinned env, straight from the config under test.
+ *
+ * Per project, not once: the pin has to hold in each of them, and a project added later without
+ * it would reintroduce the leak in exactly the run that project defines.
+ */
+async function pinnedPerProject(): Promise<Record<string, string>[]> {
   const config = (await import("../vitest.config.js")).default as {
-    test?: { env?: Record<string, string> };
+    test?: {
+      env?: Record<string, string>;
+      projects?: { test?: { env?: Record<string, string> } }[];
+    };
   };
-  return config.test?.env ?? {};
+  const projects = config.test?.projects;
+  if (projects?.length) return projects.map((p) => p.test?.env ?? {});
+  return [config.test?.env ?? {}];
 }
 
 describe("test harness: the datastore gate", () => {
   // CI has no repo-root env file, so the behavioural check below is vacuous there — this one is
   // not. Delete the pin and this fails immediately, everywhere.
-  it("pins both datastore variables in vitest.config.ts", async () => {
-    expect(Object.keys(await pinned()).sort()).toEqual([...KEYS].sort());
+  it("pins both datastore variables in every vitest project", async () => {
+    const perProject = await pinnedPerProject();
+    expect(perProject.length).toBeGreaterThan(0);
+    for (const env of perProject) {
+      expect(Object.keys(env).sort()).toEqual([...KEYS].sort());
+    }
+  });
+
+  // The unit project excludes the datastore suites so they cannot race a plain `npm run test`.
+  // Excluding a file without adding it to the integration project would mean it never runs at
+  // all — green, and testing nothing.
+  it("runs every suite the unit project excludes in the integration project", async () => {
+    const config = (await import("../vitest.config.js")).default as {
+      test?: { projects?: { test?: { name?: string; include?: string[]; exclude?: string[] } }[] };
+    };
+    const byName = Object.fromEntries(
+      (config.test?.projects ?? []).map((p) => [p.test?.name ?? "", p.test]),
+    );
+    const excluded = byName.unit?.exclude ?? [];
+    const integration = byName.integration?.include ?? [];
+
+    expect(excluded.length).toBeGreaterThan(0);
+    for (const file of excluded) expect(integration).toContain(file);
   });
 
   it("does not let a repo-root env file supply a datastore URL the shell did not", async () => {
