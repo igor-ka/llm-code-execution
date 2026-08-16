@@ -184,6 +184,34 @@ describe("makeLogger (json)", () => {
     expect(typeof entry.err.originalError.stack).toBe("string");
   });
 
+  // The shared depth check runs AFTER the property loop, so it cannot gate the loop's own
+  // recursion into nested Errors. Without a cap at the recursion site, a self-referencing error
+  // blows the stack and the entry collapses to {severity, message, unserializableFields} —
+  // losing the very diagnosis this change exists to preserve.
+  it("caps recursion into a self-referencing nested Error", () => {
+    const lines: string[] = [];
+    const log = makeLogger("json", (line) => lines.push(line));
+
+    const err = new Error("reconnect failed");
+    (err as unknown as Record<string, unknown>).code = "ECONNREFUSED";
+    (err as unknown as Record<string, unknown>).originalError = err; // points at itself
+    log.error("redis client error", { err });
+
+    expect(lines).toHaveLength(1);
+    const entry = JSON.parse(lines[0]);
+    expect(entry.unserializableFields).toBeUndefined();
+    expect(entry.err.message).toBe("reconnect failed");
+    expect(entry.err.code).toBe("ECONNREFUSED");
+
+    let node = entry.err;
+    let depth = 0;
+    while (node?.originalError !== undefined) {
+      node = node.originalError;
+      depth++;
+    }
+    expect(depth).toBeLessThanOrEqual(6);
+  });
+
   // Only an ARRAY `errors` is the AggregateError shape handled below. A validation library's
   // `errors: {field: reason}` is ordinary data, and dropping it would lose the whole payload.
   it("keeps a non-array errors payload", () => {
