@@ -12,9 +12,17 @@
  */
 import { describe, it, expect } from "vitest";
 import { parse } from "dotenv";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
+
+/** Every file under `dir`, recursively. */
+function walk(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    return entry.isDirectory() ? walk(path) : [path];
+  });
+}
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KEYS = ["DATABASE_URL", "REDIS_URL"] as const;
@@ -61,21 +69,31 @@ describe("test harness: the datastore gate", () => {
     }
   });
 
-  // The unit project excludes the datastore suites so they cannot race a plain `npm run test`.
-  // Excluding a file without adding it to the integration project would mean it never runs at
-  // all — green, and testing nothing.
-  it("runs every suite the unit project excludes in the integration project", async () => {
+  // The reason the split works is that only ONE unit-project suite touches Postgres, so there is
+  // nothing for it to race. But `include: ["tests/**/*.test.ts"]` means the next Postgres suite
+  // someone adds lands in the unit project by DEFAULT, in parallel with isolation.test.ts, whose
+  // beforeEach migrates and then TRUNCATEs — reintroducing exactly the corruption this split
+  // removed. A comment cannot hold that; this does.
+  //
+  // Keyed on `makePool`, the only way to open a pool here. Deliberately not on RedisQuotaStore:
+  // redisQuotaOffline.test.ts imports it to prove the fail-open path against a CLOSED port and
+  // needs no live server, so it belongs in the unit project.
+  it("keeps every Postgres-touching suite out of the unit project's parallel pool", async () => {
     const config = (await import("../vitest.config.js")).default as {
-      test?: { projects?: { test?: { name?: string; include?: string[]; exclude?: string[] } }[] };
+      test?: { projects?: { test?: { name?: string; include?: string[] } }[] };
     };
-    const byName = Object.fromEntries(
-      (config.test?.projects ?? []).map((p) => [p.test?.name ?? "", p.test]),
-    );
-    const excluded = byName.unit?.exclude ?? [];
-    const integration = byName.integration?.include ?? [];
+    const integration =
+      (config.test?.projects ?? []).find((p) => p.test?.name === "integration")?.test?.include ??
+      [];
 
-    expect(excluded.length).toBeGreaterThan(0);
-    for (const file of excluded) expect(integration).toContain(file);
+    const testsDir = join(repoRoot, "backend", "tests");
+    const touchesPostgres = walk(testsDir)
+      .filter((f) => f.endsWith(".test.ts"))
+      .filter((f) => /^import[^;]*\bmakePool\b/m.test(readFileSync(f, "utf8")))
+      .map((f) => relative(join(repoRoot, "backend"), f));
+
+    expect(touchesPostgres.length).toBeGreaterThan(0); // the guard must not pass by finding nothing
+    for (const file of touchesPostgres) expect(integration).toContain(file);
   });
 
   it("does not let a repo-root env file supply a datastore URL the shell did not", async () => {
