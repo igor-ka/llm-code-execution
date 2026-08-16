@@ -170,8 +170,34 @@ Secret *containers* are created by Terraform; their *payloads* never are, becaus
 `google_secret_manager_secret_version` resource puts the plaintext in state, in plan output, and
 in any log that prints a plan (spec S6). `infra/verify.sh` fails the build if one is ever added.
 
-Payloads arrive out of band with `gcloud secrets versions add`. **Filled in by PR 4 (#133)**,
-which creates the containers.
+Payloads arrive out of band. Each command below reads from stdin, so the value never reaches your
+shell history:
+
+```bash
+# 1. Anthropic API key — already in the repo-root .env that local dev uses.
+set -a && . ./.env && set +a
+printf '%s' "$ANTHROPIC_API_KEY" | gcloud secrets versions add anthropic-api-key --data-file=-
+
+# 2-4. Auth0. All three come from the tenant: Applications -> your SPA, and APIs -> your API.
+printf '%s' 'https://<tenant>.auth0.com/'                    | gcloud secrets versions add oidc-issuer --data-file=-
+printf '%s' '<your API identifier>'                          | gcloud secrets versions add oidc-audience --data-file=-
+printf '%s' 'https://<tenant>.auth0.com/.well-known/jwks.json' | gcloud secrets versions add oidc-jwks-url --data-file=-
+```
+
+**`printf`, never `echo`.** `echo` appends a newline, and the newline becomes part of the secret:
+an issuer with a trailing `\n` fails JWT validation with an issuer-mismatch error that looks
+nothing like a whitespace problem. The trailing slash on the issuer is equally load-bearing —
+Auth0 issues tokens with it, and a value without it never matches.
+
+**Two containers stay empty until Phase 2**: `database-url` needs Cloud SQL and `redis-url` needs
+an Upstash database, neither of which exists yet. The backend refuses to boot without a reachable
+`REDIS_URL`, so a deploy attempted before Phase 2 populates them will fail at startup — by design,
+rather than serving traffic with the quota control absent.
+
+**`terraform destroy` deletes the containers and every version with them.** There is no export and
+no backup; rebuilding means re-running every command above. That is the accepted cost of keeping
+payloads out of Terraform state (S6), and it is why this section is a runbook rather than a
+one-time note.
 
 ## 11. What this runbook does not manage
 
