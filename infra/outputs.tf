@@ -1,0 +1,11 @@
+output "registry_url" {
+  description = "Docker registry host/path to tag images for. Phase 2 and 3 push here."
+  # The provider exports this already — hand-assembling "${var.region}-docker.pkg.dev/…" would be
+  # a second copy of Google's URL format, and the copy is the one that goes stale.
+  value = google_artifact_registry_repository.app.registry_uri
+}
+
+output "runtime_service_account" {
+  description = "Email of the identity Cloud Run runs as. Phase 2 passes this to --service-account."
+  value       = google_service_account.runtime.email
+}
