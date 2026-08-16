@@ -159,44 +159,67 @@ updates:
 
   # --- docker ---------------------------------------------------------------------------------
   #
-  # FOUR entries, not the three the issue proposed: the repo-root `Dockerfile` is the PRODUCTION
-  # image (SPA + API in one container) and was missing from that list. `directory:` keys on the
-  # directory holding the Dockerfile, so each needs its own entry.
+  # The three node images move as ONE entry via `directories`, because they must move together.
+  # `Dockerfile` (the production image, SPA + API in one container — missing from the issue's
+  # proposal), `backend/Dockerfile` and `frontend/Dockerfile` all pin `node:22-slim`. As separate
+  # entries a node major would arrive as three independent PRs merging at three different times,
+  # leaving the production image on one major while the backend dev image sat on another — each
+  # PR green on its own, nothing catching the divergence. Same "must move together" reasoning as
+  # invariant 2 above, applied across directories rather than across packages.
   #
   # WHAT THIS DOES AND DOES NOT BUY. Every base image is pinned by TAG (`node:22-slim`,
-  # `python:3.12-slim`), not by digest. Dependabot's docker ecosystem then offers updates only
-  # when the TAG changes — node 22 -> 24, python 3.12 -> 3.13. It does not fire when upstream
-  # rebuilds `node:22-slim` with patched OS packages, because the tag itself is unchanged.
-  #
-  # Nor does a local rebuild reliably pick that up: `docker build` reuses a cached base image
-  # unless the cache lacks it or `--pull` is passed, and none of this repo's build commands pass
-  # it. CI starts from a cold cache each run and so does pull fresh; a developer's machine can be
-  # months behind. So this entry buys major/minor NOTIFICATION, and neither it nor the local build
-  # buys patch-level freshness. Pinning by digest would invert the trade — every upstream rebuild
-  # becomes a PR — and is a separate decision.
+  # `python:3.12-slim`, `postgres:16`), not by digest, so Dependabot fires only when the TAG
+  # changes — node 22 -> 24, postgres 16 -> 17. It does not fire when upstream rebuilds the same
+  # tag with patched OS packages. Nor does a local rebuild reliably pick that up: `docker build`
+  # reuses a cached base image unless the cache lacks it or `--pull` is passed, and none of this
+  # repo's build commands pass it (see #174). CI starts cold each run and does pull fresh; a
+  # developer's machine can be months behind. So this is major/minor NOTIFICATION, not
+  # patch-level freshness. Digest pins would invert the trade — every upstream rebuild becomes a
+  # PR — and are a separate decision.
   #
   # NOT eligible for auto-merge, and nothing here has to arrange that. The gate in
   # `dependabot-auto-merge.yml` is a positive allow-list: the job-level `if:` requires
   # `dependabot/npm_and_yarn/`, and rule 2 rejects any entry whose `packageEcosystem` is not
-  # `npm_and_yarn`. A new ecosystem is therefore ineligible by construction rather than by an
-  # exclusion someone has to remember to add.
+  # `npm_and_yarn`. A new ecosystem is ineligible by construction rather than by an exclusion
+  # someone has to remember to add.
   - package-ecosystem: docker
-    directory: /
+    directories:
+      - /
+      - /backend
+      - /frontend
     schedule:
       interval: weekly
-  - package-ecosystem: docker
-    directory: /backend
-    schedule:
-      interval: weekly
-  - package-ecosystem: docker
-    directory: /frontend
-    schedule:
-      interval: weekly
-  # The sandbox EXECUTION image, kept as its own entry deliberately. It is the containment
-  # boundary around LLM-generated code — `CLAUDE.md` routes any change to it through
-  # `security-and-hardening` — so its base-image bumps should arrive as their own PR, reviewed on
-  # their own terms, never bundled with a routine node bump.
+    groups:
+      node-base:
+        patterns:
+          - node
+      node-base-security:
+        applies-to: security-updates
+        patterns:
+          - node
+  # The sandbox EXECUTION image, deliberately its own entry — a different base (python) on a
+  # different cadence, and the containment boundary around LLM-generated code. `CLAUDE.md` routes
+  # any change to it through `security-and-hardening`, so its bumps arrive alone and are reviewed
+  # on their own terms rather than bundled with a routine node bump.
   - package-ecosystem: docker
     directory: /backend/sandbox-image
+    schedule:
+      interval: weekly
+
+  # --- docker-compose -------------------------------------------------------------------------
+  #
+  # A SEPARATE ecosystem: `docker` parses Dockerfiles only, so none of the entries above reach
+  # `docker-compose.yml`, which pins `postgres:16`, `redis:7-alpine` and `docker:27-cli` — the
+  # last of these being the sandbox-image builder that bind-mounts the Docker socket. Without
+  # this entry the local dev stack and the integration suites would sit on Postgres 16
+  # indefinitely with no PR ever raised: exactly the invisible ageing the docker entries exist to
+  # stop.
+  #
+  # Note what is still uncovered: `.github/workflows/ci.yml` pins the same `postgres:16` and
+  # `redis:7-alpine` as SERVICE CONTAINERS, and no ecosystem reaches those — `github-actions`
+  # updates `uses:` refs, not `image:` values. Those copies have to be kept in step by hand, and a
+  # docker-compose PR that bumps Postgres is the prompt to do it.
+  - package-ecosystem: docker-compose
+    directory: /
     schedule:
       interval: weekly
