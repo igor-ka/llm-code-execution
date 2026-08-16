@@ -135,6 +135,34 @@ describe("makeLogger (json)", () => {
     expect(entry.err.name).toBe("Error");
   });
 
+  // `new Error(m, {cause})` makes cause NON-enumerable, but `err.cause = other` makes it an own
+  // ENUMERABLE property — so lifting own properties would hand the whole chain to safeValue,
+  // which walks deeply with cycle protection but no depth limit. MAX_CAUSE_DEPTH would be applied
+  // only afterwards, too late to stop the walk.
+  it("caps an assigned (enumerable) cause chain instead of walking it in full", () => {
+    const lines: string[] = [];
+    const log = makeLogger("json", (line) => lines.push(line));
+
+    let deep: Error = new Error("leaf");
+    for (let i = 0; i < 5000; i++) {
+      const wrapper = new Error(`level-${i}`);
+      wrapper.cause = deep;
+      deep = wrapper;
+    }
+    log.error("deep", { err: deep });
+
+    // It emitted a line at all — no stack overflow inside the logger — and stopped at the cap
+    // rather than serializing 5000 levels.
+    expect(lines).toHaveLength(1);
+    let node = JSON.parse(lines[0]).err;
+    let depth = 0;
+    while (node?.cause !== undefined) {
+      node = node.cause;
+      depth++;
+    }
+    expect(depth).toBeLessThanOrEqual(5);
+  });
+
   it("unwraps a cause chain", () => {
     const lines: string[] = [];
     const log = makeLogger("json", (line) => lines.push(line));

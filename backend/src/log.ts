@@ -47,8 +47,17 @@ function fromError(err: Error, depth = 0): Record<string, unknown> {
   //
   // safeValue handles the cycles and unserializable values that arbitrary instance state can
   // carry; `cause` and `errors` below then overwrite their own raw copies with unwrapped ones.
+  //
+  // `cause` and `errors` are skipped here and unwrapped below instead. `new Error(m, {cause})`
+  // makes cause NON-enumerable, but a plain `err.cause = other` makes it enumerable — and that
+  // form would otherwise be handed to safeValue, which walks an object graph deeply with cycle
+  // protection but NO depth limit. A long chain would be walked in full before MAX_CAUSE_DEPTH
+  // could apply, doing the work twice and risking a stack overflow inside the logger.
   const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(err)) out[key] = safeValue(value, new Set());
+  for (const [key, value] of Object.entries(err)) {
+    if (key === "cause" || key === "errors") continue;
+    out[key] = safeValue(value, new Set());
+  }
   out.message = err.message;
   out.stack = err.stack;
   out.name = err.name;
