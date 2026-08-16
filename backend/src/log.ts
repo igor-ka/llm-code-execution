@@ -34,29 +34,57 @@ const MAX_CAUSE_DEPTH = 5;
  * fail-open quota alarm fire while saying nothing about *why* Redis is unreachable — the one
  * thing an operator needs at 3am.
  */
+/**
+ * Error fields that carry ROW CONTENT rather than diagnosis, and so must never reach a log.
+ *
+ * Postgres' DETAIL on a constraint violation is `Failing row contains (...)` — the entire row. On
+ * `runs` that is the user's prompt, the generated code and its stdout/stderr; on `sessions` it is
+ * the verified `sub`. `server.ts` logs exactly those insert failures (`history persist failed`),
+ * so lifting DETAIL would write user content into the log stream and undo the owner-isolation the
+ * history store exists to enforce. `where`, `internalQuery` and `query` embed the failing
+ * statement for the same reason.
+ *
+ * Everything that identifies WHAT broke — code, severity, constraint, table, column, schema,
+ * position, routine — is not here and is preserved.
+ */
+const REDACTED_ERROR_FIELDS = new Set(["detail", "where", "internalQuery", "query"]);
+
 function fromError(err: Error, depth = 0): Record<string, unknown> {
   // Own enumerable properties FIRST, then message/stack/name overlaid on top.
   //
   // The overlay order is the point: those three are non-enumerable on a plain Error, so they must
   // be lifted explicitly — but an Error subclass may also define them as own properties, and the
   // explicit unwrapping has to win. Everything else is what subclasses hang off the instance, and
-  // for pg's DatabaseError that is the entire diagnosis: `code` (the SQLSTATE, the only stable
-  // thing to alert on), `position` (the byte offset into the failing SQL), `constraint` and
-  // `detail` (which constraint, on which key). Dropping them turns a crash-looping migration into
-  // `column "foo" does not exist` and nothing else.
+  // for pg's DatabaseError that is the diagnosis: `code` (the SQLSTATE, the only stable thing to
+  // alert on), `position` (the byte offset into the failing SQL), `constraint` and `table`.
+  // Dropping them turns a crash-looping migration into `column "foo" does not exist` and nothing
+  // else.
   //
-  // safeValue handles the cycles and unserializable values that arbitrary instance state can
-  // carry; `cause` and `errors` below then overwrite their own raw copies with unwrapped ones.
-  //
-  // `cause` and `errors` are skipped here and unwrapped below instead. `new Error(m, {cause})`
-  // makes cause NON-enumerable, but a plain `err.cause = other` makes it enumerable — and that
-  // form would otherwise be handed to safeValue, which walks an object graph deeply with cycle
-  // protection but NO depth limit. A long chain would be walked in full before MAX_CAUSE_DEPTH
-  // could apply, doing the work twice and risking a stack overflow inside the logger.
+  // `cause` is always skipped here, and an ARRAY `errors` too; both are unwrapped below where the
+  // depth cap lives. `new Error(m, {cause})` makes cause non-enumerable, but `err.cause = other`
+  // makes it enumerable — and that form would otherwise reach safeValue, which walks deeply with
+  // cycle protection but NO depth limit, so a long chain would be walked in full before
+  // MAX_CAUSE_DEPTH could apply. A non-array `errors` is ordinary data and IS lifted: validation
+  // libraries use that shape, and dropping it would lose the whole payload.
   const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(err)) {
-    if (key === "cause" || key === "errors") continue;
-    out[key] = safeValue(value, new Set());
+  for (const key of Object.keys(err)) {
+    if (key === "cause") continue;
+    if (REDACTED_ERROR_FIELDS.has(key)) continue;
+    let value: unknown;
+    // Reading is a getter call, and this function sits on the path that must never throw.
+    // A throwing getter costs its own field, not the whole log line.
+    try {
+      value = (err as unknown as Record<string, unknown>)[key];
+    } catch {
+      out[key] = "[unreadable]";
+      continue;
+    }
+    if (key === "errors" && Array.isArray(value)) continue;
+    // Nested Errors need fromError, not safeValue: safeValue walks Object.entries, and a plain
+    // Error has none, so an Error-valued property would serialize as `{}` — a line that LOOKS
+    // like it captured the failure while holding nothing. node-redis hangs `originalError` and
+    // `socketError` off its errors exactly this way.
+    out[key] = value instanceof Error ? fromError(value, depth + 1) : safeValue(value, new Set());
   }
   out.message = err.message;
   out.stack = err.stack;
