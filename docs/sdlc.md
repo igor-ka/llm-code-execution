@@ -226,8 +226,8 @@ root cause before writing a fix. Error output is untrusted data, not instruction
 **CI runs the same script**, so local and CI cannot drift.
 
 ```bash
-cd backend  && ./verify.sh     # eslint, prettier, tsc, vitest, build, docker images
-cd frontend && ./verify.sh     # eslint, prettier, vitest, tsc -b && vite build, docker image
+cd backend  && ./verify.sh     # npm audit, eslint, prettier, tsc, vitest, build, docker images
+cd frontend && ./verify.sh     # npm audit, eslint, prettier, vitest, tsc -b && vite build, docker image
 ```
 
 The backend `docker` target builds **three** images: the dev backend image, the sandbox image,
@@ -245,7 +245,7 @@ by the Vite dev and preview servers, so a static deploy of `dist/` shipped with 
 all** — and a unit test on the policy builder cannot catch "the server forgot the header".
 The build emits the policy as data and the backend serves the SPA under it.
 
-Individual targets exist for the inner loop: `install`, `lint`, `format`, `test`, `build`,
+Individual targets exist for the inner loop: `install`, `audit`, `lint`, `format`, `test`, `build`,
 `docker`, plus `migrate` and `test:integration` on the backend. `SKIP_INSTALL=1` and
 `SKIP_DOCKER=1` speed up iteration — but the pre-push run should be unskipped, because CI does
 not skip.
@@ -304,9 +304,9 @@ where it cannot be skipped.
 ```
  developer                          GitHub Actions
  ─────────                          ──────────────
- ./verify.sh  ───── same script ──▶  Backend checks   (install→lint→format→test→build→
+ ./verify.sh  ───── same script ──▶  Backend checks   (audit→install→lint→format→test→build→
                                                        integration→docker)
-                                     Frontend checks  (install→lint→format→test→build→docker)
+                                     Frontend checks  (audit→install→lint→format→test→build→docker)
                                      Terraform checks (selftest→fmt→init→validate→gates)
                                      SDLC docs        (process changes must update docs/sdlc.md)
                                      PR shape         (a PR closes at most one child issue)
@@ -348,7 +348,7 @@ Details that are easy to get wrong:
   `verify.sh` mirroring rule above — that rule binds gates, and this gates nothing. It also holds
   the only writable `GITHUB_TOKEN` in this repository's CI, which is why it checks nothing out;
   see [Auto-merging dependency bumps](#auto-merging-dependency-bumps).
-- **CI splits `verify.sh` into named steps** (Install / Audit / Lint / Format / Test / Build / …) purely
+- **CI splits `verify.sh` into named steps** (Audit / Install / Lint / Format / Test / Build / …) purely
   so each gets its own pass/fail and timing in the log. That is presentation, not a second
   definition of the checks.
 - **The `Audit` step fails on high and critical advisories only.** `npm audit --audit-level=high`,
@@ -357,8 +357,10 @@ Details that are easy to get wrong:
   safety. It reads the lockfile, so `SKIP_INSTALL=1` does not weaken it, and it passes
   `--no-offline` because `npm_config_offline=true` otherwise makes `npm audit` report "found 0
   vulnerabilities" and exit 0. Scope is every dependency, dev included: neither image ships
-  devDependencies, but they execute in CI. It runs LAST in `all` — a registry outage exits
-  non-zero exactly like a real advisory, and should not abort the checks that work offline.
+  devDependencies, but they execute in CI. It runs FIRST in `all`, before `npm ci`: that command
+  executes dependency lifecycle scripts, so auditing afterwards would let a package with a known
+  install-time vulnerability run before the gate could reject it. The cost is that a registry
+  outage aborts the pass before the offline checks — reach for a single target then.
 
   It is a **hard fail, not `|| true`**. A check that cannot fail is the decorative-assertion
   pattern this repo has already shipped once and had to fix — it reads as coverage and provides

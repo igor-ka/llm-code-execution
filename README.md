@@ -376,20 +376,22 @@ drift (CI invokes the same scripts). There are three: backend, frontend, and `in
   type-checks/builds (`tsc`), and builds three Docker images: the dev backend image, the sandbox
   image, and the repo-root production image — then asserts inside that image that the production
   CSP shipped, that the policy names no plaintext origin, and that the runtime user is not root.
-  It finishes with `npm audit`, which **fails on high and critical advisories**.
+  It begins with `npm audit`, which **fails on high and critical advisories**.
 - **Frontend:** `cd frontend && ./verify.sh` — installs deps, runs ESLint + Prettier +
-  Vitest, type-checks/builds, builds the frontend Docker image, and finishes with the same
-  `npm audit` gate.
+  Vitest, type-checks/builds, builds the frontend Docker image; the same
+  `npm audit` gate runs first.
 - **Infra:** `cd infra && ./verify.sh` — runs the gate self-tests, then `terraform fmt -check`,
   `init -backend=false`, `validate`, and the repo-specific gates. It needs **no credentials** and
   deliberately runs no `terraform plan`: a plan requires a live project, and planning is a human
   step in [`docs/runbooks/gcp-bootstrap.md`](docs/runbooks/gcp-bootstrap.md).
 
-The audit step is last because it is the only one needing the network: a registry outage exits
-non-zero exactly like a real advisory, and running it earlier would abort the checks that work
-offline. It covers **dev dependencies too** — neither image ships them, but they execute here and
-in CI. Moderate and below stay visible in the output and are Dependabot's job; the threshold and
-the reasoning live in [`docs/sdlc.md`](docs/sdlc.md).
+The audit runs **first, before `npm ci`** — that command executes dependency lifecycle scripts, so
+auditing afterwards would let a package with a known install-time vulnerability run before the gate
+could reject it. It reads the committed lockfile and needs no `node_modules`. The trade-off is that
+a registry outage aborts the pass before the offline checks; reach for a single target then
+(`./verify.sh test`). It covers **dev dependencies too** — neither image ships them, but they
+execute here and in CI. Moderate and below stay visible in the output and are Dependabot's job; the
+threshold and the reasoning live in [`docs/sdlc.md`](docs/sdlc.md).
 
 The backend and frontend scripts accept `SKIP_INSTALL=1` (reuse the current environment) and `SKIP_DOCKER=1`
 (host checks only, skip the image build).
