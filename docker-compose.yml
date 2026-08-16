@@ -42,7 +42,7 @@ services:
   # One-shot service that builds the sandbox EXECUTION image into the host daemon so the
   # backend can run it. It exits 0 after building.
   sandbox-image-builder:
-    image: docker:27-cli
+    image: docker:29-cli
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./backend/sandbox-image:/build
