@@ -221,10 +221,60 @@ mirroring rule in [`CLAUDE.md`](../../CLAUDE.md) is repo law and infrastructure 
 exemption on its first day. Adding a required check means the "Protect main" ruleset changes in the
 same PR — the job-name contract applies here too.
 
+**D11 — Cloud SQL keeps a public IP with an empty authorized-network list, reached over the
+built-in connector.** Decided 2026-08-16, replacing the Phase 2 plan's first draft. That draft set
+`ipv4_enabled = false` with no private network, which Cloud SQL simply refuses — *"At least one of
+Public IP or Private IP connectivity must be enabled"* — and Cloud Run's connector requires either
+a public IP or a private IP plus Direct VPC egress. Rejected: private IP with VPC peering, which
+is the richer Terraform exercise D5 mentioned but adds a VPC, a peering range and an egress path
+to a phase already spending its risk budget on a preview sandbox feature.
+
+*Why "public IP" is not the exposure it sounds like:* `authorized_networks` is empty, so no
+address may connect directly; access is brokered by the Cloud SQL Auth Proxy and authorised by
+IAM, with TLS enforced. The IP exists; nothing can use it.
+
+**D12 — Cloud Run request concurrency is 8, not 4.** The plan's first draft matched it to
+`SANDBOX_MAX_CONCURRENT=4`, which would have made the concurrency cap **unreachable**: Cloud Run
+caps in-flight requests per instance, so at most four requests could ever be inside
+`tryAcquire()` and it could never refuse. The 503 path would have been dead code in production —
+and D7 nominates that cap as the replacement for the per-execution limits it removes. A control
+that cannot fire is worse than none, because it reads as present.
+
+**D13 — Sandboxed code runs with `sudo` privileges as a non-root user, and that is accepted.**
+Google's code-execution documentation states it. Locally the payload runs under `CapDrop: ["ALL"]`
+plus `no-new-privileges` as uid 1000, so this is a **fourth** item off the isolation list in the
+spec's Context §3, alongside the memory, CPU and PID caps of D7. Accepted because the writable
+layer is an ephemeral in-memory overlay, the environment is not inherited and the metadata server
+is unreachable — the payload gains root over a filesystem that is discarded, not over anything
+that outlives it. **S4 requires this in the README before launch.**
+
+**D14 — The rollback exercise breaks the image tag, not `REDIS_URL`.** The plan's first draft
+deployed a revision with an unreachable Redis and called it broken. It is not:
+`assertRedisConfigured` only checks the string is non-empty, and `RedisQuotaStore` connects
+lazily, so that revision boots healthy and merely fails the quota **open** (ADR-0003 D5). S10
+would have been "proven" by rolling back a revision that was serving traffic with a security
+control silently off. Constraint carried into the plan: a revision that fails to *start* never
+receives traffic, so there would be nothing to roll back from — the broken revision must start
+and then misbehave.
+
+**D15 — `terraform import` of the hand-deployed service targets "no behavioural changes", not an
+empty plan.** A hand-written `google_cloud_run_v2_service` imported from `gcloud run deploy` will
+show residual diffs on `launch_stage`, gcloud-set annotations, `traffic`, probes and the Cloud SQL
+volume. An unreachable bar invites either churn or a quiet skip; the residual diff is listed in
+the deploy runbook instead, and reviewed rather than eliminated.
+
+**D16 — The sandbox can read the application image, and S4 records it.** Because sandboxes see the
+host container's filesystem read-only (D6), a payload can now read `/app/dist`,
+`/app/node_modules`, `/app/migrations` and the built SPA. Locally it saw only `python:3.12-slim`.
+No secret is exposed — the environment is not inherited and the metadata server is unreachable —
+but *"host paths unreadable"* in the README now means something materially narrower, and saying so
+is the whole point of S4.
+
 ## Open questions
 
-**None — all resolved (D1–D10).** Two items were deferred as configuration rather than
-architecture. One is now closed:
+**None — all resolved (D1–D16).** Phase 2's six open questions were raised by the staff review of
+its plan on 2026-08-16 and decided the same day; they are D11–D16 above. Two items were deferred
+as configuration rather than architecture. Both are now closed:
 
 - **GCP region — resolved 2026-08-10: `us-central1`.** The Phase 1 lookup found that Google
   publishes no region list for the sandboxes preview; the
@@ -235,10 +285,10 @@ architecture. One is now closed:
   Montreal versus `northamerica-northeast1`, and US residency for data the Boundaries section
   already calls disposable. Held in a single `var.region` so reversing it is one line plus a
   rebuild. See [P1-D1](../plans/2026-08-10-deploy-to-gcp-phase1.md).
-- **Cloud Run instance size — still open, and deliberately.** It follows from D7 and the
-  concurrency cap, and there is no Cloud Run resource in Phase 1 to attach it to; sizing a service
-  that does not exist would be a guess written in Terraform. Phase 2's plan chooses it and
-  verifies it against real sandbox executions.
+- **Cloud Run instance size — resolved 2026-08-16: 2 vCPU / 2 GiB, `max-instances=2`,
+  concurrency 8.** Sandboxes share the instance's allocation (D7), so it must hold four concurrent
+  executions plus the app; `max-instances=2` bounds a runaway bill on a fixed budget. The
+  concurrency figure is D12's, not the sandbox cap's. Verified against real executions in Phase 2.
 
 ## Residual risk
 
@@ -246,8 +296,11 @@ Recorded rather than solved:
 
 1. **Preview dependency** (D6). A Pre-GA feature can change or be withdrawn. Mitigated by the
    `SandboxBackend` seam — a change is one class, not a rewrite.
-2. **Per-execution resource caps weaken** (D7). Bounded by the concurrency cap and the timeout,
-   but a hostile payload can degrade the instance it runs on.
+2. **Per-execution resource caps weaken** (D7), **and the payload runs with sudo inside the
+   sandbox** (D13). Bounded by the concurrency cap and the timeout, but a hostile payload can
+   degrade the instance it shares and has root over the ephemeral overlay. It can also read the
+   application image (D16). None of this reaches a secret; all of it is narrower than the local
+   build, and S4 requires the README to say so before launch.
 3. **A security control's state sits with a third party** (D8). Upstash holds the quota counters,
    so its availability and its own rate limits now feed the fail-open path. Bounded by the same
    alarm ADR-0003 S9 already demands.
