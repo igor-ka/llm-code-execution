@@ -74,7 +74,7 @@ services:
   # windowed and disposable, and losing them on restart costs at most one window of
   # over-allowance. (The backend still refuses to boot without this service — D6.)
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     # Exposed on the host so local integration tests can reach it; slot-derived like Postgres.
     ports:
       - "${REDIS_PORT:-6379}:6379"
