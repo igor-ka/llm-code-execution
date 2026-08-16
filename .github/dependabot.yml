@@ -156,3 +156,43 @@ updates:
     directory: /
     schedule:
       interval: weekly
+
+  # --- docker ---------------------------------------------------------------------------------
+  #
+  # FOUR entries, not the three the issue proposed: the repo-root `Dockerfile` is the PRODUCTION
+  # image (SPA + API in one container) and was missing from that list. `directory:` keys on the
+  # directory holding the Dockerfile, so each needs its own entry.
+  #
+  # WHAT THIS DOES AND DOES NOT BUY. Every base image is pinned by TAG (`node:22-slim`,
+  # `python:3.12-slim`), not by digest. Dependabot's docker ecosystem then offers updates only
+  # when the TAG changes — node 22 -> 24, python 3.12 -> 3.13. It does not fire when upstream
+  # rebuilds `node:22-slim` with patched OS packages, because the tag is unchanged; `docker build`
+  # already picks that up on every rebuild. So this is major/minor notification, not patch-level
+  # freshness. Pinning by digest would invert that trade — every rebuild becomes a PR — and is a
+  # separate decision.
+  #
+  # NOT eligible for auto-merge, and nothing here has to arrange that. The gate in
+  # `dependabot-auto-merge.yml` is a positive allow-list: the job-level `if:` requires
+  # `dependabot/npm_and_yarn/`, and rule 2 rejects any entry whose `packageEcosystem` is not
+  # `npm_and_yarn`. A new ecosystem is therefore ineligible by construction rather than by an
+  # exclusion someone has to remember to add.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule:
+      interval: weekly
+  # The sandbox EXECUTION image, kept as its own entry deliberately. It is the containment
+  # boundary around LLM-generated code — `CLAUDE.md` routes any change to it through
+  # `security-and-hardening` — so its base-image bumps should arrive as their own PR, reviewed on
+  # their own terms, never bundled with a routine node bump.
+  - package-ecosystem: docker
+    directory: /backend/sandbox-image
+    schedule:
+      interval: weekly

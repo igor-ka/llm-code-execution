@@ -612,8 +612,10 @@ Four details in that rule are not decoration:
   with the version in a trailing comment, and Dependabot bumps SHA pins by that comment, so a new
   third-party action SHA would arrive as a *patch* and merge unread — and `SDLC docs` exits 0 for
   `dependabot[bot]` while no `verify.sh` reads workflow files. An allow-list also fails closed on
-  ecosystems added later: `docker` is proposed in #110, where a base-image digest bump has the
-  same property.
+  ecosystems added later, which is not hypothetical: `docker` was added in #110 and is ineligible
+  by construction, with no exclusion rule to write or remember. That matters most for
+  `backend/sandbox-image/`, the containment boundary around LLM-generated code — a base image
+  there must never merge unread.
 
   The check lives in the **job-level `if:`**, on `github.head_ref`, not in the gate that reads the
   action's output — and that placement is the whole point. For `pull_request` the workflow file is
