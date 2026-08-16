@@ -42,8 +42,8 @@ resource "google_secret_manager_secret" "app" {
   depends_on = [google_project_service.phase1]
 }
 
-# One binding per secret, not one project-level role. If a sixth secret is added later for some
-# unrelated component, the runtime account does not silently gain access to it.
+# One binding per secret, not one project-level role. There are six here; if a seventh is added
+# later for some unrelated component, the runtime account does not silently gain access to it.
 resource "google_secret_manager_secret_iam_member" "runtime_accessor" {
   for_each = google_secret_manager_secret.app
 
