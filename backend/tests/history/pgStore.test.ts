@@ -4,6 +4,11 @@
  * target (verify.sh test:integration) sets DATABASE_URL and exercises it. This proves the
  * Postgres impl satisfies the identical contract — isolation and recency ordering included —
  * that the in-memory oracle does.
+ *
+ * "Gated on DATABASE_URL" means the SHELL's, pinned by vitest.config.ts. Without that pin the
+ * gate leaks: src/config.ts runs dotenv on the repo-root .env at import time, so any test
+ * reaching config.ts would create the variable mid-run and this suite would stop skipping and
+ * start connecting — to whatever that .env names.
  */
 import { describe } from "vitest";
 import { runHistoryContract } from "./contractTests.js";
