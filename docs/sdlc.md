@@ -354,7 +354,11 @@ Details that are easy to get wrong:
 - **The `Audit` step fails on high and critical advisories only.** `npm audit --audit-level=high`,
   the same command locally and in CI. Moderate and below stay visible in the output and are
   Dependabot's job; blocking every merge on a moderate transitive advisory buys noise rather than
-  safety. It reads the lockfile, so `SKIP_INSTALL=1` does not weaken it.
+  safety. It reads the lockfile, so `SKIP_INSTALL=1` does not weaken it, and it passes
+  `--no-offline` because `npm_config_offline=true` otherwise makes `npm audit` report "found 0
+  vulnerabilities" and exit 0. Scope is every dependency, dev included: neither image ships
+  devDependencies, but they execute in CI. It runs LAST in `all` — a registry outage exits
+  non-zero exactly like a real advisory, and should not abort the checks that work offline.
 
   It is a **hard fail, not `|| true`**. A check that cannot fail is the decorative-assertion
   pattern this repo has already shipped once and had to fix — it reads as coverage and provides
