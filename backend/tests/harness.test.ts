@@ -10,19 +10,11 @@
  * no env file exists, and fails if the pin is ever deleted. The second is the real proof and can
  * only run where an env file actually declares a value to leak.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { parse } from "dotenv";
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, relative } from "node:path";
-
-/** Every file under `dir`, recursively. */
-function walk(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const path = join(dir, entry.name);
-    return entry.isDirectory() ? walk(path) : [path];
-  });
-}
+import { dirname, join } from "node:path";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KEYS = ["DATABASE_URL", "REDIS_URL"] as const;
@@ -69,31 +61,30 @@ describe("test harness: the datastore gate", () => {
     }
   });
 
-  // The reason the split works is that only ONE unit-project suite touches Postgres, so there is
-  // nothing for it to race. But `include: ["tests/**/*.test.ts"]` means the next Postgres suite
-  // someone adds lands in the unit project by DEFAULT, in parallel with isolation.test.ts, whose
-  // beforeEach migrates and then TRUNCATEs — reintroducing exactly the corruption this split
-  // removed. A comment cannot hold that; this does.
-  //
-  // Keyed on `makePool`, the only way to open a pool here. Deliberately not on RedisQuotaStore:
-  // redisQuotaOffline.test.ts imports it to prove the fail-open path against a CLOSED port and
-  // needs no live server, so it belongs in the unit project.
-  it("keeps every Postgres-touching suite out of the unit project's parallel pool", async () => {
-    const config = (await import("../vitest.config.js")).default as {
-      test?: { projects?: { test?: { name?: string; include?: string[] } }[] };
+  // The race this guards has a precondition: a datastore variable being set. When one is, the
+  // schema-sharing suites stop skipping, and any two of them running concurrently corrupt each
+  // other's fixtures. Serialization therefore has to be tied to that same condition — and tied
+  // in the CONFIG, so it holds for `npm run test`, `verify.sh`, and a bare `npx vitest run`
+  // alike. It used to live in one npm script, which is how the race survived.
+  it("serializes the run whenever a datastore variable is set", async () => {
+    const load = async (env: Record<string, string | undefined>) => {
+      const saved = { ...process.env };
+      Object.assign(process.env, env);
+      vi.resetModules();
+      try {
+        const mod = (await import("../vitest.config.js")).default as {
+          test?: { fileParallelism?: boolean };
+        };
+        return mod.test?.fileParallelism;
+      } finally {
+        process.env = saved;
+      }
     };
-    const integration =
-      (config.test?.projects ?? []).find((p) => p.test?.name === "integration")?.test?.include ??
-      [];
 
-    const testsDir = join(repoRoot, "backend", "tests");
-    const touchesPostgres = walk(testsDir)
-      .filter((f) => f.endsWith(".test.ts"))
-      .filter((f) => /^import[^;]*\bmakePool\b/m.test(readFileSync(f, "utf8")))
-      .map((f) => relative(join(repoRoot, "backend"), f));
-
-    expect(touchesPostgres.length).toBeGreaterThan(0); // the guard must not pass by finding nothing
-    for (const file of touchesPostgres) expect(integration).toContain(file);
+    expect(await load({ DATABASE_URL: "postgres://x", REDIS_URL: undefined })).toBe(false);
+    expect(await load({ DATABASE_URL: undefined, REDIS_URL: "redis://x" })).toBe(false);
+    // Nothing to race when both are unset — the suites skip — so the common run stays parallel.
+    expect(await load({ DATABASE_URL: undefined, REDIS_URL: undefined })).toBe(true);
   });
 
   it("does not let a repo-root env file supply a datastore URL the shell did not", async () => {
