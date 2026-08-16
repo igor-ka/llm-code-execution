@@ -25,10 +25,51 @@ const fromShell = {
   REDIS_URL: process.env.REDIS_URL ?? "",
 };
 
+/**
+ * The suites that talk to a real datastore and SHARE ONE SCHEMA.
+ *
+ * `migrate.test.ts` drops tables and replays the migrations while `pgStore.test.ts` truncates and
+ * inserts, so running them concurrently corrupts each other's fixtures. That constraint used to
+ * live in one npm script (`--no-file-parallelism`) while nothing stopped the same files running
+ * another way — so a plain `npm run test` with `DATABASE_URL` exported raced. It lives with the
+ * files now.
+ */
+const DATASTORE_SUITES = [
+  "tests/history/pgStore.test.ts",
+  "tests/history/migrate.test.ts",
+  "tests/limits/redisQuota.test.ts",
+];
+
+const shared = { environment: "node" as const, env: fromShell };
+
 export default defineConfig({
   test: {
-    environment: "node",
-    include: ["tests/**/*.test.ts"],
-    env: fromShell,
+    projects: [
+      {
+        test: {
+          ...shared,
+          name: "unit",
+          include: ["tests/**/*.test.ts"],
+          // `isolation.test.ts` is deliberately NOT here: it runs the INV-1..8 matrix against the
+          // in-memory oracle unconditionally, and dropping that from the DB-free run would lose
+          // security coverage to fix a scheduling problem. Its Postgres half still self-skips
+          // without DATABASE_URL, and when the variable IS exported it is the only suite in this
+          // project touching the database — so there is nothing left for it to race.
+          exclude: DATASTORE_SUITES,
+        },
+      },
+      {
+        test: {
+          ...shared,
+          name: "integration",
+          include: [...DATASTORE_SUITES, "tests/history/isolation.test.ts"],
+          // The whole point: one schema, one file at a time. `fileParallelism` is a root-only
+          // option in vitest 3.2, so the per-project equivalent is a single fork: every file in
+          // this project runs in one process, one after another.
+          pool: "forks" as const,
+          poolOptions: { forks: { singleFork: true } },
+        },
+      },
+    ],
   },
 });

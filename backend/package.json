@@ -10,8 +10,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "tsc -p tsconfig.test.json && vitest run",
-    "test:integration": "tsc -p tsconfig.test.json && vitest run --no-file-parallelism tests/history/pgStore.test.ts tests/history/migrate.test.ts tests/history/isolation.test.ts tests/limits/redisQuota.test.ts"
+    "test": "tsc -p tsconfig.test.json && vitest run --project unit",
+    "test:integration": "tsc -p tsconfig.test.json && vitest run --project integration"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
