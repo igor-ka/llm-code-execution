@@ -58,8 +58,12 @@ ENV NODE_ENV=production
 #
 # backend/sandbox-image/ (python:3.12-slim) is now local-only. DockerBackend runs it as a separate
 # container, which is exactly the model Cloud Run does not have.
+# numpy too, and that is not a nicety: llm.ts tells the model "Only the Python standard library
+# plus numpy are available", so generated programs import it freely. backend/sandbox-image/ pins
+# the same version for DockerBackend — the two runtimes must agree, or the same prompt succeeds
+# locally and fails with ModuleNotFoundError in production.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 \
+  && apt-get install -y --no-install-recommends python3 python3-numpy \
   && rm -rf /var/lib/apt/lists/*
 COPY backend/package.json backend/package-lock.json ./
 RUN npm ci --omit=dev
