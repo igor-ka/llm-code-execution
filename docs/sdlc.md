@@ -354,9 +354,16 @@ Details that are easy to get wrong:
 - **The `Audit` step fails on high and critical advisories only.** `npm audit --audit-level=high`,
   the same command locally and in CI. Moderate and below stay visible in the output and are
   Dependabot's job; blocking every merge on a moderate transitive advisory buys noise rather than
-  safety. It reads the lockfile, so `SKIP_INSTALL=1` does not weaken it, and it passes
-  `--no-offline` because `npm_config_offline=true` otherwise makes `npm audit` report "found 0
-  vulnerabilities" and exit 0. Scope is every dependency, dev included: neither image ships
+  safety. It reads the lockfile, so `SKIP_INSTALL=1` does not weaken it.
+
+  **Two flags close environment-driven bypasses, and both were found by review rather than by the
+  gate noticing.** `--no-offline`, because `npm_config_offline=true` otherwise makes `npm audit`
+  report "found 0 vulnerabilities" and exit 0. `--include=dev`, because `npm audit` honours the
+  `omit` config and both `npm_config_omit=dev` and `NODE_ENV=production` set it, silently dropping
+  every dev-dependency advisory — the scope this gate claims. Counting the `|| true` rejected at
+  design time, that is three bypasses of one class: `npm audit` is configurable from the
+  environment in several ways, and all of them fail **open**. State the intent in flags rather
+  than inheriting whatever the environment says. Scope is every dependency, dev included: neither image ships
   devDependencies, but they execute in CI. It runs FIRST in `all`, before `npm ci`: that command
   executes dependency lifecycle scripts, so auditing afterwards would let a package with a known
   install-time vulnerability run before the gate could reject it. The cost is that a registry
