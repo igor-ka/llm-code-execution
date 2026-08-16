@@ -188,8 +188,11 @@ human**, even when both buckets come back empty.
 `debugging-and-error-recovery`, `git-workflow-and-versioning`
 
 **A child issue starts in its own worktree**, created with `scripts/worktree-new.sh <slug>
-[branch]` from the main checkout — never a bare `git worktree add`, which produces a tree with no
-stack slot, no dependencies and none of the gitignored files, so nothing in it runs. The unit is
+[branch]` from the main checkout — **never a bare `git worktree add`, and never the agent's
+built-in worktree tool**. Both produce a tree with no stack slot, no dependencies and none of the
+gitignored files, so nothing in it runs. The built-in tool is the easier mistake precisely because
+it *looks* like the supported path: it creates the directory under `.claude/worktrees/` exactly
+where this script does, and never calls it. The unit is
 the PR-sized slice; a question or a one-line doc fix stays in the main checkout. This is not
 ceremony: several sessions share this checkout, and one switching branches mid-task moves HEAD
 under another. Each worktree also gets its own application stack, which is what makes two slices
