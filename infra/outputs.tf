@@ -9,3 +9,8 @@ output "runtime_service_account" {
   description = "Email of the identity Cloud Run runs as. Phase 2 passes this to --service-account."
   value       = google_service_account.runtime.email
 }
+
+output "workload_identity_provider" {
+  description = "Full resource name for google-github-actions/auth's workload_identity_provider input."
+  value       = google_iam_workload_identity_pool_provider.github.name
+}
