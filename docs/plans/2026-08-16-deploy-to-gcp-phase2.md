@@ -6,12 +6,13 @@ the deployed service rather than inherited from it.
 
 **Architecture:** A new `CloudRunSandboxBackend` implements the existing `SandboxBackend` port by
 shelling out to the `sandbox` CLI that Cloud Run injects when a service is deployed with
-`--sandbox-launcher`. Cloud SQL replaces the Compose Postgres and Upstash replaces the Compose
-Redis; both arrive as secrets the runtime identity may read, wired at deploy time. The first
+`--sandbox-launcher`. Cloud SQL replaces the Compose Postgres and Memorystore for Valkey replaces
+the Compose Redis; both arrive as secrets the runtime identity may read, wired at deploy time. The first
 deploy is performed **by hand** (D4/S9) and only then captured in Terraform.
 
 **Tech Stack:** Terraform (`infra/`), Cloud Run gen2 + sandboxes (preview), Cloud SQL for
-PostgreSQL, Upstash Redis, the existing TypeScript backend and its `SandboxBackend` seam.
+PostgreSQL, Memorystore for Valkey behind a private VPC/PSC endpoint, the existing TypeScript
+backend and its `SandboxBackend` seam.
 
 **PR boundaries:** six PRs, one child issue each. Child issues are filed once this plan is
 approved (`docs/sdlc.md`: children come after the plan), in this order:
@@ -20,7 +21,7 @@ approved (`docs/sdlc.md`: children come after the plan), in this order:
 | --- | --- | --- |
 | 1 | `CloudRunSandboxBackend` + a Python interpreter in the production image | — |
 | 2 | Cloud SQL instance, database, and its connection secret | Phase 1 #152–#155 merged |
-| 3 | Upstash Redis, and the secret population runbook step | Phase 1 #152–#155 merged |
+| 3 | Memorystore for Valkey, its VPC/PSC, and the secret | Phase 1 #152–#155 merged |
 | 4 | The Cloud Run service — deployed by hand first, then captured in Terraform | PRs 1–3 |
 | 5 | The isolation re-verification battery (S3) and the honest README posture (S4) | PR 4 |
 | 6 | Rollback exercise (S10), ADR-0004 supersession, epic close-out | PR 4 |
@@ -639,48 +640,54 @@ git commit -m "feat(infra): cloud sql instance reached over the built-in connect
 
 ---
 
-## PR 3 — Upstash Redis
+## PR 3 — Memorystore for Valkey
 
-### Task 3: The database and its secret
+### Task 3: The quota store, and the VPC it needs
+
+**Superseded 2026-08-16 by spec D17.** This task said Upstash. It now says Memorystore for
+Valkey: everything inside GCP, paid for deliberately, on a teardown-when-idle model
+(~CAD 33/month left running, ~CAD 3 destroyed between sessions).
 
 **Files:**
-- Modify: `docs/runbooks/gcp-bootstrap.md`
+- Create: `infra/valkey.tf`
+- Modify: `infra/apis.tf`, `docs/runbooks/gcp-teardown.md`, `README.md`
 
-Upstash is deliberately **not** Terraform-managed. Its provider needs an Upstash API key, which
-would be a second credential to store and rotate for one resource that is created once and never
-changes — and D8 already accepts that a third party holds this control's state.
+- [ ] **Step 1: The VPC, because Valkey cannot be reached without one**
 
-- [ ] **Step 1: Create the database**
+Valkey is reachable only over Private Service Connect, which needs a network to attach to — the
+complexity P2-D3 avoided for Cloud SQL via the built-in connector, and for which Memorystore has
+no equivalent. `infra/valkey.tf` therefore carries a `google_compute_network`, a
+`google_compute_subnetwork` and a `google_network_connectivity_service_connection_policy` before
+the instance itself.
 
-At [console.upstash.com](https://console.upstash.com/), create a Redis database in a US region
-(matching `us-central1` keeps the round trip short; the quota check is on the hot path of every
-`/api/execute`). The free tier is 256 MB and 500k commands/month.
+Enable `compute`, `memorystore` and `networkconnectivity` in `infra/apis.tf`.
 
-- [ ] **Step 2: Populate the secret**
+- [ ] **Step 2: The instance**
+
+`SHARED_CORE_NANO`, one shard, **zero replicas** — a replica doubles the bill to protect a counter
+whose loss costs one window of unmetered requests, which ADR-0003's fail-open posture already
+accepts. `deletion_protection_enabled = false`, because every session-end teardown must not need
+an edit-and-retry.
+
+- [ ] **Step 3: The endpoint output, selected by name**
+
+The instance exposes **two** connections: the discovery one and a second with no
+`connection_type` and port 0. Select on `connection_type == "CONNECTION_TYPE_DISCOVERY"` — taking
+`[0]` is a coin flip that happens to work today. Flatten to `host:port`, because
+`terraform output -raw` on the raw attribute fails with "complex type".
+
+- [ ] **Step 4: Populate the secret**
 
 ```bash
-printf '%s' "<the rediss:// URL from the Upstash console>" \
+printf 'redis://%s' "$(terraform output -raw valkey_endpoint)" \
   | gcloud secrets versions add redis-url --data-file=-
 ```
 
-`rediss://`, not `redis://` — TLS. The quota counter carries no secrets, but it carries identity
-(`sub`-keyed), and Upstash is reachable from the internet.
+`redis://`, not `rediss://` — this is a private PSC endpoint inside the project VPC, not an
+internet-facing service, and Memorystore does not present a TLS listener on it by default.
 
-- [ ] **Step 3: Fill in the bootstrap runbook's secret step**
-
-Replace the "Filled in by PR 4 (#133)" placeholder in `docs/runbooks/gcp-bootstrap.md` §10 with
-the six `gcloud secrets versions add` commands, one per container, each naming where its value
-comes from: `.env` (Anthropic), `terraform output` (database), the Upstash console, and the Auth0
-tenant (three OIDC values).
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add docs/runbooks/gcp-bootstrap.md
-git commit -m "docs(runbooks): populate every secret container"
-```
-
----
+**The endpoint is newly allocated on every rebuild**, so this command belongs in the teardown
+runbook's rebuild section, not only here.
 
 ## PR 4 — the service
 
@@ -718,8 +725,16 @@ gcloud beta run deploy app \
   --set-env-vars SANDBOX_BACKEND=cloudrun,LOG_FORMAT=json,AUTH_REQUIRED=true,SANDBOX_MAX_CONCURRENT=4 \
   --set-secrets ANTHROPIC_API_KEY=anthropic-api-key:latest,DATABASE_URL=database-url:latest,REDIS_URL=redis-url:latest,OIDC_ISSUER=oidc-issuer:latest,OIDC_AUDIENCE=oidc-audience:latest,OIDC_JWKS_URL=oidc-jwks-url:latest \
   --cpu 2 --memory 2Gi --concurrency 8 --max-instances 2 \
+  --network app-net --subnet app-subnet --vpc-egress private-ranges-only \
   --allow-unauthenticated
 ```
+
+`--network`/`--subnet` are **not optional** (spec D17): Valkey lives at a private PSC address
+inside `app-net`, so without Direct VPC egress the service starts, passes its health check, and
+then fails every quota lookup — `assertRedisConfigured` only checks the variable is non-empty and
+`RedisQuotaStore` connects lazily, so the failure surfaces as the quota silently failing open
+rather than as a boot error. `private-ranges-only` keeps public egress (the Anthropic API, Auth0
+JWKS) on the default path rather than routing it through the VPC.
 
 `--allow-unauthenticated` is correct and is not a hole: the application's own OIDC gate is what
 authenticates users (`AUTH_REQUIRED=true`). Cloud Run IAM would authenticate *Google* identities,

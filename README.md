@@ -48,10 +48,14 @@ backend/
 frontend/                    React + Vite UI
   src/                       App.tsx, api.ts, history.ts, components/ (HistorySidebar, SessionView, RunResult)
   verify.sh                  one-command checks (lint + format + vitest + build + docker + npm audit)
-infra/                       Terraform root for the GCP foundation (Phase 1 — nothing deployed yet)
-  *.tf                       versions/providers/variables + apis; one region, one project
-  tests/gates.test.sh        unit tests for the repo-specific gates, run first by verify.sh
+infra/                       Terraform root for the GCP environment (Phase 1 foundation + Phase 2 data stores)
+  apis.tf registry.tf        enabled APIs; Artifact Registry with cleanup policies
+  identity.tf secrets.tf     runtime service account; six secret CONTAINERS (payloads never in Terraform)
+  wif.tf budget.tf           keyless GitHub federation; credit-burn + real-spend budgets
+  sql.tf valkey.tf           Cloud SQL (no public access) and Memorystore for Valkey behind a private VPC/PSC
+  tests/                     unit tests for the repo-specific gates and bootstrap.sh, run first by verify.sh
   verify.sh                  selftest + fmt + init -backend=false + validate + gates (no credentials)
+  bootstrap.sh               creates the state bucket — the one resource Terraform does not own
 docker-compose.yml           local dev topology: backend + frontend + postgres + redis + one-shot sandbox-image build
 Dockerfile                   PRODUCTION image: SPA + API in one container, one origin, non-root, no Docker socket
 .dockerignore                build context for the production image (the repo root is that context)
@@ -329,6 +333,18 @@ only because the concurrency cap still bounds the host. The backend refuses to s
 - **Docker socket is mounted into the backend** (`docker-compose.yml`), which is
   root-equivalent control of the host. Acceptable for local dev; in production use a
   restricted socket proxy, or `CloudRunSandboxBackend` (which removes the socket entirely).
+- **The GCP environment is destroyed between working sessions, by design.** Memorystore and
+  Cloud SQL bill per hour of *existence* and Memorystore cannot be stopped, only deleted, so
+  `terraform destroy` is the normal end of a session rather than an end-of-project ritual
+  (~CAD 55/month always-on versus ~CAD 3 at ten hours a week). Consequences a reader needs:
+  the deployed URL is live only while someone is working, a rebuild takes 15–20 minutes, and
+  **all six secret payloads must be repopulated** each time — two of them change on every
+  rebuild (`database-url` gets a fresh generated password, `redis-url` a newly allocated PSC
+  endpoint). See [`docs/runbooks/gcp-teardown.md`](docs/runbooks/gcp-teardown.md).
+- **Neither data store is reachable from the internet.** Cloud SQL has a public IP with an empty
+  authorized-network list, brokered by the Cloud SQL Auth Proxy and authorised by IAM; Valkey is
+  a private PSC endpoint inside the project VPC, so the Cloud Run service reaches it only via
+  Direct VPC egress.
 - **`SANDBOX_BACKEND=cloudrun` selects a different set of guarantees, and every bullet above
   describes the `docker` default.** `CloudRunSandboxBackend` exists but nothing is deployed with
   it yet. When it is, three things change and none of them is an improvement to gloss over:
