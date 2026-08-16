@@ -10,6 +10,17 @@ output "runtime_service_account" {
   value       = google_service_account.runtime.email
 }
 
+output "sql_connection_name" {
+  description = "project:region:instance — what --add-cloudsql-instances takes."
+  value       = google_sql_database_instance.main.connection_name
+}
+
+output "db_password" {
+  description = "Generated application database password. Read once to populate the secret."
+  value       = random_password.db.result
+  sensitive   = true
+}
+
 output "workload_identity_provider" {
   description = "Full resource name for google-github-actions/auth's workload_identity_provider input."
   value       = google_iam_workload_identity_pool_provider.github.name
