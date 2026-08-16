@@ -93,6 +93,48 @@ describe("makeLogger (json)", () => {
     expect(entry.err.errors[0].message).toBe("connect ECONNREFUSED 127.0.0.1:6379");
   });
 
+  // pg's DatabaseError extends Error and hangs its diagnostics off the instance as OWN
+  // ENUMERABLE properties. Normalizing an Error to just {message, stack, name} is right for a
+  // plain Error — those three are non-enumerable and would not survive JSON.stringify — but it
+  // discards every field that says what actually broke. This bites hardest on the boot path:
+  // migrate() runs before listen(), so a bad migration reaches the operator through
+  // index.ts's "fatal: backend failed to start" on a crash-looping container, and
+  // `column "foo" does not exist` without position or SQLSTATE is most of a debugging session.
+  it("keeps a pg DatabaseError's own diagnostics — code, detail, position", () => {
+    const lines: string[] = [];
+    const log = makeLogger("json", (line) => lines.push(line));
+
+    // Shaped like pg's DatabaseError: an Error subclass whose diagnostics are own enumerable
+    // properties. Constructed by hand so the test does not depend on pg's internals.
+    class DatabaseError extends Error {
+      severity = "ERROR";
+      code = "23505";
+      detail = "Key (owner_sub, id)=(auth0|abc, s1) already exists.";
+      position = "13";
+      table = "sessions";
+      constraint = "sessions_pkey";
+      // pg leaves the fields that do not apply undefined; they must not break serialization.
+      where = undefined;
+      routine = "errorMissingColumn";
+    }
+    log.error("fatal: backend failed to start", {
+      err: new DatabaseError('column "foo" does not exist'),
+    });
+
+    const entry = JSON.parse(lines[0]);
+    expect(entry.err.code).toBe("23505"); // the SQLSTATE — the only stable thing to alert on
+    expect(entry.err.detail).toBe("Key (owner_sub, id)=(auth0|abc, s1) already exists.");
+    expect(entry.err.position).toBe("13"); // the byte offset into the failing SQL
+    expect(entry.err.constraint).toBe("sessions_pkey");
+    expect(entry.err.table).toBe("sessions");
+    expect(entry.err.routine).toBe("errorMissingColumn");
+    // The explicit unwrapping still wins: message/stack/name are overlaid on top of the own
+    // properties, not replaced by them.
+    expect(entry.err.message).toBe('column "foo" does not exist');
+    expect(typeof entry.err.stack).toBe("string");
+    expect(entry.err.name).toBe("Error");
+  });
+
   it("unwraps a cause chain", () => {
     const lines: string[] = [];
     const log = makeLogger("json", (line) => lines.push(line));

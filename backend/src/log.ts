@@ -35,7 +35,23 @@ const MAX_CAUSE_DEPTH = 5;
  * thing an operator needs at 3am.
  */
 function fromError(err: Error, depth = 0): Record<string, unknown> {
-  const out: Record<string, unknown> = { message: err.message, stack: err.stack, name: err.name };
+  // Own enumerable properties FIRST, then message/stack/name overlaid on top.
+  //
+  // The overlay order is the point: those three are non-enumerable on a plain Error, so they must
+  // be lifted explicitly — but an Error subclass may also define them as own properties, and the
+  // explicit unwrapping has to win. Everything else is what subclasses hang off the instance, and
+  // for pg's DatabaseError that is the entire diagnosis: `code` (the SQLSTATE, the only stable
+  // thing to alert on), `position` (the byte offset into the failing SQL), `constraint` and
+  // `detail` (which constraint, on which key). Dropping them turns a crash-looping migration into
+  // `column "foo" does not exist` and nothing else.
+  //
+  // safeValue handles the cycles and unserializable values that arbitrary instance state can
+  // carry; `cause` and `errors` below then overwrite their own raw copies with unwrapped ones.
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(err)) out[key] = safeValue(value, new Set());
+  out.message = err.message;
+  out.stack = err.stack;
+  out.name = err.name;
   if (depth >= MAX_CAUSE_DEPTH) return out;
   if (err.cause !== undefined) {
     out.cause =
