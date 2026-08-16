@@ -167,9 +167,11 @@ secrets, so a copy costs nothing.
 Then it runs `npm ci` on both sides. `node_modules` is deliberately not shared: lockfiles diverge
 per branch, so each worktree installs its own (~284 MB).
 
-If either shared file is missing from the main checkout, it says so loudly next to the ✓ rather
-than handing you a worktree that cannot reach Claude or log in. If it fails partway — a registry
-hiccup during `npm ci` — it prints the exact commands to retry or to remove what it created.
+It refuses to claim success on a worktree that cannot run. If the shared env or the Auth0 values
+are missing — or merely *unfilled*, which a copied `.env.shared.example` or `frontend/.env.example`
+looks exactly like — it prints no ✓, names what to fix, and **exits non-zero**, so a script or a
+session calling it does not proceed into a dead tree. If it fails partway (a registry hiccup during
+`npm ci`) it prints the exact commands to retry or to remove what it created.
 
 To remove one: `docker compose down` inside it, then `git worktree remove <path>` and
 `git branch -D <branch>` from the main checkout. That frees the slot for the next
@@ -178,9 +180,14 @@ To remove one: `docker compose down` inside it, then `git worktree remove <path>
 Its `verify.sh` images outlive it, though — the tags are keyed on a path that no longer exists, so
 nothing will ever reuse or replace them. Reclaim the space when you remove a worktree:
 
+Derive the exact tag the way `verify.sh` does — **before** removing the worktree, while its path
+still exists — and match it whole. A bare dirname filter would miss a name longer than 24
+characters and would sweep up a second checkout that happens to share the name:
+
 ```bash
-docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -- "-<the removed dirname>-" |
-  xargs -r docker image rm
+root=$(cd .claude/worktrees/thing && pwd)          # while it still exists
+tag="verify-$(printf '%s' "$(basename "$root")" | tr -c '[:alnum:]._-' '-' | cut -c1-24)-$(printf '%s' "$root" | cksum | cut -d' ' -f1)"
+docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -- ":${tag}$" | xargs -r docker image rm
 ```
 
 The backend warns at startup if a worktree's `.env` claims one slot but points a port, URL or

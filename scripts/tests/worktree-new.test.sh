@@ -129,19 +129,62 @@ eq "the first claim wins when a file was hand-edited" 1 "$(printf 'STACK_SLOT=1\
 ) && eq "reading a duplicated claim exits clean under pipefail" 0 0 ||
   eq "reading a duplicated claim exits clean under pipefail" 0 1
 
-# --- the Auth0 detection that decides whether a worktree is usable ---
+# --- the config checks that decide whether a worktree is usable ---
 #
-# frontend/.env.example ships the three VITE_AUTH0_* names with EMPTY values, so a checkout that
-# copied the example without filling it in matches on the prefix alone. The blocker exists to
-# catch exactly that case, so prefix matching would disable the check it guards.
-auth0_lines() { grep -E '^VITE_AUTH0_[A-Z_]+=.+' || true; }
+# These call the PRODUCTION functions, not a copy of their regexes. A test that reimplements the
+# matcher keeps passing when the real one regresses, which is worse than no test: it reports
+# green about code it never ran.
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
 
-eq "a filled-in file is detected" "VITE_AUTH0_DOMAIN=x.auth0.com" \
-  "$(printf 'VITE_AUTH0_DOMAIN=x.auth0.com\n' | auth0_lines)"
-eq "the unfilled example is NOT mistaken for configuration" "" \
-  "$(printf 'VITE_AUTH0_DOMAIN=\nVITE_AUTH0_CLIENT_ID=\nVITE_AUTH0_AUDIENCE=\n' | auth0_lines)"
-eq "a partially filled file yields only the real values" "VITE_AUTH0_CLIENT_ID=abc" \
-  "$(printf 'VITE_AUTH0_DOMAIN=\nVITE_AUTH0_CLIENT_ID=abc\n' | auth0_lines)"
+write() { printf '%s\n' "$2" >"$tmp/$1"; }
+
+write filled 'VITE_AUTH0_DOMAIN=x.auth0.com
+VITE_AUTH0_CLIENT_ID=abc
+VITE_AUTH0_AUDIENCE=https://api.x.local'
+eq "a fully filled file has no gaps" "" "$(auth0_missing "$tmp/filled")"
+
+# The exact shape of frontend/.env.example: all three names present, all values empty.
+write example 'VITE_AUTH0_DOMAIN=
+VITE_AUTH0_CLIENT_ID=
+VITE_AUTH0_AUDIENCE='
+eq "the unfilled example is not mistaken for configuration" \
+  "VITE_AUTH0_DOMAIN VITE_AUTH0_CLIENT_ID VITE_AUTH0_AUDIENCE" "$(auth0_missing "$tmp/example")"
+
+# One key set is NOT configured: Auth0Provider still receives an undefined domain.
+write partial 'VITE_AUTH0_CLIENT_ID=abc'
+eq "one key set still reports the other two missing" \
+  "VITE_AUTH0_DOMAIN VITE_AUTH0_AUDIENCE" "$(auth0_missing "$tmp/partial")"
+
+# An unrelated VITE_AUTH0_* key must not satisfy anything.
+write unrelated 'VITE_AUTH0_FOO=bar'
+eq "an unrelated VITE_AUTH0_ key satisfies nothing" \
+  "VITE_AUTH0_DOMAIN VITE_AUTH0_CLIENT_ID VITE_AUTH0_AUDIENCE" "$(auth0_missing "$tmp/unrelated")"
+
+eq "a missing file reports everything missing" \
+  "VITE_AUTH0_DOMAIN VITE_AUTH0_CLIENT_ID VITE_AUTH0_AUDIENCE" "$(auth0_missing "$tmp/nope")"
+
+# --- shared_missing: existence is not configuration ---
+write shared_ok 'ANTHROPIC_API_KEY=sk-ant-real
+OIDC_ISSUER=https://x.auth0.com/
+OIDC_AUDIENCE=https://api.x.local
+OIDC_JWKS_URL=https://x.auth0.com/.well-known/jwks.json'
+eq "a filled shared env has no gaps" "" "$(shared_missing "$tmp/shared_ok")"
+
+# The exact shape of a copied .env.shared.example.
+write shared_example 'ANTHROPIC_API_KEY=sk-ant-...
+OIDC_ISSUER=
+OIDC_AUDIENCE=
+OIDC_JWKS_URL='
+eq "a copied .env.shared.example is caught" \
+  "ANTHROPIC_API_KEY OIDC_ISSUER OIDC_AUDIENCE OIDC_JWKS_URL" \
+  "$(shared_missing "$tmp/shared_example")"
+
+# AUTH_REQUIRED=false makes the OIDC values genuinely irrelevant — do not demand them.
+write shared_noauth 'ANTHROPIC_API_KEY=sk-ant-real
+AUTH_REQUIRED=false
+OIDC_ISSUER='
+eq "AUTH_REQUIRED=false excuses the OIDC values" "" "$(shared_missing "$tmp/shared_noauth")"
 
 # --- the lock release must not abort the exit handler ---
 #
