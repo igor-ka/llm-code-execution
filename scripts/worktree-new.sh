@@ -125,6 +125,39 @@ frontend_env() {
   printf 'VITE_API_BASE=http://localhost:%s\n' "$(port_for "$BASE_BACKEND" "$slot")"
 }
 
+# auth0_missing <file> -> the VITE_AUTH0_* keys the SPA needs but that file does not usefully set.
+#
+# Three exact keys, each needing a NON-EMPTY value. Neither half is optional:
+#   - prefix-only matching passes `frontend/.env.example`, which ships all three names empty, so a
+#     checkout that copied the example without filling it in would look configured;
+#   - an aggregate "any match" passes a file with one key set, and `Auth0Provider` still gets an
+#     undefined domain. Every key is required, so every key is checked.
+auth0_missing() {
+  local file="$1" key missing=""
+  for key in VITE_AUTH0_DOMAIN VITE_AUTH0_CLIENT_ID VITE_AUTH0_AUDIENCE; do
+    grep -qE "^${key}=.+" "$file" 2>/dev/null || missing="$missing $key"
+  done
+  printf '%s' "${missing# }"
+}
+
+# shared_missing <file> -> the shared settings that are present-but-useless in that file.
+#
+# Existence is not configuration: `cp .env.shared.example .env.shared` leaves the API key as the
+# literal `sk-ant-...` placeholder and the OIDC values empty while AUTH_REQUIRED defaults ON, so
+# the worktree cannot generate code OR validate a token — while looking perfectly set up.
+shared_missing() {
+  local file="$1" missing="" key
+  grep -qE '^ANTHROPIC_API_KEY=sk-ant-\.\.\.$|^ANTHROPIC_API_KEY=$' "$file" 2>/dev/null &&
+    missing="$missing ANTHROPIC_API_KEY"
+  # Auth defaults on; only an explicit false turns the OIDC values into don't-cares.
+  if ! grep -qE '^AUTH_REQUIRED=false$' "$file" 2>/dev/null; then
+    for key in OIDC_ISSUER OIDC_AUDIENCE OIDC_JWKS_URL; do
+      grep -qE "^${key}=.+" "$file" 2>/dev/null || missing="$missing $key"
+    done
+  fi
+  printf '%s' "${missing# }"
+}
+
 # used_slots -> every slot currently claimed, one per line: the main checkout plus each registered
 # worktree. A tree with no .env yet claims nothing, which is correct — it cannot run a stack.
 used_slots() {
@@ -219,12 +252,21 @@ main() {
   # second session fail outright for the duration, which is the opposite of the point.
   LOCK_DIR="$ROOT/.claude/worktrees/.worktree-new.lock"
   mkdir -p "$ROOT/.claude/worktrees"
-  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    echo "✗ another worktree-new.sh is claiming a slot (lock: $LOCK_DIR)." >&2
-    echo "  It is held for seconds, not for the install — try again in a moment." >&2
-    echo "  If it is stale — no other run in flight — remove it: rmdir $LOCK_DIR" >&2
-    exit 1
-  fi
+  # QUEUE for the claim window rather than failing on contact. The window is `git fetch` plus
+  # `git worktree add` — seconds — so two genuinely simultaneous runs should both succeed, which
+  # is the whole promise. Bounded, because waiting forever on a stale lock is its own failure.
+  local waited=0
+  until mkdir "$LOCK_DIR" 2>/dev/null; do
+    if ((waited >= 120)); then
+      echo "✗ timed out waiting for the slot lock: $LOCK_DIR" >&2
+      echo "  It is held only for the seconds around 'git worktree add', so 2 minutes means it is" >&2
+      echo "  stale. With no other run in flight, remove it: rmdir $LOCK_DIR" >&2
+      exit 1
+    fi
+    [[ $waited -eq 0 ]] && echo "==> another run is claiming a slot; waiting for it…"
+    sleep 2
+    waited=$((waited + 2))
+  done
   # ONE exit handler for both jobs — a second `trap … EXIT` would silently replace this one.
   # Its state is GLOBAL, not `local`: an EXIT trap fires after main() has returned, where a local
   # is already out of scope and `set -u` would abort the handler itself.
@@ -263,10 +305,13 @@ main() {
   # the shared half rather than handing over a worktree with no API key. The ordering makes this
   # safe: Compose reads .env.shared first and this worktree's .env second, dotenv reads .env
   # first — either way the slot's own values win over the fat file's slot-0 ones.
+  local shared_gaps=""
   if [[ -f "$ROOT/.env.shared" ]]; then
     ln -sfn "../../../.env.shared" "$dir/.env.shared"
+    shared_gaps="$(shared_missing "$ROOT/.env.shared")"
   elif [[ -f "$ROOT/.env" ]]; then
     ln -sfn "../../../.env" "$dir/.env.shared"
+    shared_gaps="$(shared_missing "$ROOT/.env")"
     notes+=("the main checkout has no .env.shared, so .env.shared here points at its root .env
     instead. That works — the slot values in this worktree's own .env still win — but splitting
     the env (cp .env.shared.example .env.shared, move the shared values across) is tidier.")
@@ -275,6 +320,12 @@ main() {
     ANTHROPIC_API_KEY, no OIDC_* config and no sandbox limits — the generated .env carries slot
     identity only. Create one (cp .env.shared.example .env.shared), then:
       ln -s ../../../.env.shared $dir/.env.shared")
+  fi
+  if [[ -n "$shared_gaps" ]]; then
+    blockers+=("the shared env exists but is not filled in — still placeholder or empty:
+    $shared_gaps. A copied .env.shared.example looks configured and is not: the API key is the
+    literal sk-ant-... and, with AUTH_REQUIRED defaulting on, empty OIDC values mean no token
+    validates either.")
   fi
 
   [[ -f "$ROOT/.claude/settings.local.json" ]] &&
@@ -286,20 +337,17 @@ main() {
   rmdir "$LOCK_DIR" 2>/dev/null || true
   LOCK_DIR=""
 
-  local auth0=""
+  local auth0="" auth0_gaps="VITE_AUTH0_DOMAIN VITE_AUTH0_CLIENT_ID VITE_AUTH0_AUDIENCE"
   if [[ -f "$ROOT/frontend/.env.local" ]]; then
-    # `=.+` and not just the prefix: frontend/.env.example ships VITE_AUTH0_DOMAIN=,
-    # VITE_AUTH0_CLIENT_ID= and VITE_AUTH0_AUDIENCE= with EMPTY values, so a checkout that copied
-    # the example without filling it in matches three lines while configuring nothing — and the
-    # blocker below, whose whole purpose is catching that, would never fire.
+    auth0_gaps="$(auth0_missing "$ROOT/frontend/.env.local")"
     # `|| true`: grep exits 1 on no match, and under `set -e` that would abort here — AFTER the
     # worktree and branch exist, leaving a half-built tree behind.
     auth0="$(grep -E '^VITE_AUTH0_[A-Z_]+=.+' "$ROOT/frontend/.env.local" || true)"
   fi
-  if [[ -z "$auth0" ]]; then
-    blockers+=("no VITE_AUTH0_* values found in the main checkout's frontend/.env.local, so the SPA
-    will start with an undefined Auth0 domain and client id and login will fail at runtime with
-    no diagnostic. Fill in $ROOT/frontend/.env.local, then copy those three lines into
+  if [[ -n "$auth0_gaps" ]]; then
+    blockers+=("the main checkout's frontend/.env.local does not set: $auth0_gaps. Auth0Provider
+    would receive undefined for those, and login fails at runtime with no diagnostic. Fill in
+    $ROOT/frontend/.env.local, then copy the three VITE_AUTH0_* lines into
     $dir/frontend/.env.local")
   fi
   frontend_env "$slot" "$auth0" >"$dir/frontend/.env.local"
