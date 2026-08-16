@@ -81,3 +81,41 @@ read the report, not to keep an alarm behind. One deliberate look beats a perman
 Start again at [`gcp-bootstrap.md`](gcp-bootstrap.md). Everything in `infra/` is reproducible into
 a fresh project; the only steps that are not automated are the ones that never were — creating the
 account, and populating the secret payloads.
+
+---
+
+## Appendix: the S7 rehearsal, run 2026-08-16
+
+A destroy-and-rebuild against the live project, sparing only what step 3 explains. Recorded here
+because a reproducibility claim nobody has exercised is an assumption.
+
+```
+terraform state list | sort            → 30 addresses
+
+terraform plan -destroy -target=…      → Plan: 0 to add, 0 to change, 18 to destroy
+terraform destroy  -target=…           → Destroy complete! Resources: 18 destroyed
+
+gcloud artifacts repositories list     → 0
+gcloud secrets list                    → 0
+gcloud iam service-accounts list       → 0 (app-runtime)
+gcloud billing budgets list            → 0
+gcloud iam workload-identity-pools list→ github ACTIVE   (deliberately spared)
+
+terraform apply                        → Apply complete! Resources: 18 added
+terraform state list | sort            → IDENTICAL to the 30 recorded before
+```
+
+Then the one manual step a rebuild always needs, because payloads are not in Terraform (S6):
+
+```
+printf '%s' "$ANTHROPIC_API_KEY" | gcloud secrets versions add anthropic-api-key --data-file=-
+terraform state pull | grep -c "sk-ant"   → 0
+```
+
+**What this proves:** the configuration reproduces its own resources exactly — the *reproduce*
+half of S7.
+
+**What it does not:** "zero billable resources". The rehearsal deliberately spares the workload
+identity pool (soft-deleted for ~30 days, so a rebuild would 409 on the same ID) and the state
+bucket (P1-D2). Both are removed only by the full teardown above, which ends in
+`gcloud projects delete`. **That half of S7 closes on day 91, not here.**
