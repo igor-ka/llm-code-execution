@@ -128,6 +128,15 @@ docker_() {
       echo "csp.txt does not name the Auth0 origin that was passed as a build arg" >&2; exit 1
     fi
 
+    # A Cloud Run sandbox executes user code against a read-only view of THIS image, so the
+    # interpreter must ship here rather than in backend/sandbox-image/. Without it the first
+    # execution on Cloud Run dies with command-not-found.
+    # NOTE: no apostrophes in this block. It lives inside a single-quoted sh -c string, and one
+    # stray quote closes it early and turns the rest into shell syntax errors.
+    # Import numpy rather than checking the interpreter binary: llm.ts promises the generator
+    # that numpy is available, so a missing module is a broken promise, not a missing nicety.
+    python3 -c "import numpy" >/dev/null 2>&1 || { echo "python3 with numpy missing from the production image" >&2; exit 1; }
+
     # Never root.
     [ "$(id -u)" != "0" ]
     echo "production image assertions passed"

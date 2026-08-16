@@ -159,3 +159,23 @@ describe("publicDir", () => {
     expect(loadSettings({ PUBLIC_DIR: "./public" }).publicDir).toBe(resolve("./public"));
   });
 });
+
+describe("sandboxBackend", () => {
+  it("defaults to docker, so local runs and existing tests are unchanged", () => {
+    expect(loadSettings({}).sandboxBackend).toBe("docker");
+  });
+
+  it("is cloudrun when SANDBOX_BACKEND=cloudrun", () => {
+    expect(loadSettings({ SANDBOX_BACKEND: "cloudrun" }).sandboxBackend).toBe("cloudrun");
+  });
+
+  it("REFUSES an unrecognized value rather than falling back to docker", () => {
+    // Silently choosing docker would let a typo boot on Cloud Run, pass every health check, and
+    // fail only at request time — there is no Docker socket there.
+    expect(() => loadSettings({ SANDBOX_BACKEND: "firecracker" })).toThrow(/SANDBOX_BACKEND/);
+  });
+
+  it("treats an empty value as absent", () => {
+    expect(loadSettings({ SANDBOX_BACKEND: "" }).sandboxBackend).toBe("docker");
+  });
+});

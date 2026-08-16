@@ -25,6 +25,7 @@ import { RedisQuotaStore } from "./limits/redisQuota.js";
 import { makeQuotaMiddleware } from "./limits/middleware.js";
 import { ConcurrencyLimiter } from "./limits/concurrency.js";
 import { ConcurrencyLimitedBackend } from "./sandbox/concurrencyLimited.js";
+import { CloudRunSandboxBackend } from "./sandbox/cloudRunSandbox.js";
 
 export interface AppDeps {
   settings?: Settings;
@@ -77,8 +78,14 @@ export function createApp(deps: AppDeps = {}): Express {
       // The cap is applied by wrapping, not by editing DockerBackend — so the future
       // CloudRunBackend inherits it unchanged. The limiter is owned by the decorator and
       // consulted nowhere else (D9), so nothing else here needs a reference to it.
+      // The seam doing its job: the cap decorator wraps whichever backend the environment
+      // selected, and no caller learns which one it got.
+      const inner =
+        settings.sandboxBackend === "cloudrun"
+          ? new CloudRunSandboxBackend()
+          : new DockerBackend(settings.sandboxImage);
       sandbox = new ConcurrencyLimitedBackend(
-        new DockerBackend(settings.sandboxImage),
+        inner,
         new ConcurrencyLimiter(settings.sandboxMaxConcurrent),
         settings.sandboxTimeoutSeconds,
       );

@@ -41,6 +41,7 @@ export interface Settings {
   quotaSustained: number;
   quotaSustainedWindowSeconds: number;
   sandboxMaxConcurrent: number;
+  sandboxBackend: "docker" | "cloudrun"; // "cloudrun" requires --sandbox-launcher on the service
 }
 
 type Env = Record<string, string | undefined>;
@@ -87,6 +88,17 @@ const tcpPort = (name: string, v: string | undefined, dflt: number): number => {
     throw new Error(`${name} must be a valid TCP port (1-65535), got ${JSON.stringify(v)}`);
   }
   return n;
+};
+
+/**
+ * "docker" | "cloudrun", or a hard failure. Absent means docker; anything else present must be
+ * one of the two, because the consequence of guessing is a service that boots healthy and fails
+ * every execution.
+ */
+const sandboxBackendFrom = (v: string | undefined): "docker" | "cloudrun" => {
+  if (v === undefined || v === "") return "docker";
+  if (v === "docker" || v === "cloudrun") return v;
+  throw new Error(`SANDBOX_BACKEND must be "docker" or "cloudrun", got ${JSON.stringify(v)}`);
 };
 
 export function loadSettings(env: Env = process.env): Settings {
@@ -136,6 +148,11 @@ export function loadSettings(env: Env = process.env): Settings {
       3600,
     ),
     sandboxMaxConcurrent: posInt("SANDBOX_MAX_CONCURRENT", env.SANDBOX_MAX_CONCURRENT, 4),
+    // Absent -> docker, so every local run and existing test is unchanged. But a PRESENT and
+    // unrecognised value is refused, not quietly downgraded: on Cloud Run there is no Docker
+    // socket, so a typo would pass startup and every execution would fail at request time. Same
+    // reasoning as posInt() above — running with the wrong backend silently is the failure mode.
+    sandboxBackend: sandboxBackendFrom(env.SANDBOX_BACKEND),
   };
 }
 

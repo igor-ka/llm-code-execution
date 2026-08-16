@@ -328,7 +328,17 @@ only because the concurrency cap still bounds the host. The backend refuses to s
   ever share one. See ADR-0003's *Consequences*.
 - **Docker socket is mounted into the backend** (`docker-compose.yml`), which is
   root-equivalent control of the host. Acceptable for local dev; in production use a
-  restricted socket proxy, or the planned `CloudRunBackend` (which removes the socket entirely).
+  restricted socket proxy, or `CloudRunSandboxBackend` (which removes the socket entirely).
+- **`SANDBOX_BACKEND=cloudrun` selects a different set of guarantees, and every bullet above
+  describes the `docker` default.** `CloudRunSandboxBackend` exists but nothing is deployed with
+  it yet. When it is, three things change and none of them is an improvement to gloss over:
+  per-execution memory/CPU/PID caps do **not** apply (sandboxes share the instance's allocation),
+  processes inside the sandbox run with `sudo` over an ephemeral overlay rather than
+  `CapDrop: ["ALL"]` as uid 1000, and the readable filesystem is this application's image, so
+  `/app/dist` and `/app/node_modules` are visible where previously only `python:3.12-slim` was.
+  In exchange, egress is denied by default and the metadata server — which holds the runtime
+  identity's token — is unreachable. The full re-verification against a deployed service is
+  tracked by #162; this note exists so the list above is not read as covering both backends.
 - Internal exception detail is surfaced in some error responses; HTTP only (no TLS).
 
 These map directly to the Roadmap below. The auth gate is regression-tested in

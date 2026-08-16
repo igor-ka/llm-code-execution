@@ -503,6 +503,8 @@ This file is the contract, and it is enforced deterministically rather than by g
 
 - `.claude/skills/**`
 - `backend/verify.sh`, `frontend/verify.sh` or `infra/verify.sh`
+- The production-image assertions in `backend/verify.sh` also require a `python3` interpreter in
+  the image, because a Cloud Run sandbox executes against the application image's own filesystem
 - `infra/tests/**` — the self-tests `infra/verify.sh` runs first: the gates, and `bootstrap.sh`
   against a fake `gcloud` (a live run proves the script worked that day, not that the next edit is safe)
 - `.github/workflows/**`
