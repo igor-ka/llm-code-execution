@@ -6,6 +6,20 @@
 > data here is disposable learning data. If anything in this project has become worth keeping,
 > copy it out **before** you start.
 
+## Two different teardowns
+
+**Between working sessions** (the normal one, spec D17). Memorystore and Cloud SQL bill per hour
+of *existence*, and Memorystore has no "stop" — only delete. Leaving them up costs ~CAD 55/month;
+destroying them between sessions costs ~CAD 3/month at ten hours a week. Run steps 1 only, keep
+the state bucket and the project, and rebuild from
+[`gcp-bootstrap.md`](gcp-bootstrap.md) next time. Budget **15–20 minutes** for the rebuild, mostly
+Cloud SQL, plus repopulating the six secret payloads.
+
+**At the end (day 91, or for good).** Everything below, including the state bucket and the
+project.
+
+Both start the same way; the difference is how far down the page you go.
+
 ## When
 
 **Day 91 of the free trial**, or any time the environment is not needed. The trial activation
@@ -27,7 +41,20 @@ Read the plan before confirming. This is the one operation here with no undo, an
 the last chance to notice that it is about to remove something you did not expect.
 
 Expect the registry, the runtime service account, all six secret containers and their versions,
-both budgets, and the workload identity pool and provider.
+both budgets, the Cloud SQL instance, the Valkey instance with its VPC and PSC policy, and the
+workload identity pool and provider.
+
+**If this is a between-sessions teardown, stop here.** The state bucket and the project stay, and
+`terraform apply` rebuilds everything from the same configuration. Two things do not come back by
+themselves: the secret payloads (deliberately not in Terraform — S6) and the Valkey endpoint,
+which is newly allocated on each rebuild. Repopulate with:
+
+```bash
+printf '%s' "redis://$(terraform output -raw valkey_endpoint)" \
+  | gcloud secrets versions add redis-url --data-file=-
+```
+
+then the other five from [`gcp-bootstrap.md`](gcp-bootstrap.md) §10.
 
 ## 2. Remove the state bucket — the one thing Terraform does not own
 

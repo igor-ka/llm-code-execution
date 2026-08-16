@@ -270,9 +270,40 @@ No secret is exposed — the environment is not inherited and the metadata serve
 but *"host paths unreadable"* in the README now means something materially narrower, and saying so
 is the whole point of S4.
 
+**D17 — Memorystore for Valkey replaces Upstash, on a teardown-when-idle cost model.**
+Decided 2026-08-16, **superseding D8**. The goal changed: keeping every component inside GCP,
+accepted as worth paying for, rather than minimising spend by putting one control with a third
+party.
+
+*Why Valkey and not Memorystore for Redis:* pulled from GCP's own billing catalog for
+`us-central1` in CAD, the account's currency — Valkey is **node**-priced at CAD 0.0448/hr for
+`SHARED_CORE_NANO`, while Redis Basic M1 is CAD 0.069/**GiB**-hr against a 1 GiB floor. Roughly a
+third cheaper for a store holding a handful of TTL'd counters. Google has also frozen Memorystore
+for Redis on 7.2 and moved development to Valkey. Same protocol, so `RedisQuotaStore` and the
+`redis` client are untouched — this is an infrastructure swap, not an application change.
+
+*The cost model is the decision, not the line item.* Memorystore bills per hour of **existence**
+and has no "stop" — only delete. Always-on is ~CAD 33/month for Valkey plus ~CAD 22 for Cloud SQL;
+destroyed between working sessions it is ~CAD 3/month at ten hours a week. So `terraform destroy`
+stops being an end-of-project ritual and becomes the normal end of a session, and the S7 rehearsal
+that proved destroy/rebuild reproduces state is now load-bearing rather than reassurance.
+
+*Accepted costs, both real:*
+
+1. **A VPC arrives after all.** Valkey is reachable only over Private Service Connect, which needs
+   a network to attach to — the complexity P2-D3 avoided for Cloud SQL by using the built-in
+   connector. There is no equivalent for Memorystore, so `infra/` now carries a VPC, a subnet and
+   a service connection policy, and the Cloud Run service needs Direct VPC egress to reach it.
+2. **Every rebuild costs ~15–20 minutes and a secret repopulation.** Mostly Cloud SQL
+   provisioning. The endpoint changes on each rebuild, so `redis-url` is repopulated from
+   `terraform output valkey_endpoint` — the payloads are deliberately not in Terraform (S6).
+
+*What this buys:* one provider, one bill, one teardown, and D8's residual risk — a third party
+holding the state of a security control — disappears.
+
 ## Open questions
 
-**None — all resolved (D1–D16).** Phase 2's six open questions were raised by the staff review of
+**None — all resolved (D1–D17).** Phase 2's six open questions were raised by the staff review of
 its plan on 2026-08-16 and decided the same day; they are D11–D16 above. Two items were deferred
 as configuration rather than architecture. Both are now closed:
 
@@ -301,9 +332,10 @@ Recorded rather than solved:
    degrade the instance it shares and has root over the ephemeral overlay. It can also read the
    application image (D16). None of this reaches a secret; all of it is narrower than the local
    build, and S4 requires the README to say so before launch.
-3. **A security control's state sits with a third party** (D8). Upstash holds the quota counters,
-   so its availability and its own rate limits now feed the fail-open path. Bounded by the same
-   alarm ADR-0003 S9 already demands.
+3. **The environment is destroyed between working sessions** (D17). That is the cost model, not a
+   failure — but it means the deployed URL is live only while someone is working, every rebuild
+   takes 15–20 minutes, and the secret payloads must be repopulated each time. D8's third-party
+   risk is gone with Upstash.
 4. **A public URL invites real adversaries.** The quota's fail-open path (ADR-0003 D5) and the
    single-tenant auth model were both accepted when the audience was one person.
 5. **Day-91 cliff.** The environment is deliberately destroyable, so "deployed" is a state that
