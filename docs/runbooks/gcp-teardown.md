@@ -49,12 +49,9 @@ workload identity pool and provider.
 themselves: the secret payloads (deliberately not in Terraform — S6) and the Valkey endpoint,
 which is newly allocated on each rebuild. Repopulate with:
 
-```bash
-printf '%s' "redis://$(terraform output -raw valkey_endpoint)" \
-  | gcloud secrets versions add redis-url --data-file=-
-```
-
-then the other five from [`gcp-bootstrap.md`](gcp-bootstrap.md) §10.
+then the rest — but do not hand-assemble them: **[`gcp-bootstrap.md`](gcp-bootstrap.md) §10 now
+carries all six commands**, including the two that change on every rebuild (`database-url` gets a
+fresh generated password, `redis-url` a newly allocated PSC endpoint). Run that section verbatim.
 
 ## 2. Remove the state bucket — the one thing Terraform does not own
 
