@@ -3,7 +3,7 @@
 # CI runs the SAME script (see .github/workflows/ci.yml), so local and CI can't drift.
 #
 # Usage: ./verify.sh [target]
-#   all              (default) install + audit + lint + format + test + build + integration + docker
+#   all              (default) install + lint + format + test + build + integration + docker + audit
 #   audit            npm audit (fails on high+ advisories)
 #   install          npm ci
 #   lint             eslint
@@ -42,15 +42,24 @@ install() { run npm ci; }
 # weaken it. `jose` verifies auth tokens and `pg` talks to the history store, so an advisory in
 # either sits directly on the security path the README leads with.
 #
+# SCOPE is every dependency, dev included — NOT `--omit=dev`. Neither image ships devDependencies
+# (both Dockerfiles use `npm ci --omit=dev`), so a vulnerable eslint never reaches production. But
+# it does run here and in CI, on a checkout with a writable token, which is the supply-chain half
+# of the threat model rather than the runtime half.
+#
 # THRESHOLD: high and above fail. Moderate and below are reported by `npm audit` and handled by
 # Dependabot PRs; blocking a merge on every moderate transitive advisory buys noise, not safety.
 #
+# `--no-offline` is load-bearing: with `npm_config_offline=true` in the environment or
+# `offline=true` in a developer's ~/.npmrc, `npm audit` prints "found 0 vulnerabilities" and exits
+# 0 — turning this gate into exactly the decorative assertion the next paragraph says it is not.
+#
 # A HARD FAIL, deliberately — not `|| true`. A check that cannot fail is the decorative-assertion
-# pattern this repo has already shipped once and had to fix (see "Changing this SDLC" in
-# docs/sdlc.md): it reads as coverage and provides none. If an unfixable high advisory ever lands
-# with no upstream patch, the honest response is an explicit, dated exception written here — where
-# it is visible in review — not a permanently green check.
-audit()  { run npm audit --audit-level=high; }
+# pattern this repo has already shipped once and had to fix (see "Details that are easy to get
+# wrong" under "How this meets CI/CD" in docs/sdlc.md): it reads as coverage and provides none. If
+# an unfixable high advisory ever lands with no upstream patch, the honest response is an
+# explicit, dated exception written here — where it is visible in review — not a green check.
+audit()  { run npm audit --audit-level=high --no-offline; }
 lint()    { run npm run lint; }
 format()  { run npm run format:check; }
 test_()   { run npm run test; }
@@ -173,13 +182,17 @@ docker_() {
 
 all() {
   [[ "${SKIP_INSTALL:-}" == "1" ]] || install
-  audit
   lint
   format
   test_
   build
   integration
   [[ "${SKIP_DOCKER:-}" == "1" ]] || docker_
+  # LAST, not first. It is the only target that needs the network, and a registry blip
+  # exits non-zero exactly like a real advisory. Run earlier it would abort the whole
+  # local pass — including the checks that work offline from node_modules — over an
+  # outage that says nothing about this change.
+  audit
 }
 
 target="${1:-all}"

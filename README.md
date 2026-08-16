@@ -44,10 +44,10 @@ backend/
   migrations/                ordered SQL, applied on boot (001_history.sql)
   sandbox-image/Dockerfile   the minimal, non-root EXECUTION image (Python — unchanged)
   tests/                     Vitest suites; history/ = contract + router + persist + isolation battery
-  verify.sh                  checks (eslint + prettier + vitest + tsc + docker); +test:integration (Postgres, Redis)
+  verify.sh                  checks (eslint + prettier + vitest + tsc + docker + npm audit); +test:integration (Postgres, Redis)
 frontend/                    React + Vite UI
   src/                       App.tsx, api.ts, history.ts, components/ (HistorySidebar, SessionView, RunResult)
-  verify.sh                  one-command checks (lint + format + vitest + build + docker)
+  verify.sh                  one-command checks (lint + format + vitest + build + docker + npm audit)
 infra/                       Terraform root for the GCP foundation (Phase 1 — nothing deployed yet)
   *.tf                       versions/providers/variables + apis; one region, one project
   tests/gates.test.sh        unit tests for the repo-specific gates, run first by verify.sh
@@ -376,12 +376,20 @@ drift (CI invokes the same scripts). There are three: backend, frontend, and `in
   type-checks/builds (`tsc`), and builds three Docker images: the dev backend image, the sandbox
   image, and the repo-root production image — then asserts inside that image that the production
   CSP shipped, that the policy names no plaintext origin, and that the runtime user is not root.
+  It finishes with `npm audit`, which **fails on high and critical advisories**.
 - **Frontend:** `cd frontend && ./verify.sh` — installs deps, runs ESLint + Prettier +
-  Vitest, type-checks/builds, and builds the frontend Docker image.
+  Vitest, type-checks/builds, builds the frontend Docker image, and finishes with the same
+  `npm audit` gate.
 - **Infra:** `cd infra && ./verify.sh` — runs the gate self-tests, then `terraform fmt -check`,
   `init -backend=false`, `validate`, and the repo-specific gates. It needs **no credentials** and
   deliberately runs no `terraform plan`: a plan requires a live project, and planning is a human
   step in [`docs/runbooks/gcp-bootstrap.md`](docs/runbooks/gcp-bootstrap.md).
+
+The audit step is last because it is the only one needing the network: a registry outage exits
+non-zero exactly like a real advisory, and running it earlier would abort the checks that work
+offline. It covers **dev dependencies too** — neither image ships them, but they execute here and
+in CI. Moderate and below stay visible in the output and are Dependabot's job; the threshold and
+the reasoning live in [`docs/sdlc.md`](docs/sdlc.md).
 
 The backend and frontend scripts accept `SKIP_INSTALL=1` (reuse the current environment) and `SKIP_DOCKER=1`
 (host checks only, skip the image build).
