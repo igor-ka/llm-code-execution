@@ -1,0 +1,14 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg=VITE_AUTH0_DOMAIN=${_AUTH0_DOMAIN}
+      - --build-arg=VITE_AUTH0_CLIENT_ID=${_AUTH0_CLIENT_ID}
+      - --build-arg=VITE_AUTH0_AUDIENCE=${_AUTH0_AUDIENCE}
+      - -t
+      - us-central1-docker.pkg.dev/$PROJECT_ID/app/app:v1
+      - .
+images:
+  - us-central1-docker.pkg.dev/$PROJECT_ID/app/app:v1
+options:
+  logging: CLOUD_LOGGING_ONLY

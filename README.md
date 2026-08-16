@@ -447,7 +447,11 @@ The behavioral checks below have been run and pass (✅). Re-run them anytime.
 - **Chat history: shipped** — per-user, isolated, Postgres-backed (see *Per-user chat history*).
   Follow-ups: a retention window / per-user row cap, and richer full-text search (`pg_trgm` or a
   `tsvector` column).
-- **GCP deploy: decided, not yet done.** Cloud Run (not GKE), with untrusted code executed by
+- **GCP deploy: the app is deployed.** `https://app-530312723651.us-central1.run.app` — Cloud Run
+  with sandboxes, Cloud SQL and Memorystore for Valkey behind a private VPC. The environment is
+  destroyed between working sessions (see the teardown runbook), so that URL is live only while
+  someone is working on it. Deploy steps: [`docs/runbooks/gcp-deploy.md`](docs/runbooks/gcp-deploy.md).
+- **GCP deploy background: decided, then done.** Cloud Run (not GKE), with untrusted code executed by
   [Cloud Run sandboxes](https://docs.cloud.google.com/run/docs/code-execution) behind the
   existing `SandboxBackend` seam — egress denied by default and no metadata server, at the cost
   of a preview dependency and the per-execution memory/CPU/PID caps, which are undocumented there
