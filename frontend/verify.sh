@@ -48,16 +48,26 @@ install() { run npm ci; }
 # THRESHOLD: high and above fail. Moderate and below are reported by `npm audit` and handled by
 # Dependabot PRs; blocking a merge on every moderate transitive advisory buys noise, not safety.
 #
-# `--no-offline` is load-bearing: with `npm_config_offline=true` in the environment or
-# `offline=true` in a developer's ~/.npmrc, `npm audit` prints "found 0 vulnerabilities" and exits
-# 0 — turning this gate into exactly the decorative assertion the next paragraph says it is not.
+# TWO FLAGS ARE LOAD-BEARING, both closing environment-driven bypasses that fail OPEN:
+#
+#   --no-offline   with `npm_config_offline=true` in the environment or `offline=true` in a
+#                  developer's ~/.npmrc, `npm audit` prints "found 0 vulnerabilities" and exits 0.
+#   --include=dev  `npm audit` honours the `omit` config, and BOTH `npm_config_omit=dev` and
+#                  `NODE_ENV=production` set it — silently dropping every dev-dependency advisory,
+#                  which is exactly the scope the paragraph above claims. NODE_ENV=production is a
+#                  plausible thing to find already exported in a shell or on a runner; it does not
+#                  have to be deliberate to disable this.
+#
+# Both were found by review rather than by the gate noticing, which is the point: `npm audit` is
+# configurable from the environment in several ways that all fail open, so these flags state the
+# intent explicitly instead of inheriting whatever the environment happens to say.
 #
 # A HARD FAIL, deliberately — not `|| true`. A check that cannot fail is the decorative-assertion
 # pattern this repo has already shipped once and had to fix (see "Details that are easy to get
 # wrong" under "How this meets CI/CD" in docs/sdlc.md): it reads as coverage and provides none. If
 # an unfixable high advisory ever lands with no upstream patch, the honest response is an
 # explicit, dated exception written here — where it is visible in review — not a green check.
-audit()  { run npm audit --audit-level=high --no-offline; }
+audit()  { run npm audit --audit-level=high --no-offline --include=dev; }
 lint()    { run npm run lint; }
 format()  { run npm run format:check; }
 test_()   { run npm run test; }
