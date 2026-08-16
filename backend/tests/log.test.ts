@@ -123,7 +123,6 @@ describe("makeLogger (json)", () => {
 
     const entry = JSON.parse(lines[0]);
     expect(entry.err.code).toBe("23505"); // the SQLSTATE — the only stable thing to alert on
-    expect(entry.err.detail).toBe("Key (owner_sub, id)=(auth0|abc, s1) already exists.");
     expect(entry.err.position).toBe("13"); // the byte offset into the failing SQL
     expect(entry.err.constraint).toBe("sessions_pkey");
     expect(entry.err.table).toBe("sessions");
@@ -133,6 +132,90 @@ describe("makeLogger (json)", () => {
     expect(entry.err.message).toBe('column "foo" does not exist');
     expect(typeof entry.err.stack).toBe("string");
     expect(entry.err.name).toBe("Error");
+  });
+
+  // Postgres' DETAIL on a constraint violation is `Failing row contains (...)` — the whole row.
+  // On `runs` that is the user's prompt, the generated code and its output; server.ts logs
+  // exactly those insert failures. Lifting it would put user content in the log stream and undo
+  // the isolation the history store enforces, so it is redacted while the diagnosis is kept.
+  it("never logs the pg fields that carry row content", () => {
+    const lines: string[] = [];
+    const log = makeLogger("json", (line) => lines.push(line));
+
+    class DatabaseError extends Error {
+      code = "23514";
+      constraint = "runs_kind_check";
+      table = "runs";
+      detail = "Failing row contains (r1, s1, auth0|abc, what is my SSN? 123-45-6789, ...).";
+      where = "PL/pgSQL function insert_run(text) line 3 at SQL statement";
+      internalQuery = "INSERT INTO runs (prompt) VALUES ('secret')";
+    }
+    log.error("history persist failed (continuing)", { err: new DatabaseError("boom") });
+
+    const line = lines[0];
+    expect(line).not.toContain("123-45-6789");
+    expect(line).not.toContain("Failing row contains");
+    expect(line).not.toContain("INSERT INTO runs");
+    const entry = JSON.parse(line);
+    expect(entry.err.detail).toBeUndefined();
+    expect(entry.err.where).toBeUndefined();
+    expect(entry.err.internalQuery).toBeUndefined();
+    // The diagnosis still survives — that is the whole point of the change.
+    expect(entry.err.code).toBe("23514");
+    expect(entry.err.constraint).toBe("runs_kind_check");
+    expect(entry.err.table).toBe("runs");
+  });
+
+  // safeValue walks Object.entries, and a plain Error has none — so an Error-valued property
+  // would serialize as `{}`: a line that looks like it captured the failure while holding
+  // nothing. node-redis hangs originalError/socketError off its errors exactly this way, which
+  // is the case log.ts's own header comment exists to prevent.
+  it("unwraps an Error held in an own property instead of emitting {}", () => {
+    const lines: string[] = [];
+    const log = makeLogger("json", (line) => lines.push(line));
+
+    class ReconnectStrategyError extends Error {
+      originalError = new Error("ECONNREFUSED 127.0.0.1:6379");
+    }
+    log.error("redis client error", { err: new ReconnectStrategyError("reconnect failed") });
+
+    const entry = JSON.parse(lines[0]);
+    expect(entry.err.originalError.message).toBe("ECONNREFUSED 127.0.0.1:6379");
+    expect(typeof entry.err.originalError.stack).toBe("string");
+  });
+
+  // Only an ARRAY `errors` is the AggregateError shape handled below. A validation library's
+  // `errors: {field: reason}` is ordinary data, and dropping it would lose the whole payload.
+  it("keeps a non-array errors payload", () => {
+    const lines: string[] = [];
+    const log = makeLogger("json", (line) => lines.push(line));
+
+    const err = new Error("validation failed");
+    (err as unknown as Record<string, unknown>).errors = { email: "required" };
+    log.error("bad request", { err });
+
+    expect(JSON.parse(lines[0]).err.errors).toEqual({ email: "required" });
+  });
+
+  it("loses only the offending field when an own getter throws, not the whole line", () => {
+    const lines: string[] = [];
+    const log = makeLogger("json", (line) => lines.push(line));
+
+    const err = new Error("boom");
+    Object.defineProperty(err, "poison", {
+      enumerable: true,
+      get() {
+        throw new Error("getter exploded");
+      },
+    });
+    (err as unknown as Record<string, unknown>).code = "42703";
+    log.error("fatal: server error", { err, port: 8080 });
+
+    const entry = JSON.parse(lines[0]);
+    expect(entry.port).toBe(8080); // sibling fields survive
+    expect(entry.err.code).toBe("42703");
+    expect(entry.err.message).toBe("boom");
+    expect(entry.unserializableFields).toBeUndefined();
   });
 
   // `new Error(m, {cause})` makes cause NON-enumerable, but `err.cause = other` makes it an own
