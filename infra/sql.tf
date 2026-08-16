@@ -71,3 +71,18 @@ resource "google_sql_user" "app" {
   instance = google_sql_database_instance.main.name
   password = random_password.db.result
 }
+
+# The runtime identity must be allowed to USE the connector, which is separate from knowing the
+# database password. Without this the Cloud Run service authenticates to Postgres correctly and
+# still cannot reach it: the Auth Proxy refuses to broker the connection.
+#
+# PROJECT-scoped, and that is not laziness. roles/cloudsql.client has no instance-level binding —
+# Cloud SQL exposes no per-instance IAM resource — so this is the second grant in the project that
+# is broader than P1-D5 would like, alongside CI's roles/run.admin in wif.tf. Stated rather than
+# hidden: with one database in this project, "client on the project" and "client on app-db" are
+# the same set today, and would stop being so the moment a second instance appears.
+resource "google_project_iam_member" "runtime_sql_client" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.runtime.email}"
+}
