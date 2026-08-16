@@ -61,3 +61,28 @@ variable "github_repository" {
     matches on this string.
   EOT
 }
+
+variable "billing_currency" {
+  type    = string
+  default = "CAD"
+  description = <<-EOT
+    ISO currency of the billing account, which a budget MUST match. Google rejects any other with
+    a bare `INVALID_ARGUMENT` that names no field — a minimal budget fails identically to a
+    complex one, so it is worth knowing where to look.
+
+    Read it with: gcloud billing accounts describe <ACCOUNT_ID> --format='value(currencyCode)'
+  EOT
+}
+
+variable "trial_credit_amount" {
+  type    = string
+  default = "300"
+  description = <<-EOT
+    Size of the free-trial grant, in billing_currency, for the credit-burn budget to measure
+    against. Google advertises the trial as "$300 USD or local equivalent", so on a non-USD
+    account the granted number is NOT necessarily 300 — check the console's billing credits page
+    and set this to what it actually says.
+
+    Erring LOW is the safe direction: the alarm fires earlier than the credits run out.
+  EOT
+}
