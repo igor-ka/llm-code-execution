@@ -3,7 +3,8 @@
 # CI runs the SAME script (see .github/workflows/ci.yml), so local and CI can't drift.
 #
 # Usage: ./verify.sh [target]
-#   all              (default) install + lint + format + test + build + integration + docker
+#   all              (default) install + audit + lint + format + test + build + integration + docker
+#   audit            npm audit (fails on high+ advisories)
 #   install          npm ci
 #   lint             eslint
 #   format           prettier --check
@@ -14,7 +15,7 @@
 #                    and REDIS_URL respectively; each self-skips when its variable is unset)
 #   docker           build the backend and sandbox images
 #
-# CI invokes the individual targets as separate named steps (Install / Lint / Format /
+# CI invokes the individual targets as separate named steps (Install / Audit / Lint / Format /
 # Test / Build / Integration test / Docker build) so each gets its own pass/fail and timing
 # in the job log, while the job stays a single check.
 #
@@ -37,6 +38,19 @@ run() {
 }
 
 install() { run npm ci; }
+# Dependency advisories, from the lockfile — no node_modules needed, so SKIP_INSTALL=1 does not
+# weaken it. `jose` verifies auth tokens and `pg` talks to the history store, so an advisory in
+# either sits directly on the security path the README leads with.
+#
+# THRESHOLD: high and above fail. Moderate and below are reported by `npm audit` and handled by
+# Dependabot PRs; blocking a merge on every moderate transitive advisory buys noise, not safety.
+#
+# A HARD FAIL, deliberately — not `|| true`. A check that cannot fail is the decorative-assertion
+# pattern this repo has already shipped once and had to fix (see "Changing this SDLC" in
+# docs/sdlc.md): it reads as coverage and provides none. If an unfixable high advisory ever lands
+# with no upstream patch, the honest response is an explicit, dated exception written here — where
+# it is visible in review — not a permanently green check.
+audit()  { run npm audit --audit-level=high; }
 lint()    { run npm run lint; }
 format()  { run npm run format:check; }
 test_()   { run npm run test; }
@@ -159,6 +173,7 @@ docker_() {
 
 all() {
   [[ "${SKIP_INSTALL:-}" == "1" ]] || install
+  audit
   lint
   format
   test_
@@ -171,6 +186,7 @@ target="${1:-all}"
 case "$target" in
   all)              all ;;
   install)          install ;;
+  audit)            audit ;;
   lint)             lint ;;
   format)           format ;;
   test)             test_ ;;
@@ -178,7 +194,7 @@ case "$target" in
   migrate)          migrate ;;
   test:integration) integration ;;
   docker)           docker_ ;;
-  *)                echo "unknown target: $target (expected: all|install|lint|format|test|build|migrate|test:integration|docker)" >&2; exit 2 ;;
+  *)                echo "unknown target: $target (expected: all|install|audit|lint|format|test|build|migrate|test:integration|docker)" >&2; exit 2 ;;
 esac
 
 echo

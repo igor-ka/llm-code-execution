@@ -348,9 +348,19 @@ Details that are easy to get wrong:
   `verify.sh` mirroring rule above — that rule binds gates, and this gates nothing. It also holds
   the only writable `GITHUB_TOKEN` in this repository's CI, which is why it checks nothing out;
   see [Auto-merging dependency bumps](#auto-merging-dependency-bumps).
-- **CI splits `verify.sh` into named steps** (Install / Lint / Format / Test / Build / …) purely
+- **CI splits `verify.sh` into named steps** (Install / Audit / Lint / Format / Test / Build / …) purely
   so each gets its own pass/fail and timing in the log. That is presentation, not a second
   definition of the checks.
+- **The `Audit` step fails on high and critical advisories only.** `npm audit --audit-level=high`,
+  the same command locally and in CI. Moderate and below stay visible in the output and are
+  Dependabot's job; blocking every merge on a moderate transitive advisory buys noise rather than
+  safety. It reads the lockfile, so `SKIP_INSTALL=1` does not weaken it.
+
+  It is a **hard fail, not `|| true`**. A check that cannot fail is the decorative-assertion
+  pattern this repo has already shipped once and had to fix — it reads as coverage and provides
+  none. When a high advisory lands with no upstream patch, the honest response is an explicit,
+  dated exception in the `audit()` function, where review can see it; not a permanently green
+  check. The threshold is a judgment call, so it is written down here rather than left in a flag.
 - **Postgres and Redis run as service containers**, and only the `Integration test` step sets
   `DATABASE_URL` / `REDIS_URL` — which is exactly why the service-free `Test` step still skips
   those suites.

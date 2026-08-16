@@ -63,6 +63,8 @@ jobs:
       # gives per-step pass/fail and timing in the job log without a second definition.
       - name: Install
         run: ./verify.sh install
+      - name: Audit
+        run: ./verify.sh audit
       - name: Lint
         run: ./verify.sh lint
       - name: Format check
@@ -101,6 +103,8 @@ jobs:
       # gives per-step pass/fail and timing in the job log without a second definition.
       - name: Install
         run: ./verify.sh install
+      - name: Audit
+        run: ./verify.sh audit
       - name: Lint
         run: ./verify.sh lint
       - name: Format check
