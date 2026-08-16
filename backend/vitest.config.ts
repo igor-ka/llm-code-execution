@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { defineConfig, configDefaults } from "vitest/config";
 
 /**
  * Pin the datastore variables to whatever the SHELL provides — nothing more.
@@ -55,13 +55,19 @@ export default defineConfig({
           // security coverage to fix a scheduling problem. Its Postgres half still self-skips
           // without DATABASE_URL, and when the variable IS exported it is the only suite in this
           // project touching the database — so there is nothing left for it to race.
-          exclude: DATASTORE_SUITES,
+          // Spread configDefaults.exclude, do not replace it: a bare list silently drops vitest's
+          // own node_modules/dist/.git exclusions, which costs nothing while `include` stays
+          // scoped to tests/ and bites the moment someone widens it.
+          exclude: [...configDefaults.exclude, ...DATASTORE_SUITES],
         },
       },
       {
         test: {
           ...shared,
           name: "integration",
+          // isolation.test.ts is in BOTH projects, so a bare `npx vitest run <file>` or `-t <name>`
+          // without --project runs it twice, once per project. Harmless — the two groups are
+          // serialized, not concurrent — but surprising the first time you see it.
           include: [...DATASTORE_SUITES, "tests/history/isolation.test.ts"],
           // The whole point: one schema, one file at a time. `fileParallelism` is a root-only
           // option in vitest 3.2, so the per-project equivalent is a single fork: every file in
