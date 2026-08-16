@@ -166,10 +166,14 @@ updates:
   # WHAT THIS DOES AND DOES NOT BUY. Every base image is pinned by TAG (`node:22-slim`,
   # `python:3.12-slim`), not by digest. Dependabot's docker ecosystem then offers updates only
   # when the TAG changes — node 22 -> 24, python 3.12 -> 3.13. It does not fire when upstream
-  # rebuilds `node:22-slim` with patched OS packages, because the tag is unchanged; `docker build`
-  # already picks that up on every rebuild. So this is major/minor notification, not patch-level
-  # freshness. Pinning by digest would invert that trade — every rebuild becomes a PR — and is a
-  # separate decision.
+  # rebuilds `node:22-slim` with patched OS packages, because the tag itself is unchanged.
+  #
+  # Nor does a local rebuild reliably pick that up: `docker build` reuses a cached base image
+  # unless the cache lacks it or `--pull` is passed, and none of this repo's build commands pass
+  # it. CI starts from a cold cache each run and so does pull fresh; a developer's machine can be
+  # months behind. So this entry buys major/minor NOTIFICATION, and neither it nor the local build
+  # buys patch-level freshness. Pinning by digest would invert the trade — every upstream rebuild
+  # becomes a PR — and is a separate decision.
   #
   # NOT eligible for auto-merge, and nothing here has to arrange that. The gate in
   # `dependabot-auto-merge.yml` is a positive allow-list: the job-level `if:` requires
