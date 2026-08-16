@@ -27,6 +27,7 @@ case "$*" in
   *EXIT_NONZERO*) echo "boom" >&2; exit 3 ;;
   *HANG*)         sleep 30 ;;
   *FLOOD*)        for i in $(seq 1 500); do printf 'x'; done ;;
+  *DELUGE*)       for i in $(seq 1 4000); do printf '%0.sx' $(seq 1 100); done ;;
   *)              echo "hello from the sandbox" ;;
 esac
 `,
@@ -91,6 +92,29 @@ describe("CloudRunSandboxBackend", () => {
 
     expect(result.stdout.length).toBeLessThan(300);
     expect(result.stdout).toContain("truncated");
+  });
+
+  it("retains only maxOutputChars while a payload floods stdout", async () => {
+    // Bounding what is REPORTED is not enough. Accumulating everything and truncating at the end
+    // lets a print-loop stream hundreds of KB into this process before the timeout fires, and D7
+    // removes the per-execution memory cap — nothing else stands between that and the instance.
+    const result = await new CloudRunSandboxBackend("sandbox").execute("DELUGE", "python", limits);
+
+    // ~400_000 chars produced; the retained string must stay near the cap, not near the volume.
+    expect(result.stdout.length).toBeLessThan(limits.maxOutputChars + 100);
+    expect(result.stdout).toContain("truncated");
+  });
+
+  it("does not report a timeout for a run that finished just before the deadline", async () => {
+    // The exit handler used to leave the deadline armed during its flush window, so a run that
+    // completed a few milliseconds early could still be flipped to timedOut and exit 124.
+    const result = await new CloudRunSandboxBackend("sandbox").execute("print(1)", "python", {
+      ...limits,
+      timeoutSeconds: 1,
+    });
+
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
   });
 
   it("rejects an unsupported language without spawning anything", async () => {

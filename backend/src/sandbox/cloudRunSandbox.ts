@@ -25,9 +25,9 @@ const LANG_RUNNERS: Record<string, string[]> = {
   python: ["python3", "-I", "-B", "-c"],
 };
 
-function truncate(text: string, limit: number): string {
-  if (text.length <= limit) return text;
-  return `${text.slice(0, limit)}\n…[truncated, ${text.length - limit} more chars]`;
+/** Renders a capped buffer plus however many characters were thrown away while capping. */
+function rendered(kept: string, dropped: number): string {
+  return dropped === 0 ? kept : `${kept}\n…[truncated, ${dropped} more chars]`;
 }
 
 export class CloudRunSandboxBackend implements SandboxBackend {
@@ -63,21 +63,40 @@ export class CloudRunSandboxBackend implements SandboxBackend {
         stdio: ["ignore", "pipe", "pipe"],
         detached: true,
       });
-      let stdout = "";
-      let stderr = "";
       let timedOut = false;
       let settled = false;
 
-      child.stdout.on("data", (c: Buffer) => (stdout += c.toString()));
-      child.stderr.on("data", (c: Buffer) => (stderr += c.toString()));
+      // Bound what is RETAINED, not merely what is reported. Accumulating without limit and
+      // truncating at the end lets hostile code stream gigabytes into THIS process before the
+      // timeout fires — and D7 removes the per-execution memory cap, so nothing else stands
+      // between a print-loop and the whole Cloud Run instance. The pipes are still drained, just
+      // not stored: stopping the reads would block the child instead.
+      const cap = limits.maxOutputChars;
+      let stdout = "";
+      let stderr = "";
+      let stdoutDropped = 0;
+      let stderrDropped = 0;
+
+      child.stdout.on("data", (c: Buffer) => {
+        const chunk = c.toString();
+        const room = Math.max(0, cap - stdout.length);
+        if (room > 0) stdout += chunk.slice(0, room);
+        stdoutDropped += chunk.length - Math.min(room, chunk.length);
+      });
+      child.stderr.on("data", (c: Buffer) => {
+        const chunk = c.toString();
+        const room = Math.max(0, cap - stderr.length);
+        if (room > 0) stderr += chunk.slice(0, room);
+        stderrDropped += chunk.length - Math.min(room, chunk.length);
+      });
 
       const finish = (exitCode: number): void => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         resolve({
-          stdout: truncate(stdout, limits.maxOutputChars),
-          stderr: truncate(stderr, limits.maxOutputChars),
+          stdout: rendered(stdout, stdoutDropped),
+          stderr: rendered(stderr, stderrDropped),
           exitCode,
           durationMs: Number((process.hrtime.bigint() - started) / 1_000_000n),
           timedOut,
@@ -100,7 +119,7 @@ export class CloudRunSandboxBackend implements SandboxBackend {
         // as a result rather than a rejection so the base contract holds, but logged at error
         // level: it means the service was deployed without --sandbox-launcher.
         log.error("sandbox CLI could not be spawned", { err, cli: this.cliPath });
-        stderr += `\nsandbox CLI unavailable at ${this.cliPath}`;
+        stderr = `${stderr}\nsandbox CLI unavailable at ${this.cliPath}`;
         finish(126);
       });
 
@@ -108,7 +127,12 @@ export class CloudRunSandboxBackend implements SandboxBackend {
       // drain — including one a killed grandchild may still hold. Give the streams a bounded
       // moment to flush, the same shape as dockerBackend's Promise.race([streamEnded, delay]).
       child.on("exit", (code) => {
-        const flush = setTimeout(() => finish(timedOut ? 124 : (code ?? 1)), 200);
+        // Disarm FIRST. The 200ms flush below is a window in which the deadline could otherwise
+        // still fire, flip timedOut, and turn a run that finished successfully a few milliseconds
+        // early into a reported timeout with exit 124.
+        clearTimeout(timer);
+        const exitCode = timedOut ? 124 : (code ?? 1);
+        const flush = setTimeout(() => finish(exitCode), 200);
         flush.unref?.();
       });
     });
