@@ -381,9 +381,17 @@ Details that are easy to get wrong:
   cached locally, so the identical script yields different artifacts on two machines: CI starts
   from a cold cache and gets the current `node:22-slim`, a developer's laptop can be months behind
   and still report green. That is drift arriving through the *inputs* rather than the commands —
-  the one gap the single-`verify.sh` design does not otherwise close. It costs a manifest check
-  against a cached digest, measured at 0.15s, and it makes the `docker` target network-dependent,
-  which building an image always was whenever the cache was cold.
+  the one gap the single-`verify.sh` design does not otherwise close.
+
+  It narrows that gap rather than eliminating it, and the difference is deliberate. These are
+  **mutable tags**, re-resolved independently at each build, so two builds still differ if upstream
+  republishes between them. Only digest pins would make the two provably identical, and they turn
+  every upstream rebuild into a PR. The residual window is upstream-republish timing; the one it
+  replaces was a laptop months behind CI.
+
+  Cost is 0.15s **when the cached digest is current** — a manifest check, not a download. When the
+  tag has moved, `--pull` fetches the changed layers, which is the point. It makes the `docker`
+  target network-dependent, which building an image always was whenever the cache was cold.
 - **Docker builds run on pull requests only**, to keep pushes to `main` fast.
 
 **There is no CD yet.** Deployment is roadmap (GCP Cloud Run); the release and observability
