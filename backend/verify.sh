@@ -117,10 +117,16 @@ verify_tag() {
 # rather than the commands, which is the one gap the single-verify.sh design does not otherwise
 # close.
 #
-# It costs a manifest check against a cached digest, not a download: measured at 0.15s
-# (0.52s -> 0.66s) on the sandbox image. It does mean the `docker` target now needs the network —
-# which is the honest position, since building an image was always a network-dependent operation
-# whenever the cache was cold.
+# What it does NOT do is make the two provably identical. `node:22-slim` is a mutable tag resolved
+# independently at each build, so two builds can still differ if upstream republishes between
+# them. Only digest pins close that, and they turn every upstream rebuild into a PR. The trade
+# taken here is deliberate: a residual window of upstream-republish timing, instead of a laptop
+# months behind CI.
+#
+# Cost is 0.15s (0.52s -> 0.66s, sandbox image) WHEN THE CACHED DIGEST IS CURRENT — a manifest
+# check, not a download. When the tag has actually moved, --pull fetches the changed layers, which
+# is the entire point. It does mean the `docker` target needs the network, which building an image
+# always did whenever the cache was cold.
 docker_() {
   local tag
   tag="$(verify_tag)"
