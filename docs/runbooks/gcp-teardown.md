@@ -10,7 +10,7 @@
 
 **Between working sessions** (the normal one, spec D17). Memorystore and Cloud SQL bill per hour
 of *existence*, and Memorystore has no "stop" — only delete. Leaving them up costs ~CAD 55/month;
-destroying them between sessions costs ~CAD 3/month at ten hours a week. Run steps 1 only, keep
+destroying them between sessions costs ~CAD 3/month at ten hours a week. Run steps 1 and 2 only, keep
 the state bucket and the project, and rebuild from
 [`gcp-bootstrap.md`](gcp-bootstrap.md) next time. Budget **15–20 minutes** for the rebuild, mostly
 Cloud SQL, plus repopulating the six secret payloads.
@@ -29,7 +29,25 @@ and a day early costs nothing while a day late can cost real money.
 You do not need a reason beyond "not using it". The whole environment is reproducible from
 `infra/` plus that runbook — rebuilding is cheaper than leaving it running.
 
-## 1. Destroy what Terraform owns
+## 1. Delete the Cloud Run service — Terraform will not
+
+`terraform destroy` does not remove the service, because Terraform does not own it: the provider
+cannot express `--sandbox-launcher` and strips it on every apply, so the service is deployed by
+hand on purpose ([ADR-0005](../adr/0005-cloud-run-service-outside-terraform.md)). Delete it first,
+before the database and Valkey disappear from under it:
+
+```bash
+gcloud run services delete app --region=us-central1 --project=llm-code-exec-260815 --quiet
+```
+
+Cloud Run scales to zero, so a forgotten service costs nothing per hour — which is exactly why it
+is easy to leave behind. It still holds the public `allUsers` invoker binding and a URL that
+answers, and after the destroy below it answers with 500s. Deleting it is about not leaving a
+public endpoint pointed at a torn-down backend, not about money.
+
+The image in Artifact Registry goes with the registry in the next step.
+
+## 2. Destroy what Terraform owns
 
 ```bash
 cd infra
@@ -47,13 +65,15 @@ workload identity pool and provider.
 **If this is a between-sessions teardown, stop here.** The state bucket and the project stay, and
 `terraform apply` rebuilds everything from the same configuration. Two things do not come back by
 themselves: the secret payloads (deliberately not in Terraform — S6) and the Valkey endpoint,
-which is newly allocated on each rebuild. Repopulate with:
+which is newly allocated on each rebuild.
 
-then the rest — but do not hand-assemble them: **[`gcp-bootstrap.md`](gcp-bootstrap.md) §10 now
-carries all six commands**, including the two that change on every rebuild (`database-url` gets a
-fresh generated password, `redis-url` a newly allocated PSC endpoint). Run that section verbatim.
+Do not hand-assemble them: **[`gcp-bootstrap.md`](gcp-bootstrap.md) §10 carries all six
+commands**, including the two that change on every rebuild (`database-url` gets a fresh generated
+password, `redis-url` a newly allocated PSC endpoint). Run that section verbatim, then redeploy
+with [`gcp-deploy.md`](gcp-deploy.md) — the service was deleted in step 1 and no `terraform apply`
+brings it back.
 
-## 2. Remove the state bucket — the one thing Terraform does not own
+## 3. Remove the state bucket — the one thing Terraform does not own
 
 ```bash
 gcloud storage rm --recursive --all-versions "gs://<project-id>-tfstate"
@@ -70,7 +90,7 @@ without it the noncurrent versions survive and the bucket delete fails with a co
 This deletes the state itself, which is why it is genuinely last: after this, Terraform has no
 memory of what it built.
 
-## 3. Delete the project — the belt-and-braces check
+## 4. Delete the project — the belt-and-braces check
 
 ```bash
 gcloud projects delete <project-id>
@@ -85,22 +105,29 @@ free, but present, and it will refuse to re-create a pool with the same ID insid
 The rebuild rehearsal in the Phase 1 plan deliberately spares the pool for exactly this reason, so
 if you see one after a destroy, it is expected rather than something the teardown missed.
 
-## 4. Prove zero — and note what is no longer watching
+## 5. Prove zero — and note what is no longer watching
 
-Wait a day for billing to settle, then read the billing report for the project:
+The one resource no `terraform plan` will ever mention is the Cloud Run service, so check it by
+hand — an empty list is the only confirmation step 1 actually ran:
+
+```bash
+gcloud run services list --region=us-central1 --project=llm-code-exec-260815   # → 0 items
+```
+
+Then wait a day for billing to settle and read the billing report for the project:
 
 ```
 https://console.cloud.google.com/billing/<ACCOUNT_ID>/reports
 ```
 
 **No budget survives to alarm on this.** Both `google_billing_budget` resources are destroyed in
-step 1, so this manual check is the *only* backstop — skip it and a resource that outlived the
+step 2, so this manual check is the *only* backstop — skip it and a resource that outlived the
 teardown bills silently.
 
 Leaving a budget alive would contradict "zero billable resources" just as much, so the fix is to
 read the report, not to keep an alarm behind. One deliberate look beats a permanent exception.
 
-## 5. Rebuilding
+## 6. Rebuilding
 
 Start again at [`gcp-bootstrap.md`](gcp-bootstrap.md). Everything in `infra/` is reproducible into
 a fresh project; the only steps that are not automated are the ones that never were — creating the
@@ -110,7 +137,7 @@ account, and populating the secret payloads.
 
 ## Appendix: the S7 rehearsal, run 2026-08-16
 
-A destroy-and-rebuild against the live project, sparing only what step 3 explains. Recorded here
+A destroy-and-rebuild against the live project, sparing only what step 4 explains. Recorded here
 because a reproducibility claim nobody has exercised is an assumption.
 
 ```
