@@ -21,6 +21,16 @@ output "db_password" {
   sensitive   = true
 }
 
+output "build_service_account" {
+  description = "Email of the identity Cloud Build runs as. Pass to `gcloud builds submit --service-account`."
+  value       = google_service_account.build.email
+}
+
+output "build_source_bucket" {
+  description = "gs:// URL for `gcloud builds submit --gcs-source-staging-dir`. The only bucket the build identity can read."
+  value       = google_storage_bucket.build_source.url
+}
+
 output "workload_identity_provider" {
   description = "Full resource name for google-github-actions/auth's workload_identity_provider input."
   value       = google_iam_workload_identity_pool_provider.github.name

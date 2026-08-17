@@ -1,0 +1,20 @@
+# Build the production image on Cloud Build rather than a laptop: Cloud Run requires linux/amd64,
+# and emulating that on Apple Silicon takes >10 minutes and gets OOM-killed. See
+# docs/runbooks/gcp-deploy.md for the submit command and why each flag is there.
+#
+# `_TAG` is deliberately given no default. It is what the deploy and any rollback name, so a
+# missing value should fail the submit rather than silently reuse whatever was last hardcoded here.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg=VITE_AUTH0_DOMAIN=${_AUTH0_DOMAIN}
+      - --build-arg=VITE_AUTH0_CLIENT_ID=${_AUTH0_CLIENT_ID}
+      - --build-arg=VITE_AUTH0_AUDIENCE=${_AUTH0_AUDIENCE}
+      - -t
+      - us-central1-docker.pkg.dev/$PROJECT_ID/app/app:${_TAG}
+      - .
+images:
+  - us-central1-docker.pkg.dev/$PROJECT_ID/app/app:${_TAG}
+options:
+  logging: CLOUD_LOGGING_ONLY

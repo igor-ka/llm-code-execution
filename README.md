@@ -346,16 +346,24 @@ only because the concurrency cap still bounds the host. The backend refuses to s
   a private PSC endpoint inside the project VPC, so the Cloud Run service reaches it only via
   Direct VPC egress.
 - **`SANDBOX_BACKEND=cloudrun` selects a different set of guarantees, and every bullet above
-  describes the `docker` default.** `CloudRunSandboxBackend` exists but nothing is deployed with
-  it yet. When it is, three things change and none of them is an improvement to gloss over:
-  per-execution memory/CPU/PID caps do **not** apply (sandboxes share the instance's allocation),
-  processes inside the sandbox run with `sudo` over an ephemeral overlay rather than
-  `CapDrop: ["ALL"]` as uid 1000, and the readable filesystem is this application's image, so
-  `/app/dist` and `/app/node_modules` are visible where previously only `python:3.12-slim` was.
-  In exchange, egress is denied by default and the metadata server — which holds the runtime
-  identity's token — is unreachable. The full re-verification against a deployed service is
-  tracked by #162; this note exists so the list above is not read as covering both backends.
-- Internal exception detail is surfaced in some error responses; HTTP only (no TLS).
+  describes the `docker` default.** The deployed service runs `cloudrun`, so for it three things
+  change and none of them is an improvement to gloss over: per-execution memory/CPU/PID caps do
+  **not** apply (sandboxes share the instance's allocation), processes inside the sandbox run with
+  `sudo` over an ephemeral overlay rather than `CapDrop: ["ALL"]` as uid 1000, and the readable
+  filesystem is this application's image, so `/app/dist` and `/app/node_modules` are visible where
+  previously only `python:3.12-slim` was. In exchange, egress is denied by default and the metadata
+  server — which holds the runtime identity's token — is unreachable. Those last two are the
+  claims that matter most and they are **asserted, not yet re-proved against the deployed
+  service**; #162 tracks the probes. This note exists so the list above is not read as covering
+  both backends.
+- **The sandbox inherits no environment at all, `PATH` included.** That is what keeps secrets and
+  the metadata server out of it, and it is also why the backend spawns interpreters by absolute
+  path (`/usr/bin/python3`): inside a sandbox a bare command name resolves against nothing. A
+  bare name passes every local check, because every local shell has a `PATH`, and fails only on
+  the deployed service — see #185.
+- Internal exception detail is surfaced in some error responses. **TLS:** the deployed service is
+  HTTPS-only, terminated by Cloud Run with a managed certificate; the local dev stack is plain
+  HTTP, which is why #5 (serve over TLS) stays open for local runs.
 
 These map directly to the Roadmap below. The auth gate is regression-tested in
 `backend/tests/` (battery + mutation coverage), and per-user history isolation is likewise
@@ -447,12 +455,18 @@ The behavioral checks below have been run and pass (✅). Re-run them anytime.
 - **Chat history: shipped** — per-user, isolated, Postgres-backed (see *Per-user chat history*).
   Follow-ups: a retention window / per-user row cap, and richer full-text search (`pg_trgm` or a
   `tsvector` column).
-- **GCP deploy: decided, not yet done.** Cloud Run (not GKE), with untrusted code executed by
+- **GCP deploy: the app is deployed.** `https://app-530312723651.us-central1.run.app` — Cloud Run
+  with sandboxes, Cloud SQL and Memorystore for Valkey behind a private VPC. The environment is
+  destroyed between working sessions (see the teardown runbook), so that URL is live only while
+  someone is working on it. Deploy steps: [`docs/runbooks/gcp-deploy.md`](docs/runbooks/gcp-deploy.md).
+- **GCP deploy background: decided, then done.** Cloud Run (not GKE), with untrusted code executed by
   [Cloud Run sandboxes](https://docs.cloud.google.com/run/docs/code-execution) behind the
   existing `SandboxBackend` seam — egress denied by default and no metadata server, at the cost
   of a preview dependency and the per-execution memory/CPU/PID caps, which are undocumented there
   and which this design does not rely on — one runaway execution can therefore degrade the whole
   instance rather than just itself. See [ADR-0004](docs/adr/0004-hosting-and-sandbox-execution.md) and the
-  [spec](docs/specs/2026-08-09-deploy-to-gcp.md). Phase 0 (deployability hardening) is landing
-  now; nothing is hosted yet.
+  [spec](docs/specs/2026-08-09-deploy-to-gcp.md). Phases 0–2 have landed; the remaining work is
+  the isolation re-proof against the deployed sandbox (#162) and the rollback drill (#163).
+  The service itself is **not** in Terraform state, and that is deliberate — see
+  [ADR-0005](docs/adr/0005-cloud-run-service-outside-terraform.md).
 - Vertex AI for Claude (swap the client in `llm.ts`), more languages, artifact/chart return.

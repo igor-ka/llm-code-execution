@@ -65,10 +65,18 @@ resource "google_artifact_registry_repository_iam_member" "ci_writer" {
   member     = local.github_principal
 }
 
-# Deploy revisions. roles/run.admin is project-scoped by nature — there is no Cloud Run service to
-# scope it to until Phase 2 creates one. This is the one binding in the plan that is broader than
-# P1-D5 would like, and it is stated rather than hidden; Phase 2 should narrow it to the service
-# once that service exists.
+# Deploy revisions. roles/run.admin is project-scoped, and Phase 1 left a note saying Phase 2
+# should narrow it to the service once one existed. Phase 2 looked, and it cannot:
+#
+# Creating a service is a PROJECT-level permission — there is no resource to scope it to until the
+# service exists. And the service does not survive a session: the environment is destroyed between
+# working sessions (ADR-0005, the teardown runbook), so a service-scoped binding would be deleted
+# along with the service it was attached to, leaving CI unable to recreate it. Narrowing this would
+# work exactly once and then break on the first rebuild.
+#
+# So it stays project-scoped, which is broader than P1-D5 would like, and stated rather than
+# hidden. What bounds the blast radius instead is `ci_act_as_runtime` below: run.admin lets this
+# identity deploy services, but only running as an account it has actAs on.
 resource "google_project_iam_member" "ci_run_admin" {
   project = var.project_id
   role    = "roles/run.admin"
