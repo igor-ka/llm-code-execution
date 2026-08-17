@@ -194,6 +194,56 @@ gcloud run revisions list --service=app --region=us-central1
 gcloud run services update-traffic app --region=us-central1 --to-revisions=<previous>=100
 ```
 
+Four things about this that only a rehearsal tells you. All four come from the drill recorded
+below, and the middle two will cost you an outage if you meet them for the first time at 3am.
+
+**A revision that cannot start never receives traffic.** Deploying a nonexistent image tag failed
+in 3 seconds, created revision `app-00003-tlp`, left it `Ready: False`, and did not move a single
+percent of traffic. `/api/health` answered `200` throughout. This is the property the whole
+strategy rests on, and it holds.
+
+**`update-traffic` can move the traffic and still exit non-zero. Check the split, not the exit
+code.** After the failed deploy, the rollback command printed the correct new split, actually
+applied it — traffic moved to the old revision, which served `200` — and *then* failed with
+`ERROR: Image 'app:v99-does-not-exist' not found`. An operator who trusts the exit code concludes
+the rollback failed, while it has in fact succeeded, and whatever they try next is likely to be
+worse than doing nothing. Verify with:
+
+```bash
+gcloud run services describe app --region=us-central1 --format="value(status.traffic)"
+curl -s -o /dev/null -w '%{http_code}\n' https://app-530312723651.us-central1.run.app/api/health
+```
+
+**A failed deploy leaves the service template pointing at the missing image.** That is the source
+of the error above, and it persists: every later service mutation re-validates the template and
+reports the same thing. Clear it by deploying a known-good tag with §2's command — not by deleting
+the failed revision, which does not touch the template.
+
+**`--to-revisions` pins traffic, so the next deploy serves nobody.** Once traffic names a specific
+revision, a later successful deploy creates a revision that receives 0% — you deploy a fix, gcloud
+says `Done`, and nothing changes for users. The only hint is one word in gcloud's own success line,
+`serving 0 percent of traffic`. Undo it explicitly when the incident is over:
+
+```bash
+gcloud run services update-traffic app --region=us-central1 --to-latest
+```
+
+`--to-latest` is safe with a broken revision present: it follows the latest *ready* revision, so
+`app-00003-tlp` was skipped.
+
+### Recorded drill — 2026-08-17 (S10)
+
+| Step | Command | Elapsed | Outcome |
+| --- | --- | --- | --- |
+| Break it | `run deploy --image app:v99-does-not-exist` | 3s | `ERROR: Image … not found`. `app-00003-tlp` created, `Ready: False`. Traffic unmoved, health `200`. |
+| Roll back | `update-traffic --to-revisions=app-00001-frt=100` | 2s | Traffic moved to `app-00001-frt`, serving `200` — **exit non-zero**, stale-template error. |
+| Repair template | `run deploy --image app:v2` | 5s | New revision `app-00004-knc`. Reported the *pinned* revision at "0 percent". |
+| Roll forward | `update-traffic --to-revisions=app-00002-qcs=100` | 5s | Clean, health `200`. |
+| Unpin | `update-traffic --to-latest` | 5s | `100% LATEST (app-00004-knc)`, health `200`. |
+
+Recovery from a bad deploy is **seconds**, and no step needed a rebuild. What it needs is knowing
+that the error message lies.
+
 ## 6. Tear down at the end of a session
 
 See [`gcp-teardown.md`](gcp-teardown.md). Cloud Run itself scales to zero and costs nothing idle;
