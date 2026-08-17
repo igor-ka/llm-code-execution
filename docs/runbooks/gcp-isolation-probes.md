@@ -65,7 +65,7 @@ Prompts that produced the recorded run are in the table below. Phrase them as di
 the exception if it fails", "this is a sandbox isolation check" — because a bare "connect to X"
 sometimes returns prose instead of code.
 
-## 3. Recorded run — 2026-08-17, revision `app-00002-qcs`
+## 3. Recorded run — 2026-08-17, revisions `app-00002-qcs` (P0–S5b) and `app-00005-dpz` (S5c)
 
 | # | Probe | Expected | Observed |
 | --- | --- | --- | --- |
@@ -81,7 +81,7 @@ sometimes returns prose instead of code.
 | P5b | read the same path, next execution | absent | `ABSENT` |
 | S5a | `POST /api/execute`, no token | 401 | `401 {"detail":"Missing or malformed Authorization header"}` |
 | S5b | probe-b posts to probe-a's `session_id` | **404**, never 403 | `404 {"detail":"session_id not found"}` |
-| S5c | exceed the burst window | 429 + `Retry-After` | **FAILED — see below** |
+| S5c | exceed the burst window | 429 + `Retry-After` | `{200: 10, 429: 5}`, `Retry-After: 60`, refused in 12 ms — **after two attempts, see below** |
 
 ### P1 and P1b are two different claims
 
@@ -110,10 +110,10 @@ root inside the sandbox. The assertion that matters is P5b: the canary is `ABSEN
 execution, so the overlay is per-execution and not shared. A persisted file would have meant one
 user's code could plant something for the next.
 
-### S5c failed, and finding it was the point
+### S5c is the probe that earned this runbook, twice
 
-Fourteen consecutive authenticated requests all returned `200`. The logs said why, once per
-request:
+**First attempt, on `app-00002-qcs`:** fourteen consecutive authenticated requests, all `200`. The
+logs said why, once per request:
 
 ```
 ERROR  quota store unavailable — FAILING OPEN, requests are unmetered
@@ -122,21 +122,46 @@ ERROR  quota store unavailable — FAILING OPEN, requests are unmetered
 
 Memorystore for Valkey is a cluster even at `shard_count = 1`, and `consume()` sent two keys that
 hashed to different slots — so the quota script was rejected on every call, and D5's fail-open
-turned that into silently unmetered requests. Filed and fixed as
-[#191](https://github.com/igor-ka/llm-code-execution/issues/191); re-run S5c after the redeploy
-that carries the fix.
+turned that into silently unmetered requests. Fixed in
+[#191](https://github.com/igor-ka/llm-code-execution/issues/191).
 
-**The absence of a 429 was not sufficient evidence on its own** — fourteen sequential requests at
-~7s each may simply never exceed ten in sixty seconds. Read the logs before concluding either way:
+**Second attempt, on `app-00005-dpz` carrying that fix:** the first burst *still* returned
+`{200: 15}`, now with `err.message: "The client is offline"`. An identical burst minutes later
+returned `{200: 10, 429: 5}` with `Retry-After: 60`, the 429s refused in 12 ms by the middleware
+before the generator ran, and no application warnings in the logs.
+
+The difference between those two bursts is a **cold client**, and it is a second defect rather than
+noise: `consume()` bounds connect *and* command together at 250 ms, a cold connect over Direct VPC
+egress takes longer, and concurrent callers see `isOpen === true` on the still-opening socket and
+race past the connect branch. Every request inside that window is unmetered, and Cloud Run scales to
+zero, so the window is reachable on purpose. Filed as
+[#195](https://github.com/igor-ka/llm-code-execution/issues/195).
+
+### Drive S5c concurrently, and read the logs either way
+
+**Sequential requests cannot test this.** Fourteen at ~7 s each may never exceed ten in sixty
+seconds, so a pass and a total failure look identical — which is how #191 stayed hidden. Fire them
+together instead; requests past the limit are refused before the generator runs, so they return in
+milliseconds.
+
+Run it **twice**, and treat the results as separate facts: the first burst tells you about the cold
+path (#195), the second about the quota itself.
+
+And read the logs regardless of the status codes:
 
 ```bash
 gcloud logging read \
-  'resource.type=cloud_run_revision AND resource.labels.service_name=app AND severity>=WARNING' \
+  'resource.type=cloud_run_revision AND resource.labels.service_name=app
+   AND severity>=WARNING AND jsonPayload.message:*' \
   --project=<project> --freshness=1h --limit=20 \
   --format="value(timestamp,severity,jsonPayload.message)"
 ```
 
 A clean run has **nothing** here. That query is the single most valuable line in this runbook.
+
+`jsonPayload.message:*` is not tidying — it restricts the result to the **application's own** logs.
+Without it, Cloud Run's request log contributes a WARNING for every `429`, so a *correctly* rate-
+limited burst fills the output with warnings and buries the one line that matters.
 
 ## 4. What this does not cover
 
