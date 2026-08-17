@@ -171,9 +171,9 @@ updates:
   # `python:3.12-slim`, `postgres:16`), not by digest, so Dependabot fires only when the TAG
   # changes — node 22 -> 24, postgres 16 -> 17. It does not fire when upstream rebuilds the same
   # tag with patched OS packages. Nor does a local rebuild reliably pick that up: `docker build`
-  # reuses a cached base image unless the cache lacks it or `--pull` is passed, and none of this
-  # repo's build commands pass it (see #174). CI starts cold each run and does pull fresh; a
-  # developer's machine can be months behind. So this is major/minor NOTIFICATION, not
+  # reuses a cached base image unless the cache lacks it or `--pull` is passed. Both `verify.sh`
+  # scripts now pass it (#174), so a local image build no longer lags CI — but that refreshes the
+  # tag, it does not tell anyone a newer tag exists. So this is major/minor NOTIFICATION, not
   # patch-level freshness. Digest pins would invert the trade — every upstream rebuild becomes a
   # PR — and are a separate decision.
   #

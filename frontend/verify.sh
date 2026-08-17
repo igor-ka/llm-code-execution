@@ -90,17 +90,10 @@ build() {
     exit 1
   fi
 }
-# `--pull` on every build, deliberately. Without it `docker build` reuses whatever base image is
-# already cached locally, so an identical script produces different artifacts on two machines:
-# CI starts from a cold cache and gets the current `node:22-slim`, while a developer's laptop can
-# be months behind and still report green. That is local/CI drift arriving through the INPUTS
-# rather than the commands, which is the one gap the single-verify.sh design does not otherwise
-# close.
-#
-# It costs a manifest check against a cached digest, not a download: measured at 0.15s
-# (0.52s -> 0.66s) on the sandbox image. It does mean the `docker` target now needs the network —
-# which is the honest position, since building an image was always a network-dependent operation
-# whenever the cache was cold.
+# `--pull` on every build: without it Docker reuses whatever base image is cached locally, so an
+# identical script yields different artifacts on two machines. See the fuller note in
+# backend/verify.sh.
+
 docker_() {
   # Daemon-wide tag, unique per worktree — see the fuller note in backend/verify.sh.
   # Readable truncated name + a checksum of the FULL path — see the fuller note in

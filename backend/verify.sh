@@ -194,14 +194,28 @@ docker_() {
   # and this costs seconds. Omitting the audience exercises the ARG default ("").
   echo
   echo "==> docker build (negative: VITE_AUTH0_AUDIENCE omitted, MUST fail)"
-  if docker build --pull -f ../Dockerfile \
+  # NO --pull here, and the failure is checked for its REASON rather than just its exit code.
+  #
+  # Both for the same reason. This assertion reads a non-zero exit as "the guard rejected it", so
+  # every additional way the build can fail is a way for it to pass while proving nothing — a
+  # registry 429, a DNS blip, an offline laptop. `--pull` would add exactly that, and buy nothing:
+  # the positive build above pulled the same base from the same daemon seconds ago, so there is no
+  # drift left for it to close. A gate that does not gate is what this test exists to prevent; it
+  # should not become one itself.
+  local negative_out
+  if negative_out="$(docker build -f ../Dockerfile \
       --build-arg VITE_AUTH0_DOMAIN=verify.invalid \
       --build-arg VITE_AUTH0_CLIENT_ID=verify \
-      -t "llm-code-execution:${tag}-argcheck" .. >/dev/null 2>&1; then
+      -t "llm-code-execution:${tag}-argcheck" .. 2>&1)"; then
     echo "Dockerfile built with VITE_AUTH0_AUDIENCE empty — the build-arg guard is not enforcing" >&2
     exit 1
   fi
-  echo "    rejected as expected"
+  if ! grep -q "VITE_AUTH0_AUDIENCE is required" <<<"$negative_out"; then
+    echo "the build failed, but NOT on the build-arg guard — this assertion proved nothing:" >&2
+    printf '%s\n' "$negative_out" | tail -20 >&2
+    exit 1
+  fi
+  echo "    rejected as expected, by the guard"
 }
 
 all() {
