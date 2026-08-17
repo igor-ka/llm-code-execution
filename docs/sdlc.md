@@ -527,7 +527,13 @@ This file is the contract, and it is enforced deterministically rather than by g
 - `.claude/skills/**`
 - `backend/verify.sh`, `frontend/verify.sh` or `infra/verify.sh`
 - The production-image assertions in `backend/verify.sh` also require a `python3` interpreter in
-  the image, because a Cloud Run sandbox executes against the application image's own filesystem
+  the image, because a Cloud Run sandbox executes against the application image's own filesystem.
+  That assertion names the interpreter by its **absolute** path, `/usr/bin/python3`, and must keep
+  doing so: a Cloud Run sandbox inherits no environment, so `PATH` inside it is empty and a bare
+  command name resolves against nothing. A `python3` or `command -v python3` check runs in a shell
+  that *has* a `PATH`, passes, and proves only that the packaging is right — which is how #185
+  reached a deployed service through a fully green gate. A check that cannot fail the way
+  production fails is not a gate
 - `infra/tests/**` — the self-tests `infra/verify.sh` runs first: the gates, and `bootstrap.sh`
   against a fake `gcloud` (a live run proves the script worked that day, not that the next edit is safe)
 - `.github/workflows/**`

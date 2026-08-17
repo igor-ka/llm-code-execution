@@ -21,8 +21,19 @@ import type { SandboxBackend, ExecutionLimits } from "./base.js";
 import type { SandboxResult } from "../schemas.js";
 import { log } from "../log.js";
 
+// ABSOLUTE paths, not bare command names. A Cloud Run sandbox inherits none of the host
+// container's environment — that is the same property that keeps secrets and the metadata server
+// out of it — so PATH inside the sandbox is EMPTY and a bare `python3` resolves against nothing:
+//
+//   error finding executable "python3" in PATH []: no such file or directory
+//
+// The interpreter is present (the repo-root Dockerfile installs it); only the lookup was missing.
+// Do not "tidy" these back to bare names — it fails only on the deployed service, and only when
+// code actually runs, which is the most expensive place to find out.
+const PYTHON = "/usr/bin/python3";
+
 const LANG_RUNNERS: Record<string, string[]> = {
-  python: ["python3", "-I", "-B", "-c"],
+  python: [PYTHON, "-I", "-B", "-c"],
 };
 
 /** Renders a capped buffer plus however many characters were thrown away while capping. */

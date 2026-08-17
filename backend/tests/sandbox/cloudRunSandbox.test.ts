@@ -58,6 +58,17 @@ describe("CloudRunSandboxBackend", () => {
     expect(args).toContain("--write"); // the tmpfs overlay the code writes into
   });
 
+  it("spawns the interpreter by ABSOLUTE path, because the sandbox PATH is empty", async () => {
+    // Regression for #185. The sandbox inherits no environment, so PATH is [] and a bare
+    // `python3` fails with "no such file or directory" — on the deployed service only, and only
+    // once code actually runs.
+    await new CloudRunSandboxBackend("sandbox").execute("print('hi')", "python", limits);
+
+    const args = readFileSync(join(dir, "args.txt"), "utf8");
+    expect(args).toContain("/usr/bin/python3");
+    expect(args).not.toMatch(/(^|\s)python3(\s|$)/);
+  });
+
   it("reports a non-zero exit without rejecting", async () => {
     const result = await new CloudRunSandboxBackend("sandbox").execute(
       "EXIT_NONZERO",
