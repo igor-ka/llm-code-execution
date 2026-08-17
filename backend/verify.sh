@@ -110,18 +110,29 @@ verify_tag() {
   printf 'verify-%s-%s\n' "$name" "$sum"
 }
 
+# `--pull` on every build, deliberately. Without it `docker build` reuses whatever base image is
+# already cached locally, so an identical script produces different artifacts on two machines:
+# CI starts from a cold cache and gets the current `node:22-slim`, while a developer's laptop can
+# be months behind and still report green. That is local/CI drift arriving through the INPUTS
+# rather than the commands, which is the one gap the single-verify.sh design does not otherwise
+# close.
+#
+# It costs a manifest check against a cached digest, not a download: measured at 0.15s
+# (0.52s -> 0.66s) on the sandbox image. It does mean the `docker` target now needs the network —
+# which is the honest position, since building an image was always a network-dependent operation
+# whenever the cache was cold.
 docker_() {
   local tag
   tag="$(verify_tag)"
-  run docker build -t "llm-code-execution-backend:${tag}" .
-  run docker build -t "llm-sandbox:${tag}" ./sandbox-image
+  run docker build --pull -t "llm-code-execution-backend:${tag}" .
+  run docker build --pull -t "llm-sandbox:${tag}" ./sandbox-image
   # The production artifact (repo-root Dockerfile, repo-root context): the SPA and the API in one
   # image. Built here because it is the backend process that serves the SPA.
   #
   # The VITE_AUTH0_* placeholders satisfy the Dockerfile's build-time assertion. They prove the
   # WIRING, never the values: a real deploy passes its real tenant, and an image built by this
   # script must never be deployed.
-  run docker build -f ../Dockerfile \
+  run docker build --pull -f ../Dockerfile \
     --build-arg VITE_AUTH0_DOMAIN=verify.invalid \
     --build-arg VITE_AUTH0_CLIENT_ID=verify \
     --build-arg VITE_AUTH0_AUDIENCE=https://verify.invalid/api \
@@ -183,7 +194,7 @@ docker_() {
   # and this costs seconds. Omitting the audience exercises the ARG default ("").
   echo
   echo "==> docker build (negative: VITE_AUTH0_AUDIENCE omitted, MUST fail)"
-  if docker build -f ../Dockerfile \
+  if docker build --pull -f ../Dockerfile \
       --build-arg VITE_AUTH0_DOMAIN=verify.invalid \
       --build-arg VITE_AUTH0_CLIENT_ID=verify \
       -t "llm-code-execution:${tag}-argcheck" .. >/dev/null 2>&1; then
