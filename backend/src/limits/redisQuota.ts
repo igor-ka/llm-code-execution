@@ -56,6 +56,32 @@ if redis.call('INCR', KEYS[2]) == 1 then redis.call('EXPIRE', KEYS[2], ARGV[4]) 
 return 0
 `;
 
+/**
+ * The two window keys for one identity, forced onto a single cluster slot.
+ *
+ * The `{…}` is a hash tag: when a key contains one, Redis and Valkey hash **only the tag** to pick
+ * the slot. Wrapping the shared prefix therefore guarantees both keys land together, which is not
+ * cosmetic — cluster mode refuses any command whose keys span slots, and `consume()` sends both to
+ * one `EVAL`:
+ *
+ *   CROSSSLOT Keys in request don't hash to the same slot
+ *
+ * Memorystore for Valkey is a cluster even at `shard_count = 1`, so on the deployed service that
+ * error was every quota check, and D5's fail-open turned it into silently unmetered requests
+ * (#191). Local Redis is a single node with no slots, which is why nothing caught it: the
+ * invariant is asserted arithmetically in `tests/limits/quotaKeys.test.ts` instead.
+ *
+ * Every method that builds these keys goes through here. Two of them drifting apart would leave
+ * `usage()` and `ttls()` reading keys `consume()` never wrote — a green test suite over a store
+ * that counts nothing.
+ *
+ * Enough for one shard. A multi-shard instance would also need a cluster-aware client to follow
+ * MOVED redirects; the hash tag is what makes that a client change rather than a redesign.
+ */
+export function quotaKeys(key: string): [burst: string, sustained: string] {
+  return [`{${key}}:b`, `{${key}}:s`];
+}
+
 export class RedisQuotaStore implements QuotaStore {
   // ReturnType<> rather than RedisClientType: the latter's generic defaults do not line up
   // with what createClient() actually returns and produce a spurious assignability error.
@@ -123,7 +149,7 @@ export class RedisQuotaStore implements QuotaStore {
     const retryAfter = await this.bounded(async () => {
       const client = await this.ready();
       return (await client.eval(SCRIPT, {
-        keys: [`${key}:b`, `${key}:s`],
+        keys: quotaKeys(key),
         arguments: [
           String(limits.burst),
           String(limits.burstWindowSeconds),
@@ -139,14 +165,16 @@ export class RedisQuotaStore implements QuotaStore {
 
   async usage(key: string): Promise<{ burst: number; sustained: number }> {
     const client = await this.ready();
-    const [b, s] = await Promise.all([client.get(`${key}:b`), client.get(`${key}:s`)]);
+    const [burstKey, sustainedKey] = quotaKeys(key);
+    const [b, s] = await Promise.all([client.get(burstKey), client.get(sustainedKey)]);
     return { burst: Number(b ?? 0), sustained: Number(s ?? 0) };
   }
 
   /** TTLs of both window keys — used by the S6 regression test. */
   async ttls(key: string): Promise<{ burst: number; sustained: number }> {
     const client = await this.ready();
-    const [b, s] = await Promise.all([client.ttl(`${key}:b`), client.ttl(`${key}:s`)]);
+    const [burstKey, sustainedKey] = quotaKeys(key);
+    const [b, s] = await Promise.all([client.ttl(burstKey), client.ttl(sustainedKey)]);
     return { burst: b, sustained: s };
   }
 
