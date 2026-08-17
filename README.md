@@ -352,10 +352,13 @@ only because the concurrency cap still bounds the host. The backend refuses to s
   `sudo` over an ephemeral overlay rather than `CapDrop: ["ALL"]` as uid 1000, and the readable
   filesystem is this application's image, so `/app/dist` and `/app/node_modules` are visible where
   previously only `python:3.12-slim` was. In exchange, egress is denied by default and the metadata
-  server — which holds the runtime identity's token — is unreachable. Those last two are the
-  claims that matter most and they are **asserted, not yet re-proved against the deployed
-  service**; #162 tracks the probes. This note exists so the list above is not read as covering
-  both backends.
+  server — which holds the runtime identity's token — is unreachable. Those last two are the claims
+  that matter most, and they are **measured against the deployed service, not inherited** — a raw
+  IP connection and the metadata endpoint both return `Network is unreachable`, and a fork bomb's
+  detached children are gone by the next execution. The procedure and the recorded run are in
+  [`docs/runbooks/gcp-isolation-probes.md`](docs/runbooks/gcp-isolation-probes.md); re-run it after
+  every rebuild, because the environment is destroyed between sessions. This note exists so the
+  list above is not read as covering both backends.
 - **The sandbox inherits no environment at all, `PATH` included.** That is what keeps secrets and
   the metadata server out of it, and it is also why the backend spawns interpreters by absolute
   path (`/usr/bin/python3`): inside a sandbox a bare command name resolves against nothing. A
@@ -465,8 +468,9 @@ The behavioral checks below have been run and pass (✅). Re-run them anytime.
   of a preview dependency and the per-execution memory/CPU/PID caps, which are undocumented there
   and which this design does not rely on — one runaway execution can therefore degrade the whole
   instance rather than just itself. See [ADR-0004](docs/adr/0004-hosting-and-sandbox-execution.md) and the
-  [spec](docs/specs/2026-08-09-deploy-to-gcp.md). Phases 0–2 have landed; the remaining work is
-  the isolation re-proof against the deployed sandbox (#162) and the rollback drill (#163).
-  The service itself is **not** in Terraform state, and that is deliberate — see
+  [spec](docs/specs/2026-08-09-deploy-to-gcp.md). Phases 0–2 have landed, including the isolation
+  re-proof against the deployed sandbox
+  ([probe runbook](docs/runbooks/gcp-isolation-probes.md)); the rollback drill (#163) is what
+  remains. The service itself is **not** in Terraform state, and that is deliberate — see
   [ADR-0005](docs/adr/0005-cloud-run-service-outside-terraform.md).
 - Vertex AI for Claude (swap the client in `llm.ts`), more languages, artifact/chart return.

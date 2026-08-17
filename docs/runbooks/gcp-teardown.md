@@ -133,6 +133,11 @@ Start again at [`gcp-bootstrap.md`](gcp-bootstrap.md). Everything in `infra/` is
 a fresh project; the only steps that are not automated are the ones that never were — creating the
 account, and populating the secret payloads.
 
+Then re-run [`gcp-isolation-probes.md`](gcp-isolation-probes.md). The isolation claims are properties
+of the *running* service, not of the repository, so a rebuild invalidates the last recorded run —
+and two of the three defects that have reached this deployment were found by exactly that
+procedure.
+
 ---
 
 ## Appendix: the S7 rehearsal, run 2026-08-16

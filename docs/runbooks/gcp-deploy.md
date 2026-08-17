@@ -7,8 +7,9 @@ and all six secrets are populated.
 with the quota unprotected. Note what that does *not* prove: the check is that the variable is
 non-empty, and `RedisQuotaStore` opens its connection lazily on the first quota operation. A
 service with a wrong or unreachable `REDIS_URL` starts, passes its probe, answers `/api/health`
-with `ok`, and fails every request that touches the quota. Only step 4's authenticated request
-demonstrates Valkey is actually reachable.
+with `ok`, and fails every request that touches the quota — and because the quota fails *open*
+(D5), those requests still return `200`. Nothing observable from outside distinguishes a working
+quota from a missing one; §4's log check is the only thing that does.
 
 **Service URL:** `https://app-530312723651.us-central1.run.app`
 
@@ -157,16 +158,30 @@ curl -s https://app-530312723651.us-central1.run.app/api/health          # {"sta
 curl -sI https://app-530312723651.us-central1.run.app/ | grep -i content-security-policy
 ```
 
-Those two prove the container is up and the CSP is the production one. **Neither says anything
+Those two prove the container is up and the CSP is the production one — and then go run
+[`gcp-isolation-probes.md`](gcp-isolation-probes.md), which is where a deploy is actually confirmed.
+**Neither of the commands above says anything
 about Valkey or Cloud SQL**, because `/api/health` touches neither and both clients connect lazily.
 For that, open the URL, log in, and ask for *"the first 20 Fibonacci numbers"*:
 
 - an answer at all → Auth0, the JWKS fetch and the Anthropic egress path all work;
-- **no `429` and no 500 from the quota check** → the per-user quota reached Valkey over Direct VPC
-  egress, which is the only end-to-end evidence that `REDIS_URL` is reachable rather than merely
-  set;
 - the numbers being *correct* → the sandbox launched, found `/usr/bin/python3`, and returned real
   stdout. A sandbox that cannot start fails here and nowhere earlier (#185).
+
+**A successful request proves nothing about Valkey.** Getting this wrong is #191: the quota fails
+*open* by design (D5), so an unreachable or incompatible store looks exactly like a healthy one
+from the outside — `200`, no `429`, no error. The only check that distinguishes them reads the
+service's own logs:
+
+```bash
+gcloud logging read \
+  'resource.type=cloud_run_revision AND resource.labels.service_name=app AND severity>=WARNING' \
+  --project=llm-code-exec-260815 --freshness=1h --limit=20 \
+  --format="value(timestamp,severity,jsonPayload.message)"
+```
+
+Expect **no output**. `quota store unavailable — FAILING OPEN, requests are unmetered` means the
+service is serving traffic with no rate limiting at all.
 
 Add the URL to Auth0's Allowed Callback URLs, Allowed Logout URLs and Allowed Web Origins first —
 Auth0 matches those exactly, and without it the login redirect fails with a callback-mismatch error
