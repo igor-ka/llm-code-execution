@@ -114,6 +114,38 @@ describe("assertFrontendOriginConfigured", () => {
     ).toThrow(/FRONTEND_ORIGIN/);
   });
 
+  // `new URL()` accepts far more than an origin, and `cors()` emits whatever string it is given.
+  // A browser's Origin header never carries a trailing slash or a path, so these would be
+  // advertised as an allowed origin that no request can ever match — a silent failure on the
+  // deployed service, where same-origin requests mask CORS entirely.
+  it.each([
+    ["a trailing slash", "https://app-123.us-central1.run.app/"],
+    ["a path", "https://app-123.us-central1.run.app/api"],
+    ["a query string", "https://app-123.us-central1.run.app/?x=1"],
+  ])("rejects %s, and names the origin to use instead", (_label, value) => {
+    expect(() =>
+      assertFrontendOriginConfigured(loadSettings({ ...cloudrun, FRONTEND_ORIGIN: value })),
+    ).toThrow(/https:\/\/app-123\.us-central1\.run\.app"/);
+  });
+
+  it("rejects a non-HTTP scheme", () => {
+    expect(() =>
+      assertFrontendOriginConfigured(
+        loadSettings({ ...cloudrun, FRONTEND_ORIGIN: "file:///etc/passwd" }),
+      ),
+    ).toThrow(/FRONTEND_ORIGIN/);
+  });
+
+  // URL.hostname brackets an IPv6 literal, so a bare "::1" comparison is dead code.
+  it.each(["http://[::1]:5173", "http://127.0.0.1:8080", "http://127.0.0.2:5173"])(
+    "rejects the loopback address %s",
+    (value) => {
+      expect(() =>
+        assertFrontendOriginConfigured(loadSettings({ ...cloudrun, FRONTEND_ORIGIN: value })),
+      ).toThrow(/localhost origin/);
+    },
+  );
+
   it("passes on a real deployed origin", () => {
     expect(() =>
       assertFrontendOriginConfigured(

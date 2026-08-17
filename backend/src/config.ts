@@ -198,17 +198,38 @@ export function assertRedisConfigured(settings: Settings): void {
  */
 export function assertFrontendOriginConfigured(settings: Settings): void {
   if (settings.sandboxBackend !== "cloudrun") return;
-  let host: string;
+  const raw = settings.frontendOrigin;
+  let url: URL;
   try {
-    host = new URL(settings.frontendOrigin).hostname;
+    url = new URL(raw);
   } catch {
+    throw new Error(`FRONTEND_ORIGIN is not a valid origin (${JSON.stringify(raw)}).`);
+  }
+  // Before touching `origin`: for a non-special scheme it serializes to the string "null", which
+  // would make the shape check below throw with a nonsense correction.
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`FRONTEND_ORIGIN must be an http(s) origin, got ${JSON.stringify(raw)}.`);
+  }
+  // A URL is not an origin. `new URL()` happily accepts a trailing slash, a path or a query, and
+  // `cors()` emits whatever string it was handed — while a browser's `Origin` header carries none
+  // of those. The result would be an allowlist entry no request can ever match: CORS silently
+  // failing on the deployed service, where same-origin requests hide it completely.
+  //
+  // Rejecting rather than normalizing, so the value the operator set is the value that runs. The
+  // message carries the corrected string so the fix is a copy-paste.
+  if (url.origin !== raw) {
     throw new Error(
-      `FRONTEND_ORIGIN is not a valid origin (${JSON.stringify(settings.frontendOrigin)}).`,
+      `FRONTEND_ORIGIN is ${JSON.stringify(raw)}, which is a URL rather than a bare origin. ` +
+        "A browser's Origin header has no trailing slash, path or query, so this would never " +
+        `match one. Use ${JSON.stringify(url.origin)}.`,
     );
   }
-  if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+  // `URL.hostname` brackets an IPv6 literal — `http://[::1]:5173` gives `"[::1]"`, never `"::1"` —
+  // and the whole 127/8 block is loopback, not just 127.0.0.1.
+  const host = url.hostname;
+  if (host === "localhost" || host === "[::1]" || host.startsWith("127.")) {
     throw new Error(
-      `FRONTEND_ORIGIN is ${JSON.stringify(settings.frontendOrigin)}, a localhost origin, but ` +
+      `FRONTEND_ORIGIN is ${JSON.stringify(raw)}, a localhost origin, but ` +
         "SANDBOX_BACKEND=cloudrun means this is the deployed service. It would advertise a " +
         "developer's laptop as a permitted CORS origin. Set FRONTEND_ORIGIN to the service's own " +
         "URL (see docs/runbooks/gcp-deploy.md).",
