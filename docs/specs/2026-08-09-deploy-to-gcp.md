@@ -1,8 +1,8 @@
 # Spec: deploy the app so users can reach it
 
 Epic: [#79](https://github.com/igor-ka/llm-code-execution/issues/79) · Status: **all questions
-answered (D1–D10)** · Phase 0 shipped 2026-08-10 ·
-[Phase 1 plan](../plans/2026-08-10-deploy-to-gcp-phase1.md) reviewed and approved
+answered (D1–D23)** · Phases 0–2 shipped · [Phase 3 plan](../plans/2026-08-17-deploy-to-gcp-phase3.md)
+reviewed and approved 2026-08-17
 
 Stack, commands, project layout, code style, and testing strategy are not restated here; they
 live in [`CLAUDE.md`](../../CLAUDE.md) and [`README.md`](../../README.md).
@@ -301,10 +301,89 @@ that proved destroy/rebuild reproduces state is now load-bearing rather than rea
 *What this buys:* one provider, one bill, one teardown, and D8's residual risk — a third party
 holding the state of a security control — disappears.
 
+D18–D23 answered 2026-08-17, raised by the staff review of the
+[Phase 3 plan](../plans/2026-08-17-deploy-to-gcp-phase3.md) and decided the same day.
+
+**D18 — CD deploys the application. It never runs `terraform apply`, and it never reads Terraform
+state.** ADR-0005 already puts the service outside Terraform, so there is nothing about it for an
+apply to do; applying the rest of `infra/` from CI would need Cloud SQL, Compute, Memorystore,
+Secret Manager and IAM admin *plus* read-write on the state bucket — the grant `infra/build.tf`
+already refuses the build identity, because state holds the generated Cloud SQL password in
+cleartext. Every project-specific value the deploy needs is instead derived from the resource names
+Terraform itself uses, so a rename breaks the deploy loudly rather than silently. CD's blast radius
+stays "can deploy a revision of one service, running as one account".
+
+**D19 — A revision receives no traffic until it has been verified, and CD does not create the
+service.** `gcloud beta run deploy --no-traffic --tag=candidate`, then the assertion battery against
+the tag URL, then `update-traffic --to-latest` with the resulting split **read back** rather than
+trusted (the rollback drill recorded `update-traffic` moving traffic correctly and *then* exiting
+non-zero). A failed verification promotes nothing and the previous revision keeps serving.
+
+The invariant has no exception, and that is what costs CD the create path: Cloud Run gives a
+brand-new service's first revision 100% of traffic, so it cannot be verified before users reach it.
+Since teardown deletes the service every session, that path is common rather than rare — so
+creating the service stays a by-hand command, which is what D4 asks for anyway. *Accepted cost:* CD
+is not a one-button recovery from a torn-down environment. *Rejected:* letting CD create and then
+delete the service on failure, which destroys the evidence and leaves a broken service publicly
+reachable in the meantime.
+
+**D20 — CI builds the image in the GitHub runner; Cloud Build is the by-hand path.** `ubuntu-latest`
+is amd64, so the emulation problem that put builds on Cloud Build — a `linux/amd64` build on Apple
+Silicon takes over ten minutes and was OOM-killed twice — does not exist there, and the federated
+principal already holds `artifactregistry.writer`, so the runner path needs **no new IAM**.
+
+*Recorded because it will be re-proposed:* the security argument for Cloud Build does not survive
+inspection. It runs "the builder is `app-build`, which cannot deploy" — true, and irrelevant here,
+because the federated principal can push an image and deploy it either way. `infra/build.tf`'s
+separation protects against a malicious `cloudbuild.yaml` running as project Editor, and that threat
+does not change based on who invokes the build. Both transports live in
+`scripts/deploy-cloud-run.sh` as `build` and `build:remote`, over one Dockerfile.
+
+**D21 — CD verifies only what needs no credentials, and states what it does not verify.** It reads
+the deployed revision's **shape** back from the API and asserts the deploy runbook's flag list —
+`sandboxLauncher`, gen2, the VPC interfaces, the Cloud SQL instance, the runtime identity,
+concurrency 8, and `FRONTEND_ORIGIN` equal to the service URL — plus `/api/health`, the production
+CSP header, and an unauthenticated `POST /api/execute` returning 401.
+
+It cannot cover #191 or #195: the quota keys on the verified `sub` and auth runs first, so no
+credential-free request reaches it. Covering them would mean an Auth0 machine-to-machine credential
+held permanently in GitHub, for an endpoint that spends money, when
+[`gcp-isolation-probes.md`](../runbooks/gcp-isolation-probes.md) says to delete those applications
+once the probes are done. That runbook stays the authority, and the pipeline's job summary prints
+the gap on every run rather than implying coverage it does not have.
+
+**D22 — The between-sessions teardown is targeted at the billable resources, so federation
+survives.** A plain `terraform destroy` removes `google_iam_workload_identity_pool.github`; pools
+soft-delete and the ID is reserved for ~30 days, so the next `terraform apply` cannot re-create it
+— which after Phase 3 means **CD cannot authenticate for a month**. The teardown runbook already
+recorded the soft-delete; what changed is that it became load-bearing. `-exclude` would express this
+better and Terraform 1.15.8 does not have it, so the session-end destroy names the five billable
+addresses instead. Everything left standing is free or near-free, and the four static secret
+payloads now survive a teardown, halving the manual work in a rebuild.
+
+**D23 — Dependabot's auto-merge moves to a GitHub App, so its merges are not an exception.** GitHub
+starts no workflow run for a push made with `GITHUB_TOKEN`, and `dependabot-auto-merge.yml` arms
+native auto-merge with exactly that token — so an auto-merged bump has always landed on `main` with
+no push-side `CI` run, and after Phase 3 would land with no deploy. `docs/sdlc.md` documented the
+first half and warned that "anything built later that keys off *CI ran on main* must not assume
+otherwise"; CD is that later thing. A minimal GitHub App holding `contents: write` and
+`pull_requests: write` mints an installation token that expires in an hour, and the `apply` job uses
+it. *Rejected:* a fine-grained PAT, which is a long-lived write-scoped credential in the repository
+— the thing P1-D4 avoided on the GCP side; and a scheduled `Deploy` sweep, which reaches the same
+end state within a day but leaves Dependabot a bounded exception rather than no exception.
+
 ## Open questions
 
-**None — all resolved (D1–D17).** Phase 2's six open questions were raised by the staff review of
-its plan on 2026-08-16 and decided the same day; they are D11–D16 above. Two items were deferred
+**None — all resolved (D1–D23).** Phase 2's six open questions were raised by the staff review of
+its plan on 2026-08-16 and decided the same day; they are D11–D16 above. Phase 3's seven were raised
+on 2026-08-17 and decided the same day; they are D18–D23, one of them dissolved rather than decided
+(`roles/storage.objectUser` and its missing `storage.buckets.get` stopped mattering when D20 removed
+the grant).
+
+One item is **open but not blocking**, and is a repository-governance question rather than a deploy
+one: now that merging to `main` is production deploy authority (D19, and ADR-0006 records it), the
+"Protect main" ruleset still has `required_approving_review_count: 0`. Whether that should change is
+undecided. Two items were deferred
 as configuration rather than architecture. Both are now closed:
 
 - **GCP region — resolved 2026-08-10: `us-central1`.** The Phase 1 lookup found that Google
