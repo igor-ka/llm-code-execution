@@ -1013,3 +1013,47 @@ where decisions live. Applied here:
   healthy and fails the quota open.
 - **PR 4 Step 6** relaxed to "no behavioural changes", with the residual diff listed in the
   runbook.
+
+---
+
+## Outcome log — 2026-08-17
+
+Phase 2 shipped. What the plan did not anticipate, recorded here because the plan is the artefact
+someone will read next time:
+
+**Four defects reached the deployed service, and every one was invisible to a fully green
+`verify.sh`.** That is the real finding of this phase, and it is a fact about the *gates*, not
+about carelessness:
+
+| Issue | Defect | Why nothing local could catch it |
+| --- | --- | --- |
+| [#185](https://github.com/igor-ka/llm-code-execution/issues/185) | Sandbox `PATH` is empty; a bare `python3` resolved against nothing, so **no code ran at all** | Every local shell has a `PATH`; the image assertion proved packaging, not lookup |
+| [#188](https://github.com/igor-ka/llm-code-execution/issues/188) | Service advertised `Access-Control-Allow-Origin: http://localhost:5173` | Cloud Run serves the SPA and API from one origin, and same-origin requests never consult CORS |
+| [#191](https://github.com/igor-ka/llm-code-execution/issues/191) | Quota rejected on every call (`CROSSSLOT`); **rate limiting never functioned**, silently, because D5 fails open | Local Redis is a single node with no slots; Memorystore for Valkey is a cluster at any size |
+| — | `update-traffic` moves traffic and *then* exits non-zero after a failed deploy | Only a rollback rehearsal on a real service shows this |
+
+The pattern is one thing: **a check that cannot fail the way production fails is not a gate.** Each
+fix therefore changed the gate as well as the code — an absolute-path assertion, a boot-time origin
+guard, a slot-arithmetic test, and a runbook that says to read the logs rather than trust a `200`.
+
+**Plan-vs-applied differences:**
+
+- **PR 4 did not put the service in Terraform**, and should not. The provider does not model
+  `sandboxLauncher` and strips it on every apply, which would silently remove code execution from a
+  healthy-looking service on an unrelated database change. Recorded as
+  [ADR-0005](../adr/0005-cloud-run-service-outside-terraform.md), with the reversal condition and
+  the teardown obligation that follows.
+- **A dedicated Cloud Build identity was added** (`infra/build.tf`). The plan had the build running
+  as the Compute Engine default account, which holds project **Editor** — and build steps come from
+  `cloudbuild.yaml`, a file in this repository.
+- **PR 5 grew two probes.** A hostname connect failure only proves there is no DNS, so a raw-IP
+  connect was added; and the fork-bomb probe gained an orphan-survival check, which is what turned
+  D7's "the timeout is the mitigation" from an assertion into a measurement.
+- **`_TAG` became a required Cloud Build substitution** rather than a literal edited per rebuild.
+
+**Success criteria:** S1–S6 and S8–S12 met. **S7 is half-met by design** — the reproduce half was
+rehearsed (teardown runbook appendix); zero-billable-resources closes at the day-91 teardown.
+
+**No decision in D6–D16 was contradicted.** The probes *confirmed* the uncomfortable ones: D7 (200
+of 200 forks succeeded — no PID cap), D13 (`os.getuid() == 0`), D16 (`/app` readable). ADR-0004
+stands unamended; ADR-0005 adds a decision rather than superseding one.
