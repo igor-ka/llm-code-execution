@@ -377,6 +377,13 @@ Details that are easy to get wrong:
 - **Postgres and Redis run as service containers**, and only the `Integration test` step sets
   `DATABASE_URL` / `REDIS_URL` — which is exactly why the service-free `Test` step still skips
   those suites.
+- **Every `docker build` passes `--pull`.** Without it Docker reuses whatever base image is
+  cached locally, so the identical script yields different artifacts on two machines: CI starts
+  from a cold cache and gets the current `node:22-slim`, a developer's laptop can be months behind
+  and still report green. That is drift arriving through the *inputs* rather than the commands —
+  the one gap the single-`verify.sh` design does not otherwise close. It costs a manifest check
+  against a cached digest, measured at 0.15s, and it makes the `docker` target network-dependent,
+  which building an image always was whenever the cache was cold.
 - **Docker builds run on pull requests only**, to keep pushes to `main` fast.
 
 **There is no CD yet.** Deployment is roadmap (GCP Cloud Run); the release and observability
