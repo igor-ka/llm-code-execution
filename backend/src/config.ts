@@ -176,6 +176,47 @@ export function assertRedisConfigured(settings: Settings): void {
 }
 
 /**
+ * Refuse to serve the deployed backend with a localhost CORS origin.
+ *
+ * `FRONTEND_ORIGIN` defaults to the dev origin, the deploy command never set it, and the deployed
+ * service was therefore answering every request with
+ * `Access-Control-Allow-Origin: http://localhost:5173`. Nothing broke, because Cloud Run serves the
+ * SPA and the API from the same origin and same-origin requests never consult CORS — which is
+ * exactly why it went unnoticed until the live service was probed by hand.
+ *
+ * **Honest severity: low.** `cors()` is configured without `credentials`, and this API authenticates
+ * with a bearer token held in memory, never a cookie. A page on localhost:5173 therefore cannot
+ * ride a victim's session — it would need its own token, and with one it could call the API from
+ * anything. The guard is here because the config was simply wrong, because the harm stops being
+ * theoretical the day anything cookie-based is added, and because a deployment that quietly names a
+ * developer's laptop as a trusted origin is not a posture worth keeping.
+ *
+ * `sandboxBackend` is the discriminator rather than NODE_ENV or authRequired, and that choice is
+ * load-bearing: `cloudrun` requires `--sandbox-launcher` on a Cloud Run service, so it cannot run
+ * on a laptop at all, while both of the others are true in ordinary local runs. A guard that fires
+ * during `npm run dev` gets deleted instead of fixed.
+ */
+export function assertFrontendOriginConfigured(settings: Settings): void {
+  if (settings.sandboxBackend !== "cloudrun") return;
+  let host: string;
+  try {
+    host = new URL(settings.frontendOrigin).hostname;
+  } catch {
+    throw new Error(
+      `FRONTEND_ORIGIN is not a valid origin (${JSON.stringify(settings.frontendOrigin)}).`,
+    );
+  }
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+    throw new Error(
+      `FRONTEND_ORIGIN is ${JSON.stringify(settings.frontendOrigin)}, a localhost origin, but ` +
+        "SANDBOX_BACKEND=cloudrun means this is the deployed service. It would advertise a " +
+        "developer's laptop as a permitted CORS origin. Set FRONTEND_ORIGIN to the service's own " +
+        "URL (see docs/runbooks/gcp-deploy.md).",
+    );
+  }
+}
+
+/**
  * Slot N owns `base + N * SLOT_STEP` for each service — see "Parallel worktrees" in README.md.
  *
  * `PORT` is deliberately absent. Compose pins the container's listener to 8000 regardless of slot

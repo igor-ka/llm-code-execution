@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
-import { loadSettings, assertRedisConfigured } from "../src/config.js";
+import {
+  loadSettings,
+  assertRedisConfigured,
+  assertFrontendOriginConfigured,
+} from "../src/config.js";
 
 describe("loadSettings", () => {
   it("applies documented defaults on an empty environment", () => {
@@ -88,6 +92,50 @@ describe("rate-limit settings", () => {
 
   it("loadSettings itself never throws without REDIS_URL (S10)", () => {
     expect(() => loadSettings({})).not.toThrow();
+  });
+});
+
+// The deployed service was found advertising `Access-Control-Allow-Origin: http://localhost:5173`,
+// because FRONTEND_ORIGIN was never set and its default is the dev origin. `SANDBOX_BACKEND` is the
+// discriminator: `cloudrun` needs `--sandbox-launcher` on a Cloud Run service, so it never runs on
+// a laptop, and a localhost CORS origin there is always wrong.
+describe("assertFrontendOriginConfigured", () => {
+  const cloudrun = { SANDBOX_BACKEND: "cloudrun", REDIS_URL: "redis://r:6379" };
+
+  it("throws when the cloudrun backend is left on the default localhost origin", () => {
+    expect(() => assertFrontendOriginConfigured(loadSettings(cloudrun))).toThrow(/FRONTEND_ORIGIN/);
+  });
+
+  it("throws for 127.0.0.1 too — the same origin spelled differently", () => {
+    expect(() =>
+      assertFrontendOriginConfigured(
+        loadSettings({ ...cloudrun, FRONTEND_ORIGIN: "http://127.0.0.1:5173" }),
+      ),
+    ).toThrow(/FRONTEND_ORIGIN/);
+  });
+
+  it("passes on a real deployed origin", () => {
+    expect(() =>
+      assertFrontendOriginConfigured(
+        loadSettings({ ...cloudrun, FRONTEND_ORIGIN: "https://app-123.us-central1.run.app" }),
+      ),
+    ).not.toThrow();
+  });
+
+  // The guard must not fire on the docker backend: local development is exactly where a localhost
+  // CORS origin is correct, and a check that breaks `npm run dev` gets deleted rather than fixed.
+  it("ignores the docker backend entirely", () => {
+    expect(() =>
+      assertFrontendOriginConfigured(
+        loadSettings({ REDIS_URL: "redis://r:6379", FRONTEND_ORIGIN: "http://localhost:5183" }),
+      ),
+    ).not.toThrow();
+  });
+
+  it("passes on the docker backend with no FRONTEND_ORIGIN at all", () => {
+    expect(() =>
+      assertFrontendOriginConfigured(loadSettings({ REDIS_URL: "redis://r:6379" })),
+    ).not.toThrow();
   });
 });
 
