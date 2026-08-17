@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
-import { loadSettings, assertRedisConfigured } from "../src/config.js";
+import {
+  loadSettings,
+  assertRedisConfigured,
+  assertFrontendOriginConfigured,
+} from "../src/config.js";
 
 describe("loadSettings", () => {
   it("applies documented defaults on an empty environment", () => {
@@ -88,6 +92,82 @@ describe("rate-limit settings", () => {
 
   it("loadSettings itself never throws without REDIS_URL (S10)", () => {
     expect(() => loadSettings({})).not.toThrow();
+  });
+});
+
+// The deployed service was found advertising `Access-Control-Allow-Origin: http://localhost:5173`,
+// because FRONTEND_ORIGIN was never set and its default is the dev origin. `SANDBOX_BACKEND` is the
+// discriminator: `cloudrun` needs `--sandbox-launcher` on a Cloud Run service, so it never runs on
+// a laptop, and a localhost CORS origin there is always wrong.
+describe("assertFrontendOriginConfigured", () => {
+  const cloudrun = { SANDBOX_BACKEND: "cloudrun", REDIS_URL: "redis://r:6379" };
+
+  it("throws when the cloudrun backend is left on the default localhost origin", () => {
+    expect(() => assertFrontendOriginConfigured(loadSettings(cloudrun))).toThrow(/FRONTEND_ORIGIN/);
+  });
+
+  it("throws for 127.0.0.1 too — the same origin spelled differently", () => {
+    expect(() =>
+      assertFrontendOriginConfigured(
+        loadSettings({ ...cloudrun, FRONTEND_ORIGIN: "http://127.0.0.1:5173" }),
+      ),
+    ).toThrow(/FRONTEND_ORIGIN/);
+  });
+
+  // `new URL()` accepts far more than an origin, and `cors()` emits whatever string it is given.
+  // A browser's Origin header never carries a trailing slash or a path, so these would be
+  // advertised as an allowed origin that no request can ever match — a silent failure on the
+  // deployed service, where same-origin requests mask CORS entirely.
+  it.each([
+    ["a trailing slash", "https://app-123.us-central1.run.app/"],
+    ["a path", "https://app-123.us-central1.run.app/api"],
+    ["a query string", "https://app-123.us-central1.run.app/?x=1"],
+  ])("rejects %s, and names the origin to use instead", (_label, value) => {
+    expect(() =>
+      assertFrontendOriginConfigured(loadSettings({ ...cloudrun, FRONTEND_ORIGIN: value })),
+    ).toThrow(/https:\/\/app-123\.us-central1\.run\.app"/);
+  });
+
+  it("rejects a non-HTTP scheme", () => {
+    expect(() =>
+      assertFrontendOriginConfigured(
+        loadSettings({ ...cloudrun, FRONTEND_ORIGIN: "file:///etc/passwd" }),
+      ),
+    ).toThrow(/FRONTEND_ORIGIN/);
+  });
+
+  // URL.hostname brackets an IPv6 literal, so a bare "::1" comparison is dead code.
+  it.each(["http://[::1]:5173", "http://127.0.0.1:8080", "http://127.0.0.2:5173"])(
+    "rejects the loopback address %s",
+    (value) => {
+      expect(() =>
+        assertFrontendOriginConfigured(loadSettings({ ...cloudrun, FRONTEND_ORIGIN: value })),
+      ).toThrow(/localhost origin/);
+    },
+  );
+
+  it("passes on a real deployed origin", () => {
+    expect(() =>
+      assertFrontendOriginConfigured(
+        loadSettings({ ...cloudrun, FRONTEND_ORIGIN: "https://app-123.us-central1.run.app" }),
+      ),
+    ).not.toThrow();
+  });
+
+  // The guard must not fire on the docker backend: local development is exactly where a localhost
+  // CORS origin is correct, and a check that breaks `npm run dev` gets deleted rather than fixed.
+  it("ignores the docker backend entirely", () => {
+    expect(() =>
+      assertFrontendOriginConfigured(
+        loadSettings({ REDIS_URL: "redis://r:6379", FRONTEND_ORIGIN: "http://localhost:5183" }),
+      ),
+    ).not.toThrow();
+  });
+
+  it("passes on the docker backend with no FRONTEND_ORIGIN at all", () => {
+    expect(() =>
+      assertFrontendOriginConfigured(loadSettings({ REDIS_URL: "redis://r:6379" })),
+    ).not.toThrow();
   });
 });
 

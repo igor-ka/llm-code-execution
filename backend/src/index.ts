@@ -1,6 +1,11 @@
 import type { Pool } from "pg";
 import { createApp } from "./server.js";
-import { getSettings, assertRedisConfigured, stackSlotWarnings } from "./config.js";
+import {
+  getSettings,
+  assertRedisConfigured,
+  assertFrontendOriginConfigured,
+  stackSlotWarnings,
+} from "./config.js";
 import { makePool } from "./history/pool.js";
 import { migrate } from "./history/migrate.js";
 import { PostgresHistoryStore } from "./history/pgStore.js";
@@ -38,6 +43,10 @@ async function main(): Promise<void> {
   // Deliberately here and not in createApp: createApp is the seam every backend test builds on,
   // so a hard Redis dependency there would become a hard dependency of every unit test (S10).
   assertRedisConfigured(settings);
+
+  // Same reasoning, for the CORS allowlist: the deployed service must not name a localhost origin
+  // as trusted. Fires only on SANDBOX_BACKEND=cloudrun, so local runs are untouched.
+  assertFrontendOriginConfigured(settings);
 
   // A worktree whose .env claims one slot but points a service at another writes to the wrong
   // datastore silently. Warn, don't throw: this is a consistency check, not a security control.

@@ -176,6 +176,68 @@ export function assertRedisConfigured(settings: Settings): void {
 }
 
 /**
+ * Refuse to serve the deployed backend with a localhost CORS origin.
+ *
+ * `FRONTEND_ORIGIN` defaults to the dev origin, the deploy command never set it, and the deployed
+ * service was therefore answering every request with
+ * `Access-Control-Allow-Origin: http://localhost:5173`. Nothing broke, because Cloud Run serves the
+ * SPA and the API from the same origin and same-origin requests never consult CORS — which is
+ * exactly why it went unnoticed until the live service was probed by hand.
+ *
+ * **Honest severity: low.** `cors()` is configured without `credentials`, and this API authenticates
+ * with a bearer token held in memory, never a cookie. A page on localhost:5173 therefore cannot
+ * ride a victim's session — it would need its own token, and with one it could call the API from
+ * anything. The guard is here because the config was simply wrong, because the harm stops being
+ * theoretical the day anything cookie-based is added, and because a deployment that quietly names a
+ * developer's laptop as a trusted origin is not a posture worth keeping.
+ *
+ * `sandboxBackend` is the discriminator rather than NODE_ENV or authRequired, and that choice is
+ * load-bearing: `cloudrun` requires `--sandbox-launcher` on a Cloud Run service, so it cannot run
+ * on a laptop at all, while both of the others are true in ordinary local runs. A guard that fires
+ * during `npm run dev` gets deleted instead of fixed.
+ */
+export function assertFrontendOriginConfigured(settings: Settings): void {
+  if (settings.sandboxBackend !== "cloudrun") return;
+  const raw = settings.frontendOrigin;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`FRONTEND_ORIGIN is not a valid origin (${JSON.stringify(raw)}).`);
+  }
+  // Before touching `origin`: for a non-special scheme it serializes to the string "null", which
+  // would make the shape check below throw with a nonsense correction.
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`FRONTEND_ORIGIN must be an http(s) origin, got ${JSON.stringify(raw)}.`);
+  }
+  // A URL is not an origin. `new URL()` happily accepts a trailing slash, a path or a query, and
+  // `cors()` emits whatever string it was handed — while a browser's `Origin` header carries none
+  // of those. The result would be an allowlist entry no request can ever match: CORS silently
+  // failing on the deployed service, where same-origin requests hide it completely.
+  //
+  // Rejecting rather than normalizing, so the value the operator set is the value that runs. The
+  // message carries the corrected string so the fix is a copy-paste.
+  if (url.origin !== raw) {
+    throw new Error(
+      `FRONTEND_ORIGIN is ${JSON.stringify(raw)}, which is a URL rather than a bare origin. ` +
+        "A browser's Origin header has no trailing slash, path or query, so this would never " +
+        `match one. Use ${JSON.stringify(url.origin)}.`,
+    );
+  }
+  // `URL.hostname` brackets an IPv6 literal — `http://[::1]:5173` gives `"[::1]"`, never `"::1"` —
+  // and the whole 127/8 block is loopback, not just 127.0.0.1.
+  const host = url.hostname;
+  if (host === "localhost" || host === "[::1]" || host.startsWith("127.")) {
+    throw new Error(
+      `FRONTEND_ORIGIN is ${JSON.stringify(raw)}, a localhost origin, but ` +
+        "SANDBOX_BACKEND=cloudrun means this is the deployed service. It would advertise a " +
+        "developer's laptop as a permitted CORS origin. Set FRONTEND_ORIGIN to the service's own " +
+        "URL (see docs/runbooks/gcp-deploy.md).",
+    );
+  }
+}
+
+/**
  * Slot N owns `base + N * SLOT_STEP` for each service — see "Parallel worktrees" in README.md.
  *
  * `PORT` is deliberately absent. Compose pins the container's listener to 8000 regardless of slot

@@ -70,7 +70,7 @@ gcloud beta run deploy app \
   --execution-environment gen2 --sandbox-launcher \
   --service-account app-runtime@llm-code-exec-260815.iam.gserviceaccount.com \
   --add-cloudsql-instances llm-code-exec-260815:us-central1:app-db \
-  --set-env-vars SANDBOX_BACKEND=cloudrun,LOG_FORMAT=json,AUTH_REQUIRED=true,SANDBOX_MAX_CONCURRENT=4 \
+  --set-env-vars SANDBOX_BACKEND=cloudrun,LOG_FORMAT=json,AUTH_REQUIRED=true,SANDBOX_MAX_CONCURRENT=4,FRONTEND_ORIGIN=https://app-530312723651.us-central1.run.app \
   --set-secrets ANTHROPIC_API_KEY=anthropic-api-key:latest,DATABASE_URL=database-url:latest,REDIS_URL=redis-url:latest,OIDC_ISSUER=oidc-issuer:latest,OIDC_AUDIENCE=oidc-audience:latest,OIDC_JWKS_URL=oidc-jwks-url:latest \
   --cpu 2 --memory 2Gi --concurrency 8 --max-instances 2 \
   --network app-net --subnet app-subnet --vpc-egress private-ranges-only \
@@ -93,6 +93,12 @@ Flags that are not optional, and what breaks without them:
   be dead code (spec D12).
 - **`--service-account`** — omitting it runs the service as the Compute Engine default account,
   which holds project Editor.
+- **`FRONTEND_ORIGIN`** — its default is `http://localhost:5173`, so omitting it makes the deployed
+  service answer every request with `Access-Control-Allow-Origin: http://localhost:5173`. Nothing
+  visibly breaks, because Cloud Run serves the SPA and the API from one origin and same-origin
+  requests never consult CORS — which is how it shipped that way once already (#188). The backend
+  now refuses to boot with a localhost origin when `SANDBOX_BACKEND=cloudrun`, so a missing value
+  fails the deploy loudly instead.
 
 `--allow-unauthenticated` is correct and is not a hole: the application's own OIDC gate
 authenticates users. Cloud Run IAM would authenticate *Google* identities, which the SPA's users
