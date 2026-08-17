@@ -31,7 +31,7 @@ gcloud builds submit --config=cloudbuild.yaml \
   --project=llm-code-exec-260815 \
   --service-account="projects/llm-code-exec-260815/serviceAccounts/$(cd infra && terraform output -raw build_service_account)" \
   --gcs-source-staging-dir="$(cd infra && terraform output -raw build_source_bucket)/source" \
-  --substitutions=_TAG=v2,_AUTH0_DOMAIN="$VITE_AUTH0_DOMAIN",_AUTH0_CLIENT_ID="$VITE_AUTH0_CLIENT_ID",_AUTH0_AUDIENCE="$VITE_AUTH0_AUDIENCE"
+  --substitutions=_TAG=v3,_AUTH0_DOMAIN="$VITE_AUTH0_DOMAIN",_AUTH0_CLIENT_ID="$VITE_AUTH0_CLIENT_ID",_AUTH0_AUDIENCE="$VITE_AUTH0_AUDIENCE"
 ```
 
 **Why not `docker build` locally.** Cloud Run needs `linux/amd64`, and on Apple Silicon that is an
@@ -66,7 +66,7 @@ build time, so a given image is bound to one Auth0 tenant.
 
 ```bash
 gcloud beta run deploy app \
-  --image us-central1-docker.pkg.dev/llm-code-exec-260815/app/app:v2 \
+  --image us-central1-docker.pkg.dev/llm-code-exec-260815/app/app:v3 \
   --region us-central1 --project llm-code-exec-260815 \
   --execution-environment gen2 --sandbox-launcher \
   --service-account app-runtime@llm-code-exec-260815.iam.gserviceaccount.com \
@@ -175,13 +175,17 @@ service's own logs:
 
 ```bash
 gcloud logging read \
-  'resource.type=cloud_run_revision AND resource.labels.service_name=app AND severity>=WARNING' \
+  'resource.type=cloud_run_revision AND resource.labels.service_name=app
+   AND severity>=WARNING AND jsonPayload.message:*' \
   --project=llm-code-exec-260815 --freshness=1h --limit=20 \
   --format="value(timestamp,severity,jsonPayload.message)"
 ```
 
 Expect **no output**. `quota store unavailable — FAILING OPEN, requests are unmetered` means the
 service is serving traffic with no rate limiting at all.
+
+`jsonPayload.message:*` restricts this to the application's own logs. Without it Cloud Run's request
+log contributes a WARNING per `429`, so a correctly rate-limited burst buries the line that matters.
 
 Add the URL to Auth0's Allowed Callback URLs, Allowed Logout URLs and Allowed Web Origins first —
 Auth0 matches those exactly, and without it the login redirect fails with a callback-mismatch error
