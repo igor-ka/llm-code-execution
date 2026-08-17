@@ -168,7 +168,10 @@ docker_() {
     # stray quote closes it early and turns the rest into shell syntax errors.
     # Import numpy rather than checking the interpreter binary: llm.ts promises the generator
     # that numpy is available, so a missing module is a broken promise, not a missing nicety.
-    python3 -c "import numpy" >/dev/null 2>&1 || { echo "python3 with numpy missing from the production image" >&2; exit 1; }
+    # ABSOLUTE path, matching what cloudRunSandbox.ts spawns. A bare `python3` here would pass on
+    # PATH and prove nothing about the sandbox, which runs with PATH empty and resolves nothing —
+    # exactly the gap that let #185 reach production green.
+    /usr/bin/python3 -c "import numpy" >/dev/null 2>&1 || { echo "/usr/bin/python3 with numpy missing from the production image" >&2; exit 1; }
 
     # Never root.
     [ "$(id -u)" != "0" ]
