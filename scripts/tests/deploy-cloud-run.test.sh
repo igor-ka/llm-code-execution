@@ -62,7 +62,13 @@ EOF
 s="$work/state"
 printf '%s\n' "\$*" >> "$work/calls.log"
 case "\$*" in
-  *"artifacts repositories describe"*) exit "\$(cat "\$s/registry_exit")" ;;
+  *"artifacts repositories list"*)
+      rc="\$(cat "\$s/registry_exit")"
+      # The real gcloud prints this banner on STDERR even on success, which is why the script must
+      # not fold the streams together here.
+      echo "Listing items under project test-project, location us-central1." >&2
+      if [[ "\$rc" != 0 ]]; then echo "ERROR: permission denied" >&2; exit "\$rc"; fi
+      cat "\$s/registry_out"; exit 0 ;;
   *"projects describe"*)               cat "\$s/project_number"; exit "\$(cat "\$s/projects_exit")" ;;
   *"run services list"*)
       rc="\$(cat "\$s/list_exit")"
@@ -96,6 +102,7 @@ setup() {
   : >"$work/calls.log"
   : >"$work/verify.log"
   echo 0 >"$work/state/registry_exit"
+  echo app >"$work/state/registry_out"
   echo 0 >"$work/state/projects_exit"
   echo 0 >"$work/state/list_exit"
   echo 0 >"$work/state/describe_exit"
@@ -168,8 +175,24 @@ expect_exit 2 "an unknown target exits 2" frobnicate
 
 # --- preflight: three stages, and an ERROR is never reported as an absence ----------------------
 setup absent
-echo 1 >"$work/state/registry_exit"
+: >"$work/state/registry_out"
 expect_exit 3 "preflight exits 3 when the registry is absent" preflight
+
+# The banner `artifacts repositories list` prints on stderr must not be mistaken for a repository.
+setup absent
+: >"$work/state/registry_out"
+run_deploy preflight || true
+if grep -q "environment is torn down" "$work/out.txt"; then
+  ok "the stderr banner is not mistaken for a repository"
+else
+  bad "the stderr banner is not mistaken for a repository" "$(cat "$work/out.txt")"
+fi
+
+# A registry lookup ERROR is exit 1, not a green "torn down" — stage 1 passing does not cover it,
+# because that is a different API with a different permission.
+setup serving
+echo 1 >"$work/state/registry_exit"
+expect_exit 1 "preflight exits 1, not 3, when the registry lookup itself errors" preflight
 
 setup serving
 echo 1 >"$work/state/projects_exit"

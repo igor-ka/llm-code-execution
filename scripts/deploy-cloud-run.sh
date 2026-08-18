@@ -185,8 +185,29 @@ preflight() {
   # STAGE 2 — is there an environment? The Artifact Registry repository is the cheapest proof that
   # the Terraform layer exists, and it is destroyed between working sessions (spec D17), so this is
   # the EXPECTED state most of the time rather than a failure.
-  if ! gcloud artifacts repositories describe app \
-    --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+  #
+  # `list --filter`, for the same reason stage 3 uses it: `describe` with stderr discarded reports a
+  # disabled artifactregistry API, a missing repository-read grant and a network blip identically
+  # to a torn-down environment — and this stage's answer is exit 3, which the workflow finishes
+  # green. Stage 1 proving the credential works does not cover it: that call is a different API
+  # with a different permission.
+  #
+  # stdout and stderr are kept APART here, unlike stage 3: `artifacts repositories list` prints a
+  # "Listing items under project …" banner on stderr even on success, so folding the streams
+  # together would make the empty (torn-down) case look non-empty and this stage could never fire.
+  local repos rc=0 errfile
+  errfile="$(mktemp)"
+  repos="$(gcloud artifacts repositories list --location="$REGION" --project="$PROJECT_ID" \
+    --filter="name~/repositories/app$" --format='value(name)' 2>"$errfile")" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    echo "    cannot list Artifact Registry repositories in ${PROJECT_ID}/${REGION} — this is an" >&2
+    echo "    ERROR, not a torn-down environment, and must not be reported as 'nothing to deploy':" >&2
+    sed 's/^/      /' "$errfile" >&2
+    rm -f "$errfile"
+    exit 1
+  fi
+  rm -f "$errfile"
+  if [[ -z "$repos" ]]; then
     echo "    no Artifact Registry repository 'app' in ${PROJECT_ID}/${REGION}."
     echo "    The environment is torn down — see docs/runbooks/gcp-teardown.md."
     echo "    Rebuild it with docs/runbooks/gcp-bootstrap.md, then run the 'create' target."
