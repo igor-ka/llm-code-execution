@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# Unit tests for scripts/deploy-cloud-run.sh, driven by a fake `gcloud` and a fake `docker` on PATH.
+# Unit tests for scripts/deploy-cloud-run.sh, driven by fake `gcloud`, `docker` and verifier
+# executables on PATH.
 #
 # Same harness as infra/tests/bootstrap.test.sh and for the same reason: running the real script
 # against the real project proves it worked that day, not that the next edit is safe. The fakes
 # record every invocation and the assertions read that log. No network, no project, no credentials.
+#
+# The fakes read their behaviour from files under $work/state, so a test can change one condition
+# without regenerating them — which is what makes the "this call errors" cases cheap enough to
+# write, and those are the ones that matter: nearly every finding this suite grew out of was a
+# failure being mistaken for an absence.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -31,56 +37,90 @@ bad() {
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/bin" "$work/state"
 
-# $1 registry_exit  — 0 when the Terraform layer exists, non-zero when it is torn down
-# $2 service_state  — "absent" or "serving" (a candidate tag exists alongside the serving revision)
-# $3 projects_exit  — 0 when the credential works; non-zero simulates a bad token or grant
-make_fake_gcloud() {
-  local registry_exit="$1" service_state="$2" projects_exit="${3:-0}"
-  mkdir -p "$work/bin"
-  # `docker` is faked into the same call log, so the build assertions read like the gcloud ones.
+URL="https://app-530312723651.us-central1.run.app"
+CAND_URL="https://candidate---app-530312723651.us-central1.run.app"
+
+traffic_json() { # $1 = candidate revision or "", $2 = serving revision, $3 = serving percent
+  local cand=""
+  if [[ -n "$1" ]]; then
+    cand="{\"tag\":\"candidate\",\"percent\":0,\"url\":\"$CAND_URL\",\"revisionName\":\"$1\"},"
+  fi
+  printf '{"status":{"url":"%s","traffic":[%s{"latestRevision":true,"percent":%s,"revisionName":"%s"}]}}' \
+    "$URL" "$cand" "$3" "$2"
+}
+
+write_fakes() {
   cat >"$work/bin/docker" <<EOF
 #!/usr/bin/env bash
 printf 'docker %s\n' "\$*" >> "$work/calls.log"
 exit 0
 EOF
-  chmod +x "$work/bin/docker"
-
-  local url="https://app-530312723651.us-central1.run.app"
-  local candidate=""
-  if [[ "$service_state" == serving ]]; then
-    candidate="{\"tag\":\"candidate\",\"percent\":0,\"url\":\"https://candidate---app-530312723651.us-central1.run.app\",\"revisionName\":\"app-00009-abc\"},"
-  fi
-  local describe_json=""
-  if [[ "$service_state" != absent ]]; then
-    describe_json="{\"status\":{\"url\":\"$url\",\"traffic\":[${candidate}{\"latestRevision\":true,\"percent\":100,\"revisionName\":\"app-00009-abc\"}]}}"
-  fi
   cat >"$work/bin/gcloud" <<EOF
 #!/usr/bin/env bash
+s="$work/state"
 printf '%s\n' "\$*" >> "$work/calls.log"
 case "\$*" in
-  *"artifacts repositories describe"*) exit $registry_exit ;;
-  *"projects describe"*)               echo "530312723651"; exit $projects_exit ;;
-  *"run services describe"*"latestCreatedRevisionName"*)
-      [[ -n '$describe_json' ]] || exit 1
-      echo "app-00009-abc"; exit 0 ;;
-  *"run services describe"*"status.url"*)
-      [[ -n '$describe_json' ]] || exit 1
-      echo "$url"; exit 0 ;;
+  *"artifacts repositories describe"*) exit "\$(cat "\$s/registry_exit")" ;;
+  *"projects describe"*)               cat "\$s/project_number"; exit "\$(cat "\$s/projects_exit")" ;;
+  *"run services list"*)
+      rc="\$(cat "\$s/list_exit")"
+      if [[ "\$rc" != 0 ]]; then echo "ERROR: permission denied" >&2; exit "\$rc"; fi
+      cat "\$s/list_out"; exit 0 ;;
+  *"run services describe"*"latestCreatedRevisionName"*) cat "\$s/latest_revision"; exit 0 ;;
+  *"run services describe"*"status.url"*) cat "\$s/service_url"; exit 0 ;;
   *"run services describe"*)
-      [[ -n '$describe_json' ]] || exit 1
-      printf '%s' '$describe_json'; exit 0 ;;
+      rc="\$(cat "\$s/describe_exit")"
+      if [[ "\$rc" != 0 ]]; then exit "\$rc"; fi
+      cat "\$s/service_json"; exit 0 ;;
 esac
 exit 0
 EOF
-  chmod +x "$work/bin/gcloud"
-  : >"$work/calls.log"
-  # verify-deployment.sh is a separate deliverable and is not under test here.
-  cat >"$work/bin/verify-stub.sh" <<'EOF'
+  # A recording verifier, so the suite can assert what `verify` actually hands it.
+  cat >"$work/bin/verify-stub.sh" <<EOF
 #!/usr/bin/env bash
-exit 0
+{
+  printf 'args=%s\n' "\$*"
+  printf 'PROJECT_ID=%s REGION=%s SERVICE=%s REVISION=%s\n' \
+    "\${PROJECT_ID:-}" "\${REGION:-}" "\${SERVICE:-}" "\${REVISION:-}"
+} >> "$work/verify.log"
+exit "\$(cat "$work/state/verify_exit")"
 EOF
-  chmod +x "$work/bin/verify-stub.sh"
+  chmod +x "$work/bin/docker" "$work/bin/gcloud" "$work/bin/verify-stub.sh"
+}
+
+# $1 service_state: "absent" | "serving" (candidate present) | "untagged" (no candidate)
+setup() {
+  local state="${1:-serving}"
+  : >"$work/calls.log"
+  : >"$work/verify.log"
+  echo 0 >"$work/state/registry_exit"
+  echo 0 >"$work/state/projects_exit"
+  echo 0 >"$work/state/list_exit"
+  echo 0 >"$work/state/describe_exit"
+  echo 0 >"$work/state/verify_exit"
+  echo "530312723651" >"$work/state/project_number"
+  echo "app-00010-new" >"$work/state/latest_revision"
+  case "$state" in
+  absent)
+    : >"$work/state/list_out"
+    : >"$work/state/service_url"
+    echo 1 >"$work/state/describe_exit"
+    : >"$work/state/service_json"
+    ;;
+  untagged)
+    echo app >"$work/state/list_out"
+    echo "$URL" >"$work/state/service_url"
+    traffic_json "" "app-00010-new" 100 >"$work/state/service_json"
+    ;;
+  *)
+    echo app >"$work/state/list_out"
+    echo "$URL" >"$work/state/service_url"
+    traffic_json "app-00010-new" "app-00010-new" 100 >"$work/state/service_json"
+    ;;
+  esac
+  write_fakes
 }
 
 run_deploy() {
@@ -89,48 +129,66 @@ run_deploy() {
     VITE_AUTH0_DOMAIN=t.auth0.com VITE_AUTH0_CLIENT_ID=cid \
     VITE_AUTH0_AUDIENCE=https://api.test/ \
     VERIFY_SCRIPT="$work/bin/verify-stub.sh" \
+    PROMOTE_POLL_ATTEMPTS=2 PROMOTE_POLL_SECONDS=0 \
     "$DEPLOY" "$@" >"$work/out.txt" 2>&1
 }
 
 logged() { grep -qF -- "$1" "$work/calls.log"; }
+verified() { grep -qF -- "$1" "$work/verify.log"; }
 
-# --- preflight: three stages, and only one of them may be green -------------------------------
-make_fake_gcloud 1 absent
-run_deploy preflight && rc=0 || rc=$?
-if [[ "${rc:-0}" -eq 3 ]]; then
-  ok "preflight exits 3 when the registry is absent"
+expect_exit() { # $1 expected, $2 label, then the target args
+  local want="$1" label="$2"
+  shift 2
+  local rc=0
+  run_deploy "$@" || rc=$?
+  if [[ "$rc" -eq "$want" ]]; then
+    ok "$label"
+  else
+    bad "$label" "expected exit $want, got $rc: $(cat "$work/out.txt")"
+  fi
+}
+
+# --- usage is the default; deploying is never the default --------------------------------------
+setup serving
+expect_exit 0 "a bare invocation prints usage instead of deploying to production"
+if logged "beta run deploy"; then
+  bad "a bare invocation deploys nothing" "$(cat "$work/calls.log")"
 else
-  bad "preflight exits 3 when the registry is absent" "got $rc: $(cat "$work/out.txt")"
+  ok "a bare invocation deploys nothing"
 fi
-
-# The regression that matters most here: a credential failure must NOT read as "torn down". Exit 1,
-# not 3 — otherwise a wrong grant or a wrong workload_identity_provider finishes the job green.
-make_fake_gcloud 0 serving 1
-run_deploy preflight && rc=0 || rc=$?
-if [[ "${rc:-0}" -eq 1 ]]; then
-  ok "preflight exits 1, not 3, when the credential does not work"
+if grep -q "Usage:" "$work/out.txt"; then
+  ok "the default target prints the usage block"
 else
-  bad "preflight exits 1 when the credential does not work" "got $rc: $(cat "$work/out.txt")"
+  bad "the default target prints the usage block" "$(cat "$work/out.txt")"
 fi
+setup serving
+expect_exit 0 "--help prints usage" --help
+setup serving
+expect_exit 2 "an unknown target exits 2" frobnicate
 
-# The service is the third stage: CD does not create it.
-make_fake_gcloud 0 absent
-run_deploy preflight && rc=0 || rc=$?
-if [[ "${rc:-0}" -eq 3 ]]; then
-  ok "preflight exits 3 when the service does not exist"
-else
-  bad "preflight exits 3 when the service does not exist" "got $rc: $(cat "$work/out.txt")"
-fi
+# --- preflight: three stages, and an ERROR is never reported as an absence ----------------------
+setup absent
+echo 1 >"$work/state/registry_exit"
+expect_exit 3 "preflight exits 3 when the registry is absent" preflight
 
-make_fake_gcloud 0 serving
-if run_deploy preflight; then
-  ok "preflight exits 0 when credential, registry and service exist"
-else
-  bad "preflight exits 0 when credential, registry and service exist" "$(cat "$work/out.txt")"
-fi
+setup serving
+echo 1 >"$work/state/projects_exit"
+expect_exit 1 "preflight exits 1, not 3, when the credential does not work" preflight
 
-# --- build: what CI runs is a native amd64 docker build ---------------------------------------
-make_fake_gcloud 0 serving
+setup absent
+expect_exit 3 "preflight exits 3 when the service does not exist" preflight
+
+# The finding this case exists for: `describe` fails identically for "missing" and "denied", so the
+# probe uses `list --filter`, which exits 0-with-nothing for missing and non-zero for denied.
+setup serving
+echo 1 >"$work/state/list_exit"
+expect_exit 1 "preflight exits 1, not 3, when the service lookup itself errors" preflight
+
+setup serving
+expect_exit 0 "preflight exits 0 when credential, registry and service all check out" preflight
+
+# --- build ---------------------------------------------------------------------------------------
+setup serving
 run_deploy build || true
 if logged "docker build --platform linux/amd64"; then
   ok "build pins linux/amd64 — Cloud Run rejects arm64 with a manifest error naming no architecture"
@@ -139,11 +197,7 @@ else
 fi
 for arg in "VITE_AUTH0_DOMAIN=t.auth0.com" "VITE_AUTH0_CLIENT_ID=cid" \
   "VITE_AUTH0_AUDIENCE=https://api.test/"; do
-  if logged "$arg"; then
-    ok "build passes $arg"
-  else
-    bad "build passes $arg" "$(cat "$work/calls.log")"
-  fi
+  if logged "$arg"; then ok "build passes $arg"; else bad "build passes $arg" "$(cat "$work/calls.log")"; fi
 done
 if logged "docker push us-central1-docker.pkg.dev/test-project/app/app:abc123"; then
   ok "build pushes the tag the deploy will name"
@@ -151,8 +205,25 @@ else
   bad "build pushes the tag the deploy will name" "$(cat "$work/calls.log")"
 fi
 
-# --- build:remote: the by-hand path keeps app-build's least privilege --------------------------
-make_fake_gcloud 0 serving
+setup serving
+if PATH="$work/bin:$PATH" PROJECT_ID=test-project TAG=abc123 VITE_AUTH0_DOMAIN= \
+  VITE_AUTH0_CLIENT_ID=cid VITE_AUTH0_AUDIENCE=https://api.test/ \
+  "$DEPLOY" build >"$work/out.txt" 2>&1; then
+  bad "build refuses an empty VITE_AUTH0_DOMAIN" "$(cat "$work/out.txt")"
+else
+  ok "build refuses an empty VITE_AUTH0_DOMAIN"
+fi
+setup serving
+if PATH="$work/bin:$PATH" PROJECT_ID=test-project TAG= VITE_AUTH0_DOMAIN=t.auth0.com \
+  VITE_AUTH0_CLIENT_ID=cid VITE_AUTH0_AUDIENCE=https://api.test/ \
+  "$DEPLOY" build >"$work/out.txt" 2>&1; then
+  bad "build refuses an empty TAG" "$(cat "$work/out.txt")"
+else
+  ok "build refuses an empty TAG"
+fi
+
+# --- build:remote ---------------------------------------------------------------------------------
+setup serving
 run_deploy build:remote || true
 if logged "serviceAccounts/app-build@test-project.iam.gserviceaccount.com"; then
   ok "build:remote runs as app-build, never the Compute Engine default account"
@@ -170,28 +241,21 @@ else
   bad "build:remote passes _TAG" "$(cat "$work/calls.log")"
 fi
 
-# --- a build that cannot log in must not happen at all ------------------------------------------
-make_fake_gcloud 0 serving
-if PATH="$work/bin:$PATH" PROJECT_ID=test-project TAG=abc123 \
-  VITE_AUTH0_DOMAIN= VITE_AUTH0_CLIENT_ID=cid VITE_AUTH0_AUDIENCE=https://api.test/ \
-  "$DEPLOY" build >"$work/out.txt" 2>&1; then
-  bad "build refuses an empty VITE_AUTH0_DOMAIN" "$(cat "$work/out.txt")"
-else
-  ok "build refuses an empty VITE_AUTH0_DOMAIN"
-fi
-
-# TAG has no default anywhere, deliberately: it is what the deploy and any rollback name.
-make_fake_gcloud 0 serving
-if PATH="$work/bin:$PATH" PROJECT_ID=test-project TAG= \
+# cloudbuild.yaml hardcodes the us-central1/app image path, so an override would push an image the
+# deploy cannot pull — and a failed deploy poisons the service template.
+setup serving
+rc=0
+PATH="$work/bin:$PATH" PROJECT_ID=test-project REGION=us-east1 SERVICE=app TAG=abc123 \
   VITE_AUTH0_DOMAIN=t.auth0.com VITE_AUTH0_CLIENT_ID=cid VITE_AUTH0_AUDIENCE=https://api.test/ \
-  "$DEPLOY" build >"$work/out.txt" 2>&1; then
-  bad "build refuses an empty TAG" "$(cat "$work/out.txt")"
+  "$DEPLOY" build:remote >"$work/out.txt" 2>&1 || rc=$?
+if [[ "$rc" -eq 1 ]] && ! logged "builds submit"; then
+  ok "build:remote refuses a REGION cloudbuild.yaml cannot honour"
 else
-  ok "build refuses an empty TAG"
+  bad "build:remote refuses a REGION cloudbuild.yaml cannot honour" "rc=$rc $(cat "$work/out.txt")"
 fi
 
-# --- deploy onto an existing service: a candidate that serves nobody ---------------------------
-make_fake_gcloud 0 serving
+# --- deploy: a candidate that serves nobody ------------------------------------------------------
+setup serving
 run_deploy deploy || true
 if logged "--no-traffic"; then
   ok "deploy onto an existing service takes no traffic"
@@ -200,18 +264,23 @@ else
 fi
 for flag in "--sandbox-launcher" "--execution-environment gen2" "--network app-net" \
   "--subnet app-subnet" "--vpc-egress private-ranges-only" "--concurrency 8" \
+  "--cpu 2" "--memory 2Gi" "--max-instances 2" "--allow-unauthenticated" \
+  "--image us-central1-docker.pkg.dev/test-project/app/app:abc123" \
   "app-runtime@test-project.iam.gserviceaccount.com" \
   "test-project:us-central1:app-db"; do
-  if logged "$flag"; then
-    ok "deploy passes $flag"
-  else
-    bad "deploy passes $flag" "$(cat "$work/calls.log")"
-  fi
+  if logged "$flag"; then ok "deploy passes $flag"; else bad "deploy passes $flag" "$(cat "$work/calls.log")"; fi
 done
-if logged "FRONTEND_ORIGIN=https://app-530312723651.us-central1.run.app"; then
-  ok "deploy sets FRONTEND_ORIGIN to the service's own URL (#188)"
+for secret in ANTHROPIC_API_KEY=anthropic-api-key:latest DATABASE_URL=database-url:latest \
+  REDIS_URL=redis-url:latest OIDC_ISSUER=oidc-issuer:latest \
+  OIDC_AUDIENCE=oidc-audience:latest OIDC_JWKS_URL=oidc-jwks-url:latest; do
+  if logged "$secret"; then ok "deploy binds $secret"; else bad "deploy binds $secret" "$(cat "$work/calls.log")"; fi
+done
+# On an existing service the origin is READ, not reconstructed from the project number: the
+# <service>-<number>.<region> URL shape is a convention, not a guarantee (#188 is the failure class).
+if logged "FRONTEND_ORIGIN=${URL}"; then
+  ok "deploy reads FRONTEND_ORIGIN from the live service URL"
 else
-  bad "deploy sets FRONTEND_ORIGIN to the service's own URL" "$(cat "$work/calls.log")"
+  bad "deploy reads FRONTEND_ORIGIN from the live service URL" "$(cat "$work/calls.log")"
 fi
 if logged "add-iam-policy-binding"; then
   ok "deploy binds allUsers explicitly, because --allow-unauthenticated only warns in this org"
@@ -219,25 +288,26 @@ else
   bad "deploy binds allUsers explicitly" "$(cat "$work/calls.log")"
 fi
 
-# --- deploy REFUSES to create the service --------------------------------------------------------
-# The invariant is that no user ever reaches an unverified revision. Cloud Run gives a new service's
-# first revision 100% of traffic, so the only way to keep that absolute is for CD not to create
-# services at all.
-make_fake_gcloud 0 absent
-run_deploy deploy && rc=0 || rc=$?
-if [[ "${rc:-0}" -eq 3 ]]; then
-  ok "deploy exits 3 rather than creating the service"
-else
-  bad "deploy exits 3 rather than creating the service" "got $rc: $(cat "$work/out.txt")"
-fi
+setup absent
+expect_exit 3 "deploy exits 3 rather than creating the service" deploy
 if logged "beta run deploy"; then
   bad "deploy runs no gcloud deploy when the service is absent" "$(cat "$work/calls.log")"
 else
   ok "deploy runs no gcloud deploy when the service is absent"
 fi
 
-# --- create IS the by-hand path, and it does not pass --no-traffic -----------------------------
-make_fake_gcloud 0 absent
+# A lookup ERROR must not be read as "absent" and turned into a live, full-traffic create.
+setup serving
+echo 1 >"$work/state/list_exit"
+expect_exit 1 "deploy exits 1 when the service lookup errors, and does not deploy" deploy
+if logged "beta run deploy"; then
+  bad "a service-lookup error deploys nothing" "$(cat "$work/calls.log")"
+else
+  ok "a service-lookup error deploys nothing"
+fi
+
+# --- create ----------------------------------------------------------------------------------------
+setup absent
 run_deploy create || true
 if logged "--no-traffic"; then
   bad "create omits --no-traffic" "$(cat "$work/calls.log")"
@@ -249,62 +319,106 @@ if logged "--sandbox-launcher"; then
 else
   bad "create produces the same service shape as deploy" "$(cat "$work/calls.log")"
 fi
-
-# create must refuse to touch a service that already exists — that is deploy's job, and deploy is
-# the one that keeps the candidate window.
-make_fake_gcloud 0 serving
-run_deploy create && rc=0 || rc=$?
-if [[ "${rc:-0}" -eq 1 ]]; then
-  ok "create refuses when the service already exists"
+if logged "FRONTEND_ORIGIN=https://app-530312723651.us-central1.run.app"; then
+  ok "create synthesises FRONTEND_ORIGIN from the project number, having no URL to read"
 else
-  bad "create refuses when the service already exists" "got $rc: $(cat "$work/out.txt")"
+  bad "create synthesises FRONTEND_ORIGIN" "$(cat "$work/calls.log")"
 fi
 
-# --- promote: the split is checked, not the exit code ------------------------------------------
-make_fake_gcloud 0 serving
-if run_deploy promote; then
-  ok "promote succeeds when the latest revision holds 100%"
+setup serving
+expect_exit 1 "create refuses when the service already exists" create
+
+# The verifier is checked BEFORE the deploy. Discovered afterwards, a missing one would leave a
+# live unverified service behind — the one outcome the whole design exists to prevent.
+setup absent
+rc=0
+PATH="$work/bin:$PATH" PROJECT_ID=test-project REGION=us-central1 SERVICE=app TAG=abc123 \
+  VITE_AUTH0_DOMAIN=t.auth0.com VITE_AUTH0_CLIENT_ID=cid VITE_AUTH0_AUDIENCE=https://api.test/ \
+  VERIFY_SCRIPT="$work/does-not-exist.sh" \
+  "$DEPLOY" create >"$work/out.txt" 2>&1 || rc=$?
+if [[ "$rc" -eq 1 ]] && ! logged "beta run deploy"; then
+  ok "create fails fast on a missing verifier, before deploying anything"
 else
-  bad "promote succeeds when the latest revision holds 100%" "$(cat "$work/out.txt")"
+  bad "create fails fast on a missing verifier" "rc=$rc calls: $(cat "$work/calls.log")"
 fi
+
+# --- verify ------------------------------------------------------------------------------------
+setup serving
+run_deploy verify || true
+if verified "args=all ${CAND_URL}"; then
+  ok "verify targets the candidate URL, not the live one"
+else
+  bad "verify targets the candidate URL" "$(cat "$work/verify.log")"
+fi
+if verified "PROJECT_ID=test-project REGION=us-central1 SERVICE=app REVISION=app-00010-new"; then
+  ok "verify exports PROJECT_ID/REGION/SERVICE and scopes REVISION to the candidate"
+else
+  bad "verify exports the environment the child needs" "$(cat "$work/verify.log")"
+fi
+
+# No silent fallback: verifying the currently-serving revision and calling it a pass is how a
+# completely unverified image would reach production with a green trail behind it.
+setup untagged
+expect_exit 1 "verify refuses to fall back to the live URL when no candidate is tagged" verify
+if [[ ! -s "$work/verify.log" ]]; then
+  ok "verify runs no checks at all when the candidate is missing"
+else
+  bad "verify runs no checks when the candidate is missing" "$(cat "$work/verify.log")"
+fi
+
+setup serving
+echo 3 >"$work/state/verify_exit"
+expect_exit 1 "a child exit of 3 is normalised to 1, never re-reported as 'nothing to deploy'" verify
+
+setup untagged
+expect_exit 0 "verify live targets the service URL" verify live
+if verified "args=all ${URL}"; then
+  ok "verify live hands the child the service URL"
+else
+  bad "verify live hands the child the service URL" "$(cat "$work/verify.log")"
+fi
+
+# --- promote -------------------------------------------------------------------------------------
+setup serving
+expect_exit 0 "promote succeeds when the verified candidate holds 100%" promote
 if logged "--to-latest"; then
   ok "promote uses --to-latest, never --to-revisions (the pinning trap)"
 else
   bad "promote uses --to-latest" "$(cat "$work/calls.log")"
 fi
-
-# The regression that matters: update-traffic can move traffic and STILL exit non-zero, and it can
-# also exit ZERO having moved nothing. Only reading the split back distinguishes them.
-make_fake_gcloud 0 serving
-cat >"$work/bin/gcloud" <<EOF
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$work/calls.log"
-case "\$*" in
-  *"artifacts repositories describe"*) exit 0 ;;
-  *"projects describe"*) echo "530312723651"; exit 0 ;;
-  *"run services describe"*"status.url"*) echo "https://app-530312723651.us-central1.run.app"; exit 0 ;;
-  *"run services describe"*)
-      printf '%s' '{"status":{"url":"https://app-530312723651.us-central1.run.app","traffic":[{"tag":"candidate","percent":0,"url":"https://candidate---app.run.app","revisionName":"app-00009-abc"},{"latestRevision":false,"percent":100,"revisionName":"app-00008-old"}]}}'
-      exit 0 ;;
-  *"update-traffic"*) exit 0 ;;
-esac
-exit 0
-EOF
-chmod +x "$work/bin/gcloud"
-if run_deploy promote; then
-  bad "promote fails when update-traffic exits 0 but the split did not move" "$(cat "$work/out.txt")"
+if logged "--remove-tags=candidate"; then
+  ok "promote removes the candidate tag, closing the public URL it opened"
 else
-  ok "promote fails when update-traffic exits 0 but the split did not move"
+  bad "promote removes the candidate tag" "$(cat "$work/calls.log")"
 fi
 
-# --- an unknown target is a usage error, not a silent success ----------------------------------
-make_fake_gcloud 0 serving
-run_deploy frobnicate && rc=0 || rc=$?
-if [[ "${rc:-0}" -eq 2 ]]; then
-  ok "an unknown target exits 2"
+# An absent candidate is a failed deploy, not a no-op: returning 0 here reports a green pipeline
+# that moved no traffic at all.
+setup untagged
+expect_exit 1 "promote fails when there is no candidate to promote" promote
+if logged "update-traffic"; then
+  bad "promote moves no traffic when there is no candidate" "$(cat "$work/calls.log")"
 else
-  bad "an unknown target exits 2" "got $rc: $(cat "$work/out.txt")"
+  ok "promote moves no traffic when there is no candidate"
 fi
+
+# --to-latest promotes whatever is newest AT THAT MOMENT. If a second deploy landed between verify
+# and promote, promoting would send 100% to a revision nothing verified.
+setup serving
+echo "app-00011-newer" >"$work/state/latest_revision"
+expect_exit 1 "promote refuses when a newer revision arrived after the candidate was verified" promote
+if logged "update-traffic"; then
+  bad "promote moves no traffic when the candidate is not the latest" "$(cat "$work/calls.log")"
+else
+  ok "promote moves no traffic when the candidate is not the latest"
+fi
+
+# The regression that matters: update-traffic can exit 0 having moved nothing. Only reading the
+# split back distinguishes that from success.
+setup serving
+traffic_json "app-00010-new" "app-00008-old" 100 >"$work/state/service_json"
+echo "app-00010-new" >"$work/state/latest_revision"
+expect_exit 1 "promote fails when update-traffic exits 0 but the split did not move" promote
 
 echo
 echo "$pass passed, $fail failed"

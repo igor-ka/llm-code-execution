@@ -590,17 +590,28 @@ Three things about it are process rather than implementation, which is why they 
   instead derived from the resource names Terraform itself uses, which means a rename in `infra/`
   breaks the deploy loudly on the next run rather than silently.
 - **Its exit codes are an interface.** `0` success, `3` nothing to deploy — the environment is torn
-  down between working sessions, or the service does not exist yet — `2` unknown target, `1`
+  down between working sessions, or the service does not exist yet — `2` a usage error, `1`
   everything else *including a credential that does not work*. That last distinction is the point:
-  a probe that reported a bad token as "torn down" would finish green.
+  a probe that reported a bad token as "torn down" would finish green. Two consequences follow, and
+  both are enforced rather than intended. The existence probe is `gcloud run services list
+  --filter`, not `describe`, because list exits 0-with-no-output for a missing service and non-zero
+  only for a real failure, while `describe` fails identically for "missing" and "permission
+  denied". And a child process's exit status is **normalised to 1** — the verification script has
+  its own exit vocabulary, and passing its `3` straight through would tell the workflow there was
+  nothing to deploy.
+- **The default target is `help`, not `all`.** Every other target changes production, so the thing
+  that happens when someone types the script's name to see what it does must not be a deploy.
 - **It will not create the service.** Cloud Run gives a brand-new service's first revision 100% of
   traffic, so it cannot be verified before users reach it. Creating the service is a separate
   `create` target, run by hand after a rebuild; automation only ever deploys a revision that serves
   nobody until it has been checked.
 
-Its unit tests, `scripts/tests/deploy-cloud-run.test.sh`, drive it against a fake `gcloud` and a
-fake `docker` on `PATH` — no project, no credentials, no network — and are hosted by the
-`SDLC docs` job, for the same reason `dependabot-auto-merge-disarm.test.sh` is.
+Its unit tests, `scripts/tests/deploy-cloud-run.test.sh`, drive it against fake `gcloud`, `docker`
+and verifier executables on `PATH` — no project, no credentials, no network. They are hosted by the
+`SDLC docs` job for the same reason `dependabot-auto-merge-disarm.test.sh` is, and like the other
+lodgers **the same file is the local pre-push command**: run
+`./scripts/tests/deploy-cloud-run.test.sh` before pushing, because no `verify.sh` covers it and the
+three that exist will stay green while this job goes red.
 
 One consequence of that tooling reaches the `verify.sh` scripts. Docker image tags are
 daemon-wide, and `backend/verify.sh`'s `docker` target *builds* a tag and then *runs* it. With two

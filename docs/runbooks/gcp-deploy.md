@@ -75,7 +75,8 @@ build time, so a given image is bound to one Auth0 tenant.
 ```bash
 # FIRST deploy after a rebuild — the service does not exist yet. Cloud Run gives a new service's
 # first revision 100% of traffic immediately, so this one is live before it is verified; `create`
-# runs the checks straight afterwards and tells you to delete the service if they fail.
+# runs the checks straight afterwards and tells you to delete the service if they fail. It refuses
+# to start at all if the verification script is missing, rather than deploying and then finding out.
 TAG=v4 ./scripts/deploy-cloud-run.sh create
 
 # EVERY deploy after that. `deploy` produces a revision serving nobody, `verify` proves it, and
@@ -84,6 +85,14 @@ TAG=v4 ./scripts/deploy-cloud-run.sh deploy
 TAG=v4 ./scripts/deploy-cloud-run.sh verify
 TAG=v4 ./scripts/deploy-cloud-run.sh promote
 ```
+
+Running the script with no target prints its usage rather than deploying — every target here
+changes production, so that is the wrong thing to do by accident.
+
+> **Until `scripts/verify-deployment.sh` lands (issue #198), `create` and `all` refuse to run.**
+> Both deploy and then verify, and a verifier discovered missing *after* the deploy would leave a
+> live unverified service behind. Use `deploy` and check §4 by hand in the meantime; `deploy` and
+> `promote` are unaffected.
 
 The flags those targets pass, and which this section explains, are:
 
