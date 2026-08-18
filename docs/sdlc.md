@@ -332,11 +332,12 @@ Details that are easy to get wrong:
   `./scripts/tests/check-sdlc-sync.test.sh`.
 
   Further suites are run by `SDLC docs` even though they belong to other workflows:
-  `./scripts/tests/dependabot-auto-merge-disarm.test.sh` and
-  `./scripts/tests/deploy-cloud-run.test.sh`. Each of their own workflows gates itself so that a PR
+  `./scripts/tests/dependabot-auto-merge-disarm.test.sh`,
+  `./scripts/tests/deploy-cloud-run.test.sh` and
+  `./scripts/tests/verify-deployment.test.sh`. Each belongs to a workflow that gates itself so a PR
   editing it never executes it — `dependabot-auto-merge.yml` to `dependabot/npm_and_yarn/*`
-  branches, `deploy.yml` to pushes on `main` — and the tests would have no host otherwise. Same
-  file locally and in CI, like the other two. See
+  branches, and the deploy workflow (Phase 3) to pushes on `main` — so the tests would have no host
+  otherwise. Same file locally and in CI, like the two above. See
   [Auto-merging dependency bumps](#auto-merging-dependency-bumps).
 - **Dependabot PRs are exempt from `SDLC docs`, and need no exemption from `PR shape`.** The
   first is because `github-actions` bumps touch watched workflow files; the second is because
@@ -612,11 +613,27 @@ Three things about it are process rather than implementation, which is why they 
   `create` target, run by hand after a rebuild; automation only ever deploys a revision that serves
   nobody until it has been checked.
 
-Its unit tests, `scripts/tests/deploy-cloud-run.test.sh`, drive it against fake `gcloud`, `docker`
-and verifier executables on `PATH` — no project, no credentials, no network. They are hosted by the
+`scripts/verify-deployment.sh` is its companion, and the answer to a question the deploy script
+cannot answer for itself: what does a pipeline owe beyond "the command exited 0"? It reads the
+deployed service back from the API and asserts its shape against the deploy runbook's flag list —
+`sandboxLauncher`, gen2, the VPC interfaces, the Cloud SQL instance, the runtime identity,
+concurrency 8, `FRONTEND_ORIGIN` equal to the service URL, all six secret bindings — then checks the
+endpoints an anonymous caller can reach and the application's own log window.
+
+Two limits are written into it rather than left for a reader to discover. Nothing behind the auth
+gate is covered: a real execution, the cross-owner 404 and the quota's 429 all need an authenticated
+caller, and [`gcp-isolation-probes.md`](runbooks/gcp-isolation-probes.md) stays the authority for
+those. And **an empty log window is weak evidence**, because Cloud Logging ingestion is asynchronous
+and empty is exactly what the check treats as a pass — a settle wait buys some of that back without
+making silence proof.
+
+Its unit tests, `scripts/tests/deploy-cloud-run.test.sh` and
+`scripts/tests/verify-deployment.test.sh`, drive their scripts against fake `gcloud`, `docker`,
+`curl` and verifier executables on `PATH` — no project, no credentials, no network. They are hosted by the
 `SDLC docs` job for the same reason `dependabot-auto-merge-disarm.test.sh` is, and like the other
-lodgers **the same file is the local pre-push command**: run
-`./scripts/tests/deploy-cloud-run.test.sh` before pushing, because no `verify.sh` covers it and the
+lodgers **the same files are the local pre-push commands**: run
+`./scripts/tests/deploy-cloud-run.test.sh` and `./scripts/tests/verify-deployment.test.sh` before
+pushing, because no `verify.sh` covers them and the
 three that exist will stay green while this job goes red.
 
 One consequence of that tooling reaches the `verify.sh` scripts. Docker image tags are
