@@ -170,6 +170,59 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      # An App installation token, in place of GITHUB_TOKEN, and NOT because of scope — GITHUB_TOKEN
+      # already holds `contents: write` here. It is about what GitHub does with the resulting push.
+      #
+      # A `push` or `pull_request` event triggered by GITHUB_TOKEN starts NO workflow run
+      # (`workflow_dispatch` and `repository_dispatch` are the documented exceptions). Auto-merge
+      # armed with it merges as `app/github-actions`, so an auto-merged bump has always landed on
+      # `main` with no push-side CI run — `8211ee8` (PR #117) is the proof, and "How this meets
+      # CI/CD" in docs/sdlc.md predicted the consequence: *anything built later that keys off "CI
+      # ran on main" must not assume otherwise*. Phase 3's Deploy workflow is that later thing, and
+      # it keys off exactly that. An App token pushes as a first-class actor, so CI and Deploy both
+      # run and Dependabot stops being a special case.
+      #
+      # The credentials live in the DEPENDABOT secret store, not the Actions one. This workflow runs
+      # on `pull_request` events raised by Dependabot, and GitHub does not pass Actions secrets to
+      # those runs — `gh secret set` without `--app dependabot` leaves both inputs empty and this
+      # step fails in a way that looks like a broken App. The two stores are indistinguishable in
+      # the settings UI, so that is worth knowing before debugging it.
+      #
+      # Pinned by SHA with the version in a trailing comment, matching how `gate` pins
+      # dependabot/fetch-metadata. `github_actions` is deliberately outside this workflow's own
+      # auto-merge allow-list, so a new SHA here is always read by a human before it merges.
+      #
+      # This is the only third-party action in the write-scoped job, which the two-job split was
+      # built to avoid. It is accepted for one reason: there is no way to change the merging
+      # identity without something minting a token, and this action is GitHub's own. `gate` still
+      # holds `pull-requests: read`, so the split it exists to create is unchanged.
+      #
+      # Only the ARM path uses this token, and only the arm path needs to: it is the merge that has
+      # to fire CI and Deploy. The disarm path deliberately keeps GITHUB_TOKEN — see that step.
+      #
+      # No `if:` guard. This is the first step in the job, so a step-level `success()` (which asks
+      # only whether an earlier step in THIS job failed, and there are none) is trivially true; a
+      # `!cancelled()` here would be a no-op dressed as a safeguard. The step therefore runs
+      # whenever `apply` runs, and if it fails the arm step is skipped while disarm still works.
+      #
+      # `client-id`, not `app-id`: v3.2.0 marks app-id deprecated with "Use 'client-id' instead",
+      # so pinning to it would emit a warning on every run and break on the action's next major —
+      # arriving as a Dependabot bump that a human reads, since github_actions is outside this
+      # workflow's own auto-merge allow-list.
+      #
+      # The permissions are narrowed AT MINT. Without them the token inherits the App's whole
+      # installation permission set, so anyone adding a permission in the GitHub UI — one click,
+      # invisible in this repository's history — would silently widen every token this workflow
+      # mints, with no diff and no review. That would defeat the point of creating a minimal App.
+      - name: Mint a GitHub App installation token
+        id: apptoken
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.AUTOMERGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       # `--squash`, not `--merge`: the ruleset allows only squash and rebase, and
       # required_linear_history is on. GitHub's own documented example uses `--merge` and would
       # fail here.
@@ -180,7 +233,7 @@ jobs:
         if: needs.gate.outputs.verdict == 'eligible'
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.apptoken.outputs.token }}
         run: gh pr merge --auto --squash "$PR_URL"
 
       # Arming is sticky, so ineligibility has to be acted on, not just logged: GitHub disables
@@ -198,9 +251,23 @@ jobs:
       # `set +e` is not redundant: GitHub invokes steps as `bash -e {0}`, so errexit is ON before
       # the script starts and `set -uo pipefail` does not clear it. Without this, the `gh` failure
       # paths below are unreachable — the script would die at the assignment.
+      # GH_TOKEN here is GITHUB_TOKEN, NOT the App token, and that is the whole point. This step is
+      # the only mechanism that un-arms an ineligible PR, and this workflow is deliberately not a
+      # required check — so a red job blocks nothing. Minting the App token can fail (secrets
+      # absent or rotated, App uninstalled, the API down), and a disarm step holding an empty token
+      # cannot disarm: it would exit 1 having left the PR armed, which is fail-OPEN with a red
+      # light nobody has to obey. GITHUB_TOKEN is always present and already carries the scopes
+      # this step needs. Only the arm path requires App identity.
       - name: Disarm auto-merge if it is no longer eligible
         if: ${{ !cancelled() && needs.gate.outputs.verdict != 'eligible' }}
         env:
+          # Which login means "this workflow armed it". Taken from the mint step when it ran, and
+          # from a repository variable when it did not — the identity must be knowable even on the
+          # runs where minting FAILED, because those are exactly the runs where an ineligible PR is
+          # still armed and needs disarming. Guessing instead (treating any unrecognised bot as
+          # ours) would revoke a maintainer's deliberate `@dependabot merge`, which the branch
+          # below exists to protect.
+          APP_SLUG: ${{ steps.apptoken.outputs.app-slug || vars.AUTOMERGE_APP_SLUG }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERDICT: ${{ needs.gate.outputs.verdict }}
@@ -249,13 +316,29 @@ jobs:
           # light nobody has to obey. Disarming an actor we cannot identify may revoke a human's
           # decision, which is visible and recoverable in one click; letting an ineligible PR merge
           # unattended is neither.
+          # The set of logins that mean "this workflow armed it" MOVED when arming moved to the App.
+          # `github-actions` and `app/github-actions` are the legacy pair, kept for PRs armed before
+          # that change; the App contributes its own slug, in both the bare and `app/`-prefixed
+          # forms `gh` and GraphQL respectively report. Leaving the legacy pair as the only match
+          # would mean the workflow could no longer recognise its own arming — it would print
+          # "armed by someone else, leaving it alone" and let an ineligible PR merge unattended,
+          # which is the exact failure this step exists to prevent.
+          ours=("github-actions" "app/github-actions")
+          if [[ -n "${APP_SLUG:-}" ]]; then
+            ours+=("$APP_SLUG" "app/${APP_SLUG}")
+          fi
+
           disarm=no
           note=""
           if [[ "$kind" == "bot" ]]; then
-            if [[ "$who" == "github-actions" || "$who" == "app/github-actions" ]]; then
-              disarm=yes
-              note="this workflow armed it"
-            fi
+            for candidate in "${ours[@]}"; do
+              if [[ "$who" == "$candidate" ]]; then
+                disarm=yes
+                note="this workflow armed it"
+                break
+              fi
+            done
+
           elif [[ "$kind" == "indeterminate" ]]; then
             disarm=yes
             note="the enabling actor could not be identified"

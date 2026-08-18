@@ -78,6 +78,10 @@ NONE='{"autoMergeRequest":null}'
 NULL_ACTOR='{"autoMergeRequest":{"mergeMethod":"SQUASH","enabledBy":null}}'
 # A gh upgrade that renames or drops the field.
 NO_IS_BOT='{"autoMergeRequest":{"mergeMethod":"SQUASH","enabledBy":{"login":"app/github-actions"}}}'
+# Arming moved to a GitHub App, so the login this workflow must recognise as its own moved with it.
+# The legacy pair stays matchable for PRs armed before that change; these two are the new shape.
+APP_BOT='{"autoMergeRequest":{"mergeMethod":"SQUASH","enabledBy":{"is_bot":true,"login":"app/llm-code-execution-automerge"}}}'
+APP_BOT_BARE='{"autoMergeRequest":{"mergeMethod":"SQUASH","enabledBy":{"is_bot":true,"login":"llm-code-execution-automerge"}}}'
 
 fails=0
 check() { # name fixture view_rc disable_rc verdict want_exit want_substring
@@ -110,6 +114,18 @@ check "disarm reports the why"   "$BOT"         0   0  "$V"      0    "$V"
 check "gate failed: still disarms" "$BOT"       0   0  ""        0    "eligibility is unknown"
 check "armed by a human"         "$HUMAN"       0   0  "$V"      0    "leaving it alone"
 check "armed by another bot"     "$OTHER_BOT"   0   0  "$V"      0    "leaving it alone"
+# The regression this PR would otherwise have shipped: arming moved to the App, the disarm check
+# did not, so the workflow could no longer recognise its own arming and left ineligible PRs armed.
+APP_SLUG=llm-code-execution-automerge \
+  check "armed by the App"         "$APP_BOT"     0   0  "$V"      0    "auto-merge disarmed"
+APP_SLUG=llm-code-execution-automerge \
+  check "armed by the App (bare)"  "$APP_BOT_BARE" 0  0  "$V"      0    "auto-merge disarmed"
+# Legacy arming must stay matchable: PRs armed before the App existed are still open.
+APP_SLUG=llm-code-execution-automerge \
+  check "legacy arming still matches" "$BOT"      0   0  "$V"      0    "auto-merge disarmed"
+# Without a slug the App's login is unrecognisable, and the documented behaviour is to leave an
+# unrecognised bot alone rather than revoke what may be a maintainer's decision.
+check "App arming, no slug known" "$APP_BOT"      0   0  "$V"      0    "leaving it alone"
 # The indeterminate cases must DISARM and then complain. Exiting without disarming would not be
 # failing closed: this workflow is not a required check, so a red job blocks nothing and the PR
 # would stay armed and merge. Assert the disarm happened, not just the non-zero exit.
