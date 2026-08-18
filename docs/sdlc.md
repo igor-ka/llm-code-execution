@@ -735,7 +735,8 @@ Four details in that rule are not decoration:
   real `gh` output. A hand-written stub can only encode what its author already believes, which is
   exactly how `github-actions[bot]` got past review.
 
-**An auto-merge now re-runs `CI` on `main`, and triggers `Deploy` — it did not until Phase 3.**
+**An auto-merge will re-run `CI` on `main`, and trigger `Deploy` — it did neither before Phase 3,
+and it does neither until the App below is created.**
 A `push` or `pull_request` event triggered by `GITHUB_TOKEN` does not start a new workflow run
 (`workflow_dispatch` and `repository_dispatch` are the documented exceptions), and auto-merge armed
 with that token merges as `app/github-actions`. Confirmed on the first unattended merge: `8211ee8`
@@ -750,7 +751,23 @@ The fix is at the source rather than routed around. The `apply` job mints a **Gi
 installation token** — an hour-lived credential, from an app holding `contents: write` and
 `pull-requests: write` on this repository alone — and merges with that instead of `GITHUB_TOKEN`.
 An App pushes as a first-class actor, so both gaps close at once and Dependabot stops being a
-special case in any respect. `gate` is untouched and keeps `GITHUB_TOKEN` at `pull-requests: read`,
+special case in any respect — **once the App exists**. Until its credentials are present the mint
+step fails, the arm step is skipped, and auto-merge simply does not happen; the disarm path keeps
+working, because it deliberately uses `GITHUB_TOKEN` rather than the App token.
+
+**What the App is, so this is recoverable without reading a merged pull request.** A GitHub App
+installed on this repository alone, holding `contents: write` and `pull-requests: write` and
+nothing else, with no webhook. Three repository settings feed it, and the first two are
+**Dependabot** secrets rather than Actions secrets — `pull_request` events raised by Dependabot are
+not given Actions secrets, and the two stores look identical in the UI:
+
+| Setting | Store | Why |
+| --- | --- | --- |
+| `AUTOMERGE_APP_CLIENT_ID` | Dependabot secret | the App's Client ID. `app-id` is deprecated in the action. |
+| `AUTOMERGE_APP_PRIVATE_KEY` | Dependabot secret | the App's private key, in PEM form. |
+| `AUTOMERGE_APP_SLUG` | Actions **variable** | the App's slug, so the disarm step can recognise this workflow's own arming even on runs where minting failed. |
+
+Rotating the key means replacing `AUTOMERGE_APP_PRIVATE_KEY`; nothing else changes. `gate` is untouched and keeps `GITHUB_TOKEN` at `pull-requests: read`,
 so the two-job scope split is unchanged.
 
 Two details cost more than they look. The credentials live in the **Dependabot** secret store, not
@@ -762,9 +779,14 @@ ANDed with `success()`, and the **disarm** path runs precisely when `gate` did n
 gating the token on the verdict would hand the one mechanism that un-arms an ineligible PR an empty
 token.
 
-A long-lived fine-grained PAT would also have worked and was rejected: it is a standing
-write-scoped credential in the repository, which is the thing P1-D4 avoided on the GCP side by
-having no service account for CI to hold a key for. The gap in `main`'s push-side history before
+A long-lived fine-grained PAT would also have worked and was rejected — but not for the reason
+that first suggests itself, and the distinction is worth recording because the wrong version of it
+would lead someone to under-protect the key. **The App private key is also a standing repository
+secret**: it does not expire, it mints write-scoped tokens on demand, and revoking it means
+regenerating the key rather than deleting a token. What the App actually buys over a PAT is that it
+is scoped to this one repository rather than to a user's whole account, that the tokens it mints
+are hour-lived and narrowed at mint, and that it is not tied to an individual who might leave. Those
+are sufficient; "no standing credential" is not true of either. The gap in `main`'s push-side history before
 this change is real and stays in the record.
 
 **What it is not.** It does not weaken any gate. Native auto-merge waits for all four required
@@ -788,9 +810,16 @@ scripts from the PR branch under a read-only token. This workflow inverts that: 
 `contents: write`, and so it checks nothing out and runs no repository code. It uses
 `pull_request`, never `pull_request_target`.
 
-**It is two jobs, and the split is the point.** `gate` runs the one third-party action —
-`dependabot/fetch-metadata`, pinned to a full commit SHA — under `pull-requests: read`, and
-publishes a verdict as a job output. `apply` holds `contents: write` and runs nothing but `gh`.
+**It is two jobs, and the split is the point.** `gate` runs `dependabot/fetch-metadata`, pinned to
+a full commit SHA, under `pull-requests: read`, and publishes a verdict as a job output. `apply`
+holds `contents: write`.
+
+`apply` used to run nothing but `gh`, and since the auto-merge moved to a GitHub App it also runs
+`actions/create-github-app-token` — so the write-scoped job now does execute third-party code, and
+saying otherwise would misdescribe the posture. It is GitHub's own action, SHA-pinned, and it mints
+a token whose permissions are narrowed at mint rather than inherited from the installation. What
+the split still buys is that the *metadata* action, whose output the gate depends on, never sees
+write scope.
 In a single job the write scope would be handed to the third-party action, leaving the SHA pin as
 the only thing between a compromised release and a push to `main`. The split turns that
 supply-chain assumption into a scope boundary; the pin stays as defence in depth.

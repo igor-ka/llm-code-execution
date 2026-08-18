@@ -196,18 +196,31 @@ jobs:
       # built to avoid. It is accepted for one reason: there is no way to change the merging
       # identity without something minting a token, and this action is GitHub's own. `gate` still
       # holds `pull-requests: read`, so the split it exists to create is unchanged.
+      # Only the ARM path uses this token, and only the arm path needs to: it is the merge that has
+      # to fire CI and Deploy. The disarm path deliberately keeps GITHUB_TOKEN — see that step.
+      #
+      # No `if:` guard. This is the first step in the job, so a step-level `success()` (which asks
+      # only whether an earlier step in THIS job failed, and there are none) is trivially true; a
+      # `!cancelled()` here would be a no-op dressed as a safeguard. The step therefore runs
+      # whenever `apply` runs, and if it fails the arm step is skipped while disarm still works.
+      #
+      # `client-id`, not `app-id`: v3.2.0 marks app-id deprecated with "Use 'client-id' instead",
+      # so pinning to it would emit a warning on every run and break on the action's next major —
+      # arriving as a Dependabot bump that a human reads, since github_actions is outside this
+      # workflow's own auto-merge allow-list.
+      #
+      # The permissions are narrowed AT MINT. Without them the token inherits the App's whole
+      # installation permission set, so anyone adding a permission in the GitHub UI — one click,
+      # invisible in this repository's history — would silently widen every token this workflow
+      # mints, with no diff and no review. That would defeat the point of creating a minimal App.
       - name: Mint a GitHub App installation token
         id: apptoken
-        # `!cancelled()`, for the same reason the disarm step below carries it: a step `if:` with no
-        # status function is implicitly ANDed with `success()`, and BOTH consumers of this token can
-        # run when `gate` failed — the disarm path exists precisely for that case. Gating this step
-        # on the verdict would hand the disarm step an empty token, which is the one mechanism that
-        # un-arms an ineligible PR failing open with a red light nobody has to obey.
-        if: ${{ !cancelled() }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.AUTOMERGE_APP_ID }}
+          client-id: ${{ secrets.AUTOMERGE_APP_CLIENT_ID }}
           private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
 
       # `--squash`, not `--merge`: the ruleset allows only squash and rebase, and
       # required_linear_history is on. GitHub's own documented example uses `--merge` and would
@@ -237,11 +250,25 @@ jobs:
       # `set +e` is not redundant: GitHub invokes steps as `bash -e {0}`, so errexit is ON before
       # the script starts and `set -uo pipefail` does not clear it. Without this, the `gh` failure
       # paths below are unreachable — the script would die at the assignment.
+      # GH_TOKEN here is GITHUB_TOKEN, NOT the App token, and that is the whole point. This step is
+      # the only mechanism that un-arms an ineligible PR, and this workflow is deliberately not a
+      # required check — so a red job blocks nothing. Minting the App token can fail (secrets
+      # absent or rotated, App uninstalled, the API down), and a disarm step holding an empty token
+      # cannot disarm: it would exit 1 having left the PR armed, which is fail-OPEN with a red
+      # light nobody has to obey. GITHUB_TOKEN is always present and already carries the scopes
+      # this step needs. Only the arm path requires App identity.
       - name: Disarm auto-merge if it is no longer eligible
         if: ${{ !cancelled() && needs.gate.outputs.verdict != 'eligible' }}
         env:
+          # Which login means "this workflow armed it". Taken from the mint step when it ran, and
+          # from a repository variable when it did not — the identity must be knowable even on the
+          # runs where minting FAILED, because those are exactly the runs where an ineligible PR is
+          # still armed and needs disarming. Guessing instead (treating any unrecognised bot as
+          # ours) would revoke a maintainer's deliberate `@dependabot merge`, which the branch
+          # below exists to protect.
+          APP_SLUG: ${{ steps.apptoken.outputs.app-slug || vars.AUTOMERGE_APP_SLUG }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ steps.apptoken.outputs.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERDICT: ${{ needs.gate.outputs.verdict }}
         run: |
           set +e
@@ -288,13 +315,29 @@ jobs:
           # light nobody has to obey. Disarming an actor we cannot identify may revoke a human's
           # decision, which is visible and recoverable in one click; letting an ineligible PR merge
           # unattended is neither.
+          # The set of logins that mean "this workflow armed it" MOVED when arming moved to the App.
+          # `github-actions` and `app/github-actions` are the legacy pair, kept for PRs armed before
+          # that change; the App contributes its own slug, in both the bare and `app/`-prefixed
+          # forms `gh` and GraphQL respectively report. Leaving the legacy pair as the only match
+          # would mean the workflow could no longer recognise its own arming — it would print
+          # "armed by someone else, leaving it alone" and let an ineligible PR merge unattended,
+          # which is the exact failure this step exists to prevent.
+          ours=("github-actions" "app/github-actions")
+          if [[ -n "${APP_SLUG:-}" ]]; then
+            ours+=("$APP_SLUG" "app/${APP_SLUG}")
+          fi
+
           disarm=no
           note=""
           if [[ "$kind" == "bot" ]]; then
-            if [[ "$who" == "github-actions" || "$who" == "app/github-actions" ]]; then
-              disarm=yes
-              note="this workflow armed it"
-            fi
+            for candidate in "${ours[@]}"; do
+              if [[ "$who" == "$candidate" ]]; then
+                disarm=yes
+                note="this workflow armed it"
+                break
+              fi
+            done
+
           elif [[ "$kind" == "indeterminate" ]]; then
             disarm=yes
             note="the enabling actor could not be identified"
