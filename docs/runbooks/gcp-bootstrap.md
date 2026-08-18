@@ -212,7 +212,7 @@ not an internet-facing service.
 The backend refuses to boot without a reachable `REDIS_URL`, so a deploy attempted before these
 run fails at startup — by design, rather than serving traffic with the quota control absent.
 
-**`terraform destroy` deletes the containers and every version with them.** There is no export and
+**A FULL `terraform destroy` deletes the containers and every version with them.** The between-sessions *targeted* destroy in [`gcp-teardown.md`](gcp-teardown.md) does not — it leaves all six containers standing, so only `redis-url` needs re-adding after it, and a stale one is more dangerous than a missing one.  There is no export and
 no backup; rebuilding means re-running every command above. That is the accepted cost of keeping
 payloads out of Terraform state (S6), and it is why this section is a runbook rather than a
 one-time note.

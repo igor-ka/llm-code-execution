@@ -70,6 +70,10 @@ case "\$*" in
       if [[ "\$rc" != 0 ]]; then echo "ERROR: permission denied" >&2; exit "\$rc"; fi
       cat "\$s/registry_out"; exit 0 ;;
   *"projects describe"*)               cat "\$s/project_number"; exit "\$(cat "\$s/projects_exit")" ;;
+  *"sql instances list"*)
+      rc="\$(cat "\$s/sql_exit")"
+      if [[ "\$rc" != 0 ]]; then echo "ERROR: permission denied" >&2; exit "\$rc"; fi
+      cat "\$s/sql_out"; exit 0 ;;
   *"run services list"*)
       rc="\$(cat "\$s/list_exit")"
       if [[ "\$rc" != 0 ]]; then echo "ERROR: permission denied" >&2; exit "\$rc"; fi
@@ -105,6 +109,8 @@ setup() {
   echo app >"$work/state/registry_out"
   echo 0 >"$work/state/projects_exit"
   echo 0 >"$work/state/list_exit"
+  echo 0 >"$work/state/sql_exit"
+  echo app-db >"$work/state/sql_out"
   echo 0 >"$work/state/describe_exit"
   echo 0 >"$work/state/verify_exit"
   echo "530312723651" >"$work/state/project_number"
@@ -193,6 +199,16 @@ fi
 setup serving
 echo 1 >"$work/state/registry_exit"
 expect_exit 1 "preflight exits 1, not 3, when the registry lookup itself errors" preflight
+
+# The between-sessions teardown leaves the REGISTRY standing, so its presence no longer proves the
+# environment is usable. Cloud SQL is what that teardown actually removes.
+setup serving
+: >"$work/state/sql_out"
+expect_exit 3 "preflight exits 3 when the data layer is torn down but the registry survives" preflight
+
+setup serving
+echo 1 >"$work/state/sql_exit"
+expect_exit 1 "preflight exits 1, not 3, when the Cloud SQL lookup itself errors" preflight
 
 setup serving
 echo 1 >"$work/state/projects_exit"
