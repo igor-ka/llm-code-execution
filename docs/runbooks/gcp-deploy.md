@@ -196,9 +196,15 @@ one-time unless the project itself is deleted.
 ## 4. Confirm
 
 ```bash
-curl -s https://app-530312723651.us-central1.run.app/api/health          # {"status":"ok"}
-curl -sI https://app-530312723651.us-central1.run.app/ | grep -i content-security-policy
+./scripts/verify-deployment.sh all "$(gcloud run services describe app \
+  --region=us-central1 --project=llm-code-exec-260815 --format='value(status.url)')"
 ```
+
+That replaces the hand-run curls with assertions that fail rather than print, and adds the one thing
+curl cannot do: it reads the deployed service's **shape** back from the API and checks it against
+this section's flag list — `sandboxLauncher`, the VPC interfaces, the Cloud SQL instance, the runtime
+identity, concurrency 8, and `FRONTEND_ORIGIN`. What it still does not cover is everything behind the
+auth gate, which stays below.
 
 Those two prove the container is up and the CSP is the production one — and then go run
 [`gcp-isolation-probes.md`](gcp-isolation-probes.md), which is where a deploy is actually confirmed.

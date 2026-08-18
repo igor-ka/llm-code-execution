@@ -60,6 +60,8 @@ jobs:
       # PATH and read only files — no project, no credentials, no token.
       - name: Test the Cloud Run deploy script
         run: ./scripts/tests/deploy-cloud-run.test.sh
+      - name: Test the deployment verification script
+        run: ./scripts/tests/verify-deployment.test.sh
       - name: Check docs/sdlc.md is in sync
         env:
           # Fallback only — the script prefers the merge ref's first parent, which is exact.
