@@ -1620,8 +1620,15 @@ logs() {
   # question has changed from "is this candidate sound" to "is the service healthy now".
   #
   # Honest scope either way: a --no-traffic candidate has served nobody, so this catches boot-time
-  # problems and nothing else. The fail-open quota line appears only once AUTHENTICATED traffic
+  # problems and nothing else. And note what the POST-promotion, service-wide call still cannot
+  # separate: a ten-minute window includes warnings the OLD revision emitted while it was still
+  # serving, so a clean promotion can be reported dirty. Key that window to the promotion time
+  # rather than a fixed freshness. The fail-open quota line appears only once AUTHENTICATED traffic
   # arrives, which is why #191's real detection lives in the probes runbook and not here.
+  # Cloud Logging ingestion is ASYNCHRONOUS. Reading immediately after a deploy can return an empty
+  # window because the entries have not landed yet, not because the revision is clean — and an
+  # empty window is what this target treats as a pass. Wait for the revision to have been serving
+  # for at least LOG_SETTLE_SECONDS before believing a quiet result.
   local out revision_filter=""
   if [[ -n "${REVISION:-}" ]]; then
     revision_filter="AND resource.labels.revision_name=${REVISION}"
@@ -2171,6 +2178,7 @@ jobs:
   deploy:
     name: Deploy to Cloud Run
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       # persist-credentials: false keeps the token out of .git/config. This is the one workflow
       # here holding id-token: write, and it runs repository scripts; sdlc-docs.yml sets the same
@@ -2261,6 +2269,10 @@ jobs:
 
       # The gate. Five defects have reached this service and every one passed a fully green
       # verify.sh, so a revision is not trusted because it deployed.
+      # timeout-minutes on the job, and --max-time on every curl inside verify-deployment.sh. An
+      # unhealthy candidate that accepts a connection and never responds would otherwise hold the
+      # `deploy-cloud-run` concurrency group — which never cancels in progress — until GitHub's
+      # six-hour ceiling, blocking every later deploy behind it.
       - name: Verify the candidate
         if: steps.preflight.outputs.present == 'true'
         env:
