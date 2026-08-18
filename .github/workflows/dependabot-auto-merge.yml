@@ -170,6 +170,45 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      # An App installation token, in place of GITHUB_TOKEN, and NOT because of scope — GITHUB_TOKEN
+      # already holds `contents: write` here. It is about what GitHub does with the resulting push.
+      #
+      # A `push` or `pull_request` event triggered by GITHUB_TOKEN starts NO workflow run
+      # (`workflow_dispatch` and `repository_dispatch` are the documented exceptions). Auto-merge
+      # armed with it merges as `app/github-actions`, so an auto-merged bump has always landed on
+      # `main` with no push-side CI run — `8211ee8` (PR #117) is the proof, and "How this meets
+      # CI/CD" in docs/sdlc.md predicted the consequence: *anything built later that keys off "CI
+      # ran on main" must not assume otherwise*. Phase 3's Deploy workflow is that later thing, and
+      # it keys off exactly that. An App token pushes as a first-class actor, so CI and Deploy both
+      # run and Dependabot stops being a special case.
+      #
+      # The credentials live in the DEPENDABOT secret store, not the Actions one. This workflow runs
+      # on `pull_request` events raised by Dependabot, and GitHub does not pass Actions secrets to
+      # those runs — `gh secret set` without `--app dependabot` leaves both inputs empty and this
+      # step fails in a way that looks like a broken App. The two stores are indistinguishable in
+      # the settings UI, so that is worth knowing before debugging it.
+      #
+      # Pinned by SHA with the version in a trailing comment, matching how `gate` pins
+      # dependabot/fetch-metadata. `github_actions` is deliberately outside this workflow's own
+      # auto-merge allow-list, so a new SHA here is always read by a human before it merges.
+      #
+      # This is the only third-party action in the write-scoped job, which the two-job split was
+      # built to avoid. It is accepted for one reason: there is no way to change the merging
+      # identity without something minting a token, and this action is GitHub's own. `gate` still
+      # holds `pull-requests: read`, so the split it exists to create is unchanged.
+      - name: Mint a GitHub App installation token
+        id: apptoken
+        # `!cancelled()`, for the same reason the disarm step below carries it: a step `if:` with no
+        # status function is implicitly ANDed with `success()`, and BOTH consumers of this token can
+        # run when `gate` failed — the disarm path exists precisely for that case. Gating this step
+        # on the verdict would hand the disarm step an empty token, which is the one mechanism that
+        # un-arms an ineligible PR failing open with a red light nobody has to obey.
+        if: ${{ !cancelled() }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.AUTOMERGE_APP_ID }}
+          private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
+
       # `--squash`, not `--merge`: the ruleset allows only squash and rebase, and
       # required_linear_history is on. GitHub's own documented example uses `--merge` and would
       # fail here.
@@ -180,7 +219,7 @@ jobs:
         if: needs.gate.outputs.verdict == 'eligible'
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.apptoken.outputs.token }}
         run: gh pr merge --auto --squash "$PR_URL"
 
       # Arming is sticky, so ineligibility has to be acted on, not just logged: GitHub disables
@@ -202,7 +241,7 @@ jobs:
         if: ${{ !cancelled() && needs.gate.outputs.verdict != 'eligible' }}
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.apptoken.outputs.token }}
           VERDICT: ${{ needs.gate.outputs.verdict }}
         run: |
           set +e

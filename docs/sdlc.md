@@ -735,15 +735,37 @@ Four details in that rule are not decoration:
   real `gh` output. A hand-written stub can only encode what its author already believes, which is
   exactly how `github-actions[bot]` got past review.
 
-**An auto-merge does not re-run `CI` on `main`.** A `push` or `pull_request` event triggered by
-`GITHUB_TOKEN` does not start a new workflow run (`workflow_dispatch` and `repository_dispatch`
-are the documented exceptions, and neither applies here), and auto-merge armed by this workflow
-merges as `app/github-actions`. Confirmed
-on the first unattended merge: `8211ee8` (PR #117) has no `push`-side CI run, while every
-human-merged commit around it does. That is harmless here — `strict_required_status_checks_policy`
-means the PR's own checks already ran against exactly this base — but it does mean the `main`
-history has gaps in its push-side runs, and anything built later that keys off "CI ran on main"
-must not assume otherwise.
+**An auto-merge now re-runs `CI` on `main`, and triggers `Deploy` — it did not until Phase 3.**
+A `push` or `pull_request` event triggered by `GITHUB_TOKEN` does not start a new workflow run
+(`workflow_dispatch` and `repository_dispatch` are the documented exceptions), and auto-merge armed
+with that token merges as `app/github-actions`. Confirmed on the first unattended merge: `8211ee8`
+(PR #117) has no `push`-side CI run, while every human-merged commit around it does.
+
+That was harmless while nothing keyed off "CI ran on main", and this document said so — adding that
+**anything built later that keys off it must not assume otherwise**. Phase 3's `Deploy` workflow is
+that later thing, and it keys off exactly that: an auto-merged security patch would have reached
+`main` and never been deployed, silently, until the next human push.
+
+The fix is at the source rather than routed around. The `apply` job mints a **GitHub App
+installation token** — an hour-lived credential, from an app holding `contents: write` and
+`pull-requests: write` on this repository alone — and merges with that instead of `GITHUB_TOKEN`.
+An App pushes as a first-class actor, so both gaps close at once and Dependabot stops being a
+special case in any respect. `gate` is untouched and keeps `GITHUB_TOKEN` at `pull-requests: read`,
+so the two-job scope split is unchanged.
+
+Two details cost more than they look. The credentials live in the **Dependabot** secret store, not
+the Actions one: this workflow runs on `pull_request` events raised by Dependabot, and GitHub does
+not pass Actions secrets to those runs, so `gh secret set` without `--app dependabot` leaves both
+inputs empty and the token step fails looking like a broken App. And the token step carries
+`!cancelled()` rather than a verdict check — a step `if:` without a status function is implicitly
+ANDed with `success()`, and the **disarm** path runs precisely when `gate` did not succeed, so
+gating the token on the verdict would hand the one mechanism that un-arms an ineligible PR an empty
+token.
+
+A long-lived fine-grained PAT would also have worked and was rejected: it is a standing
+write-scoped credential in the repository, which is the thing P1-D4 avoided on the GCP side by
+having no service account for CI to hold a key for. The gap in `main`'s push-side history before
+this change is real and stays in the record.
 
 **What it is not.** It does not weaken any gate. Native auto-merge waits for all four required
 checks *and* for every review thread to be resolved. Copilot reviews every PR including
