@@ -599,6 +599,12 @@ Three things about it are process rather than implementation, which is why they 
   denied". And a child process's exit status is **normalised to 1** — the verification script has
   its own exit vocabulary, and passing its `3` straight through would tell the workflow there was
   nothing to deploy.
+- **"Is there an environment?" asks about the DATA LAYER, not the registry.** The between-sessions
+  teardown is a targeted destroy of the billable resources only, so the Artifact Registry
+  repository, the service accounts and the secret containers all survive it — their presence proves
+  nothing. The probe is the Cloud SQL instance, which that teardown does remove and without which
+  the service cannot work. A change to what the session-end teardown destroys is therefore a change
+  to this script's premise, which is why both live in this document.
 - **The default target is `help`, not `all`.** Every other target changes production, so the thing
   that happens when someone types the script's name to see what it does must not be a deploy.
 - **It will not create the service.** Cloud Run gives a brand-new service's first revision 100% of

@@ -101,17 +101,23 @@ resource "google_service_account_iam_member" "ci_act_as_runtime" {
 # write on the staging bucket. `gcloud builds submit` stays the by-hand path, run by a human as
 # themselves, and app-build's grants in build.tf are unchanged.
 
-# Read the service's own logs after a deploy. scripts/verify-deployment.sh's `logs` target is the
-# only check that can see a boot-time application warning at all — everything else observes the
+# Read the service's own logs after a deploy. The `logs` target of scripts/verify-deployment.sh
+# (issue #198) is the only check that can see a boot-time application warning at all — everything else observes the
 # service from outside, where a failing-open quota looks identical to a healthy one.
 #
-# Viewer, not admin: CI never writes, exports or deletes a log. Project-scoped, which P1-D5 would
-# rather it were not, and the honest reason is that Cloud Logging has no per-service log resource to
-# bind to. It is also broader than the name suggests — roles/logging.viewer reads the project's
-# Admin Activity audit log, so this principal can see the IAM history. Accepted because the
-# alternative, a log-view binding on _Default, trades that for a configuration nothing else in this
-# project uses, and because the entries it reads are already visible to anyone who can read the
-# repository's deploy logs.
+# Viewer, not admin: CI never writes, exports or deletes a log.
+#
+# PROJECT-SCOPED, which P1-D5 would rather it were not, and the reason is structural: Cloud Logging
+# has no per-service log resource to bind a role to. What that costs is worth stating plainly rather
+# than argued away — roles/logging.viewer also reads the project's Admin Activity audit log, so this
+# principal can see the IAM history, and **this repository is public, so anything a workflow prints
+# from it lands in a world-readable Actions log.**
+#
+# Accepted on those terms. The bound is not that the entries are harmless; it is that only the
+# deploy pipeline holds this, it reads a single filtered query, and the application's own logger
+# redacts row content before anything reaches Cloud Logging. Narrowing it further means a log-view
+# binding on _Default — a configuration nothing else in this project uses — and that trade is
+# available if the audit-log reach ever matters more than the consistency.
 resource "google_project_iam_member" "ci_log_viewer" {
   project = var.project_id
   role    = "roles/logging.viewer"
