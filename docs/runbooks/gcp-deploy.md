@@ -196,14 +196,21 @@ one-time unless the project itself is deleted.
 ## 4. Confirm
 
 ```bash
-curl -s https://app-530312723651.us-central1.run.app/api/health          # {"status":"ok"}
-curl -sI https://app-530312723651.us-central1.run.app/ | grep -i content-security-policy
+./scripts/verify-deployment.sh all "$(gcloud run services describe app \
+  --region=us-central1 --project=llm-code-exec-260815 --format='value(status.url)')"
 ```
 
-Those two prove the container is up and the CSP is the production one — and then go run
+That replaces the hand-run curls with assertions that fail rather than print, and adds the one thing
+curl cannot do: it reads the deployed service's **shape** back from the API and checks it against
+this section's flag list — `sandboxLauncher`, the VPC interfaces, the Cloud SQL instance, the runtime
+identity, concurrency 8, and `FRONTEND_ORIGIN`. What it still does not cover is everything behind the
+auth gate, which stays below.
+
+That proves the container is up, the CSP is the production one, the auth gate answers 401, and the
+deployed revision has the shape this section describes — and then go run
 [`gcp-isolation-probes.md`](gcp-isolation-probes.md), which is where a deploy is actually confirmed.
-**Neither of the commands above says anything
-about Valkey or Cloud SQL**, because `/api/health` touches neither and both clients connect lazily.
+**None of it says anything about Valkey or Cloud
+SQL**, because `/api/health` touches neither and both clients connect lazily.
 For that, open the URL, log in, and ask for *"the first 20 Fibonacci numbers"*:
 
 - an answer at all → Auth0, the JWKS fetch and the Anthropic egress path all work;
