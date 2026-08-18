@@ -770,14 +770,19 @@ not given Actions secrets, and the two stores look identical in the UI:
 Rotating the key means replacing `AUTOMERGE_APP_PRIVATE_KEY`; nothing else changes. `gate` is untouched and keeps `GITHUB_TOKEN` at `pull-requests: read`,
 so the two-job scope split is unchanged.
 
-Two details cost more than they look. The credentials live in the **Dependabot** secret store, not
-the Actions one: this workflow runs on `pull_request` events raised by Dependabot, and GitHub does
-not pass Actions secrets to those runs, so `gh secret set` without `--app dependabot` leaves both
-inputs empty and the token step fails looking like a broken App. And the token step carries
-`!cancelled()` rather than a verdict check — a step `if:` without a status function is implicitly
-ANDed with `success()`, and the **disarm** path runs precisely when `gate` did not succeed, so
-gating the token on the verdict would hand the one mechanism that un-arms an ineligible PR an empty
-token.
+**The disarm path deliberately does NOT use the App token**, and that asymmetry is the load-bearing
+part. Disarming is the only mechanism that un-arms an ineligible PR, and this workflow is not a
+required check — so a red job blocks nothing. Routing it through a credential that can be absent,
+rotated or unreachable means a run where minting failed leaves the PR armed and merges it: fail-open
+with a red light nobody has to obey. It keeps `GITHUB_TOKEN`, which is always present. Only the arm
+path needs App identity, because only the arm path produces the push that must fire `CI` and
+`Deploy`.
+
+That asymmetry has a consequence the disarm step has to handle: it must know **which login means
+"this workflow armed it"** even on the runs where minting failed, which is why `AUTOMERGE_APP_SLUG`
+is a plain Actions variable rather than read from the mint step alone. Guessing instead — treating
+any unrecognised bot as ours — would revoke a maintainer's deliberate `@dependabot merge`, and the
+disarm suite fails if you try it.
 
 A long-lived fine-grained PAT would also have worked and was rejected — but not for the reason
 that first suggests itself, and the distinction is worth recording because the wrong version of it

@@ -196,6 +196,7 @@ jobs:
       # built to avoid. It is accepted for one reason: there is no way to change the merging
       # identity without something minting a token, and this action is GitHub's own. `gate` still
       # holds `pull-requests: read`, so the split it exists to create is unchanged.
+      #
       # Only the ARM path uses this token, and only the arm path needs to: it is the merge that has
       # to fire CI and Deploy. The disarm path deliberately keeps GITHUB_TOKEN — see that step.
       #
