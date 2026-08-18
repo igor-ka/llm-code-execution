@@ -38,9 +38,9 @@ an auto-merged Dependabot commit produces **no push-side run on `main` at all**,
 later thing. Fixing the merge identity is what makes Dependabot non-exceptional rather than
 bounded-exceptional — see P3-D11.
 
-`#197` … `#202` below stand for the child issue numbers, which do not exist yet:
-`docs/sdlc.md` files children **after** the plan review, because the review is what can still
-change the split. Substitute the real numbers into the `Closes` lines when the issues are created.
+The child issues **exist**: #197, #198, #199, #200, #201 and #202, in the order above. They were
+filed after the plan review, per `docs/sdlc.md` — the review is what can still change the split, and
+it did: finding 1 added PR 4, which did not exist when this plan was first written.
 
 
 ---
@@ -327,6 +327,16 @@ locally and in CI, so the two cannot drift.
 ---
 
 ## PR 1 — the deploy, as one script
+
+> **The script below is the plan's draft, not the merged implementation.** Review of #197 found
+> twelve real defects in it and the merged version differs materially — existence probing uses
+> `gcloud … list --filter` rather than `describe` (which fails identically for "missing" and
+> "denied"), `promote` refuses an absent candidate and pins the verified revision before moving
+> traffic, `verify` takes an explicit candidate/live mode with no silent fallback, the default
+> target is `help`, and the verifier is checked before anything deploys. The reasoning for each is
+> in #197's commits. Read the merged `scripts/deploy-cloud-run.sh` as the current article; this
+> section records what was planned and why.
+
 
 Closes the first child issue. **Nothing in this PR runs in CI**; it makes the by-hand deploy
 reproducible so that PR 5 has one thing to call.
@@ -1938,9 +1948,10 @@ printf 'redis://%s' "$(terraform output -raw valkey_endpoint)" \
 
 Record the elapsed time and the observed output in the teardown runbook's appendix, in the style of
 the existing S7 rehearsal. **Redeploy the service before finishing** — `docs/runbooks/gcp-deploy.md`
-§2 by hand, or `./scripts/deploy-cloud-run.sh deploy` if PR 1 has already landed. PRs 1–3 are
-independent and may be worked in any order, so do not assume the script exists. `terraform apply`
-does not bring the service back either way (ADR-0005).
+§2 by hand, or `./scripts/deploy-cloud-run.sh create` if PR 1 has already landed. **`create`, not
+`deploy`** — step 1 above deleted the service, and `deploy` deliberately exits 3 when there is no
+service to deploy a revision of. PRs 1–3 are independent and may be worked in any order, so do not
+assume the script exists. `terraform apply` does not bring the service back either way (ADR-0005).
 
 - [ ] **Step 7: Commit and open the PR**
 
@@ -1975,9 +1986,18 @@ Then generate a private key and store both values as repository **secrets** — 
 secrets, unlike the `VITE_AUTH0_*` variables:
 
 ```bash
-gh secret set AUTOMERGE_APP_ID --body "<the numeric App ID>"
-gh secret set AUTOMERGE_APP_PRIVATE_KEY < ~/Downloads/llm-code-execution-automerge.*.private-key.pem
+# --app dependabot is NOT optional, and getting it wrong is a silent failure.
+#
+# This workflow runs on `pull_request` events raised BY Dependabot, and GitHub does not pass
+# ordinary Actions secrets to those runs — they get the separate *Dependabot* secret store. Plain
+# `gh secret set` would leave both inputs empty at run time, the token-minting step would fail with
+# an unhelpful error, and the auto-merge would simply stop working.
+gh secret set AUTOMERGE_APP_ID --app dependabot --body "<the numeric App ID>"
+gh secret set AUTOMERGE_APP_PRIVATE_KEY --app dependabot \
+  < ~/Downloads/llm-code-execution-automerge.*.private-key.pem
 rm ~/Downloads/llm-code-execution-automerge.*.private-key.pem
+
+gh secret list --app dependabot   # both must appear here, not under `gh secret list`
 ```
 
 The downloaded `.pem` is the credential. Delete it locally once it is in the secret; GitHub cannot
@@ -2037,6 +2057,14 @@ stopped being harmless the moment a deploy did. The `apply` job therefore merges
 installation token, which pushes as a first-class actor. The gap in `main`'s push-side history
 before that change is real and stays in the record.
 ```
+
+- [ ] **Step 4a: Confirm the secrets are readable from a Dependabot-triggered run**
+
+The store distinction above cannot be checked by reading the repository settings — Actions and
+Dependabot secrets look identical there. Add a temporary step to the `apply` job that echoes
+whether each input is non-empty (never the value), let it run on one Dependabot PR, then remove it.
+An empty `app-id` here is the whole finding, and it fails in a way that looks like a broken App
+rather than a misplaced secret.
 
 - [ ] **Step 5: Verify on the next Dependabot PR**
 

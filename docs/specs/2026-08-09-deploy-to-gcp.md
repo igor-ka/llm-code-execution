@@ -374,7 +374,8 @@ end state within a day but leaves Dependabot a bounded exception rather than no 
 
 ## Open questions
 
-**None — all resolved (D1–D23).** Phase 2's six open questions were raised by the staff review of
+**None blocking — D1–D23 are all decided.** One non-blocking governance question remains open;
+it is stated at the end of this section rather than left implicit. Phase 2's six open questions were raised by the staff review of
 its plan on 2026-08-16 and decided the same day; they are D11–D16 above. Phase 3's seven were raised
 on 2026-08-17 and decided the same day; they are D18–D23, one of them dissolved rather than decided
 (`roles/storage.objectUser` and its missing `storage.buckets.get` stopped mattering when D20 removed
