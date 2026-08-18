@@ -338,9 +338,10 @@ only because the concurrency cap still bounds the host. The backend refuses to s
   `terraform destroy` is the normal end of a session rather than an end-of-project ritual
   (~CAD 55/month always-on versus ~CAD 3 at ten hours a week). Consequences a reader needs:
   the deployed URL is live only while someone is working, a rebuild takes 15–20 minutes, and
-  **all six secret payloads must be repopulated** each time — two of them change on every
-  rebuild (`database-url` gets a fresh generated password, `redis-url` a newly allocated PSC
-  endpoint). See [`docs/runbooks/gcp-teardown.md`](docs/runbooks/gcp-teardown.md).
+  **`redis-url` must be repopulated before redeploying** — the endpoint is newly allocated on each
+  rebuild, and the secret container now survives the teardown holding the *old* value, which boots
+  a healthy-looking service whose quota fails open. A full day-91 teardown removes every payload
+  instead. See [`docs/runbooks/gcp-teardown.md`](docs/runbooks/gcp-teardown.md).
 - **Neither data store is reachable from the internet.** Cloud SQL has a public IP with an empty
   authorized-network list, brokered by the Cloud SQL Auth Proxy and authorised by IAM; Valkey is
   a private PSC endpoint inside the project VPC, so the Cloud Run service reaches it only via

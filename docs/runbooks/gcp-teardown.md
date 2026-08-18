@@ -10,10 +10,12 @@
 
 **Between working sessions** (the normal one, spec D17). Memorystore and Cloud SQL bill per hour
 of *existence*, and Memorystore has no "stop" — only delete. Leaving them up costs ~CAD 55/month;
-destroying them between sessions costs ~CAD 3/month at ten hours a week. Run steps 1 and 2 only, keep
-the state bucket and the project, and rebuild from
-[`gcp-bootstrap.md`](gcp-bootstrap.md) next time. Budget **15–20 minutes** for the rebuild, mostly
-Cloud SQL, plus repopulating the six secret payloads.
+destroying them between sessions costs ~CAD 3/month at ten hours a week. Run step 1 and the
+**targeted** destroy in step 2 only — not the plain `terraform destroy`, which would take Workload
+Identity Federation with it and break continuous deployment for a month (see §2). Keep the state
+bucket and the project, and rebuild from [`gcp-bootstrap.md`](gcp-bootstrap.md) next time. Budget
+**15–20 minutes** for the rebuild, mostly Cloud SQL, plus repopulating **two** secret payloads —
+the targeted destroy leaves the other four standing.
 
 **At the end (day 91, or for good).** Everything below, including the state bucket and the
 project.
@@ -49,6 +51,79 @@ The image in Artifact Registry goes with the registry in the next step.
 
 ## 2. Destroy what Terraform owns
 
+### Between working sessions — targeted, and that is not an optimisation
+
+`terraform destroy` with no arguments destroys `google_iam_workload_identity_pool.github`. Pools
+**soft-delete**: the ID is reserved for about 30 days and cannot be reused (§4 says the same thing
+from the other direction), so the next `terraform apply` cannot re-create it — and since Phase 3
+that pool is how GitHub Actions authenticates. A full destroy at the end of a working session
+therefore leaves **continuous deployment broken until the reservation lapses**, with a rebuild that
+looks fine right up to the `auth` step of the next push.
+
+So the between-sessions teardown destroys the things that bill by the hour, and nothing else:
+
+```bash
+cd infra
+TARGETS=(
+  -target=google_sql_database_instance.main
+  -target=google_memorystore_instance.quota
+  -target=google_network_connectivity_service_connection_policy.valkey
+  -target=google_compute_subnetwork.main
+  -target=google_compute_network.main
+)
+terraform plan -destroy "${TARGETS[@]}"      # read it
+terraform destroy "${TARGETS[@]}"
+```
+
+Terraform prints a warning that resource targeting is not a recommended practice. It is right in
+general and wrong here: the alternative is a month without CD.
+
+Everything left standing is free or close to it — the service accounts, both budgets, the six secret
+**containers**, the workload identity pool, the Artifact Registry repository (a few images, cents a
+month) and the staging bucket (7-day lifecycle).
+
+> **Repopulate `redis-url` BEFORE you redeploy. A stale value is worse than a missing one.**
+>
+> This is the one hazard the targeted destroy introduces, and it is the reason it gets a warning
+> box rather than a bullet. Under the full destroy the secret *containers* went too, so a redeploy
+> that skipped the repopulate step failed loudly with "secret not found". They now survive — holding
+> the **old** PSC endpoint, which is not reachable after the rebuild.
+>
+> `assertRedisConfigured` only checks that `REDIS_URL` is non-empty (`backend/src/config.ts`), and
+> `RedisQuotaStore` connects lazily, so that service **starts, passes its probe, answers
+> `/api/health` with `ok`, and fails every quota lookup open** — a publicly invokable endpoint
+> spending Anthropic credits with no rate limiting, indistinguishable from healthy from outside.
+> That is #191 and #195's failure mode, reintroduced by the teardown rather than by the app.
+
+Only **`redis-url`** genuinely changes. `database-url` does not, and the reason is worth stating
+because it is not obvious: `-target` destroys the named resource and everything that *depends on*
+it, so `google_sql_user.app` goes — but `random_password.db` is a **dependency** of that user, not a
+dependent of the instance, so it survives in state. The re-applied user gets the identical password,
+and the connection name `<project>:<region>:app-db` is unchanged. Adding a new `database-url`
+version on every rebuild is therefore pure waste, and Secret Manager bills per active version.
+
+> **Unverified, and worth watching the first time:** Cloud SQL has historically reserved a deleted
+> instance's name for several days. If `terraform apply` fails to re-create `app-db` because the
+> name is still held, that is this, not a configuration fault — and it would make the targeted
+> destroy unusable on a same-week cadence. Record what actually happens in the appendix.
+
+`-exclude` would express this better than five `-target`s. Terraform 1.15.8 does not have it —
+`terraform plan -exclude=…` fails with *"flag provided but not defined"*. Revisit when the pinned
+version gains it.
+
+**If this is a between-sessions teardown, stop here** — and the rebuild has three steps in this
+order, because the second one is what the warning above is about:
+
+1. `cd infra && terraform apply` — brings back Cloud SQL, Valkey, the VPC and the PSC policy.
+2. Repopulate **`redis-url`** from the newly allocated endpoint, using
+   [`gcp-bootstrap.md`](gcp-bootstrap.md) §10's command for it. `database-url` does not need it.
+3. Redeploy the service with [`gcp-deploy.md`](gcp-deploy.md) — **`terraform apply` does not bring
+   it back**, because Terraform does not own it (ADR-0005), and step 1 of this runbook deleted it.
+   Use that runbook's `create` path: the service does not exist, and the deploy target refuses to
+   create one.
+
+### At the end (day 91, or for good)
+
 ```bash
 cd infra
 terraform plan -destroy      # read it
@@ -62,16 +137,17 @@ Expect the registry, the runtime service account, all six secret containers and 
 both budgets, the Cloud SQL instance, the Valkey instance with its VPC and PSC policy, and the
 workload identity pool and provider.
 
-**If this is a between-sessions teardown, stop here.** The state bucket and the project stay, and
-`terraform apply` rebuilds everything from the same configuration. Two things do not come back by
-themselves: the secret payloads (deliberately not in Terraform — S6) and the Valkey endpoint,
-which is newly allocated on each rebuild.
+After a **full** destroy nothing comes back by itself: every secret payload is gone (deliberately not
+in Terraform — S6), and the Valkey endpoint is newly allocated. That is the difference from the
+targeted path above, where only `redis-url` needs attention.
 
 Do not hand-assemble them: **[`gcp-bootstrap.md`](gcp-bootstrap.md) §10 carries all six
 commands**, including the two that change on every rebuild (`database-url` gets a fresh generated
 password, `redis-url` a newly allocated PSC endpoint). Run that section verbatim, then redeploy
 with [`gcp-deploy.md`](gcp-deploy.md) — the service was deleted in step 1 and no `terraform apply`
-brings it back.
+brings it back. Use the **`create`** target: `deploy` deliberately exits 3 when there is no service
+to deploy a revision of, because a new service's first revision takes 100% of traffic and cannot be
+verified first.
 
 ## 3. Remove the state bucket — the one thing Terraform does not own
 
@@ -120,8 +196,9 @@ Then wait a day for billing to settle and read the billing report for the projec
 https://console.cloud.google.com/billing/<ACCOUNT_ID>/reports
 ```
 
-**No budget survives to alarm on this.** Both `google_billing_budget` resources are destroyed in
-step 2, so this manual check is the *only* backstop — skip it and a resource that outlived the
+**After a FULL teardown, no budget survives to alarm on this.** Both `google_billing_budget`
+resources are destroyed by the day-91 destroy — though not by the targeted one above, which leaves
+them watching — so after the full teardown this manual check is the *only* backstop — skip it and a resource that outlived the
 teardown bills silently.
 
 Leaving a budget alive would contradict "zero billable resources" just as much, so the fix is to
@@ -141,6 +218,12 @@ procedure.
 ---
 
 ## Appendix: the S7 rehearsal, run 2026-08-16
+
+> **This rehearsal exercised the FULL destroy of 18 targeted resources, not the five-address
+> between-sessions destroy introduced later.** It is evidence for reproducibility, not for that
+> procedure — which, as of this writing, has not been run. This file's own standard applies:
+> *a reproducibility claim nobody has exercised is an assumption.* The address count below also
+> predates `google_project_iam_member.ci_log_viewer`, so a state list today is 31, not 30.
 
 A destroy-and-rebuild against the live project, sparing only what step 4 explains. Recorded here
 because a reproducibility claim nobody has exercised is an assumption.

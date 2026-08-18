@@ -214,6 +214,35 @@ preflight() {
     exit 3
   fi
 
+  # STAGE 2b — is the DATA LAYER there? This stage exists because the between-sessions teardown
+  # stopped removing the registry: it is a targeted destroy of the billable resources only, so that
+  # Workload Identity Federation survives (gcp-teardown.md). The registry, the service accounts and
+  # the secret containers all stand through it — which means stage 2 alone can no longer tell a
+  # rebuilt environment from a torn-down one, and CD would happily deploy a revision into a service
+  # whose database and quota store no longer exist.
+  #
+  # Cloud SQL is the right thing to ask about: it IS destroyed between sessions, the service cannot
+  # work without it, and `list --filter` gives the same clean absent-vs-error separation as the
+  # probes above.
+  local sql rc2=0 sqlerr
+  sqlerr="$(mktemp)"
+  sql="$(gcloud sql instances list --project="$PROJECT_ID" \
+    --filter="name=app-db" --format='value(name)' 2>"$sqlerr")" || rc2=$?
+  if [[ "$rc2" -ne 0 ]]; then
+    echo "    cannot list Cloud SQL instances in ${PROJECT_ID} — an ERROR, not an absence:" >&2
+    sed 's/^/      /' "$sqlerr" >&2
+    rm -f "$sqlerr"
+    exit 1
+  fi
+  rm -f "$sqlerr"
+  if [[ -z "$sql" ]]; then
+    echo "    no Cloud SQL instance 'app-db' in ${PROJECT_ID}."
+    echo "    The data layer is torn down — see docs/runbooks/gcp-teardown.md. The registry and the"
+    echo "    secrets survive a between-sessions teardown, so their presence proves nothing here."
+    echo "    Rebuild with 'terraform apply', repopulate redis-url, then run the 'create' target."
+    exit 3
+  fi
+
   # STAGE 3 — is there a SERVICE? Cloud Run gives a brand-new service's first revision 100% of
   # traffic, so `--no-traffic` cannot exist on a create and the one invariant — no user ever sees
   # an unverified revision — would have to carry an exception. It does not: creating the service is
