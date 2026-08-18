@@ -19,19 +19,27 @@ every apply. This runbook *is* the specification for its shape; see
 
 ---
 
+**The commands live in [`scripts/deploy-cloud-run.sh`](../../scripts/deploy-cloud-run.sh), not in
+this file.** [ADR-0005](../adr/0005-cloud-run-service-outside-terraform.md) makes the deploy command
+the specification for the service's shape, and a copy here would be a second specification — the
+copy being the one that goes stale. This runbook says *why* each flag is there and what breaks
+without it; the script is what runs. The script derives every project-specific value from the
+resource names Terraform uses and deliberately reads **no Terraform state**, which is the one place
+it differs from the `terraform output` calls this runbook used to make: state holds the generated
+Cloud SQL password in cleartext, and the same script runs in CI.
+
 ## 1. Build the image — on Cloud Build, not your laptop
 
 ```bash
 # The substitutions below are shell variables, and nothing has exported them yet. `set -a` marks
-# everything sourced for export; without this all three expand to empty strings and the Dockerfile's
-# required-argument guard aborts the build.
+# everything sourced for export; without this all three expand to empty strings and the script's
+# guard aborts before the build starts.
 set -a; . frontend/.env.local; set +a
 
-gcloud builds submit --config=cloudbuild.yaml \
-  --project=llm-code-exec-260815 \
-  --service-account="projects/llm-code-exec-260815/serviceAccounts/$(cd infra && terraform output -raw build_service_account)" \
-  --gcs-source-staging-dir="$(cd infra && terraform output -raw build_source_bucket)/source" \
-  --substitutions=_TAG=v3,_AUTH0_DOMAIN="$VITE_AUTH0_DOMAIN",_AUTH0_CLIENT_ID="$VITE_AUTH0_CLIENT_ID",_AUTH0_AUDIENCE="$VITE_AUTH0_AUDIENCE"
+# build:remote, not build. `build` is a native `docker build`, which is what CI runs on an amd64
+# runner; on Apple Silicon that same build is emulated. build:remote submits the identical
+# Dockerfile to Cloud Build, which does it natively.
+TAG=v4 ./scripts/deploy-cloud-run.sh build:remote
 ```
 
 **Why not `docker build` locally.** Cloud Run needs `linux/amd64`, and on Apple Silicon that is an
@@ -65,17 +73,42 @@ build time, so a given image is bound to one Auth0 tenant.
 ## 2. Deploy
 
 ```bash
-gcloud beta run deploy app \
-  --image us-central1-docker.pkg.dev/llm-code-exec-260815/app/app:v3 \
-  --region us-central1 --project llm-code-exec-260815 \
-  --execution-environment gen2 --sandbox-launcher \
-  --service-account app-runtime@llm-code-exec-260815.iam.gserviceaccount.com \
-  --add-cloudsql-instances llm-code-exec-260815:us-central1:app-db \
-  --set-env-vars SANDBOX_BACKEND=cloudrun,LOG_FORMAT=json,AUTH_REQUIRED=true,SANDBOX_MAX_CONCURRENT=4,FRONTEND_ORIGIN=https://app-530312723651.us-central1.run.app \
-  --set-secrets ANTHROPIC_API_KEY=anthropic-api-key:latest,DATABASE_URL=database-url:latest,REDIS_URL=redis-url:latest,OIDC_ISSUER=oidc-issuer:latest,OIDC_AUDIENCE=oidc-audience:latest,OIDC_JWKS_URL=oidc-jwks-url:latest \
-  --cpu 2 --memory 2Gi --concurrency 8 --max-instances 2 \
-  --network app-net --subnet app-subnet --vpc-egress private-ranges-only \
-  --allow-unauthenticated
+# FIRST deploy after a rebuild — the service does not exist yet. Cloud Run gives a new service's
+# first revision 100% of traffic immediately, so this one is live before it is verified; `create`
+# runs the checks straight afterwards and tells you to delete the service if they fail. It refuses
+# to start at all if the verification script is missing, rather than deploying and then finding out.
+TAG=v4 ./scripts/deploy-cloud-run.sh create
+
+# EVERY deploy after that. `deploy` produces a revision serving nobody, `verify` proves it, and
+# only then does `promote` move traffic. These three are exactly what CI runs.
+TAG=v4 ./scripts/deploy-cloud-run.sh deploy
+TAG=v4 ./scripts/deploy-cloud-run.sh verify
+TAG=v4 ./scripts/deploy-cloud-run.sh promote
+```
+
+Running the script with no target prints its usage rather than deploying — every target here
+changes production, so that is the wrong thing to do by accident.
+
+> **Until `scripts/verify-deployment.sh` lands (issue #198), `create` and `all` refuse to run.**
+> Both deploy and then verify, and a verifier discovered missing *after* the deploy would leave a
+> live unverified service behind. Use `deploy` and check §4 by hand in the meantime; `deploy` and
+> `promote` are unaffected.
+
+The flags those targets pass, and which this section explains, are:
+
+```
+--image <registry>/app:<TAG>  --region us-central1  --project llm-code-exec-260815
+--execution-environment gen2  --sandbox-launcher
+--service-account app-runtime@llm-code-exec-260815.iam.gserviceaccount.com
+--add-cloudsql-instances llm-code-exec-260815:us-central1:app-db
+--set-env-vars SANDBOX_BACKEND=cloudrun,LOG_FORMAT=json,AUTH_REQUIRED=true,
+               SANDBOX_MAX_CONCURRENT=4,FRONTEND_ORIGIN=<the service's own URL>
+--set-secrets  ANTHROPIC_API_KEY=…,DATABASE_URL=…,REDIS_URL=…,OIDC_ISSUER=…,
+               OIDC_AUDIENCE=…,OIDC_JWKS_URL=… (all :latest)
+--cpu 2 --memory 2Gi --concurrency 8 --max-instances 2
+--network app-net --subnet app-subnet --vpc-egress private-ranges-only
+--allow-unauthenticated          plus an explicit allUsers run.invoker binding, see §3
+--no-traffic --tag=candidate     on `deploy` only, never on `create`
 ```
 
 Flags that are not optional, and what breaks without them:
@@ -101,9 +134,18 @@ Flags that are not optional, and what breaks without them:
   now refuses to boot with a localhost origin when `SANDBOX_BACKEND=cloudrun`, so a missing value
   fails the deploy loudly instead.
 
+- **`--no-traffic --tag=candidate`, on `deploy` but not `create`** — the revision serves nobody
+  until §4's checks pass against it. Five defects have reached this service and every one passed a
+  fully green `verify.sh`, so a revision is not trusted because it deployed. `create` cannot do
+  this: Cloud Run gives a brand-new service's first revision 100% of traffic and there is no other
+  revision to hold it, which is exactly why CD refuses to create the service and this step is
+  by hand.
+
 `--allow-unauthenticated` is correct and is not a hole: the application's own OIDC gate
 authenticates users. Cloud Run IAM would authenticate *Google* identities, which the SPA's users
-do not have.
+do not have. The script also issues the `allUsers` `run.invoker` binding explicitly, every time,
+because Domain Restricted Sharing makes this flag warn rather than fail (§3) — so a deploy that
+looked fine can otherwise leave a URL that 403s for everyone.
 
 ## 3. Make the URL publicly reachable — one-time, org-level
 

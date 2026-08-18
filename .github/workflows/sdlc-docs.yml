@@ -54,6 +54,12 @@ jobs:
       # self-consistent" is exactly what it is for. The test reads only files; it needs no token.
       - name: Test the Dependabot auto-merge disarm logic
         run: ./scripts/tests/dependabot-auto-merge-disarm.test.sh
+      # A second lodger, for the same reason as the one above. `deploy.yml` will run only on push
+      # to `main`, so a pull request that edits scripts/deploy-cloud-run.sh never executes it and
+      # these tests would otherwise have no host. They drive a fake `gcloud` and a fake `docker` on
+      # PATH and read only files — no project, no credentials, no token.
+      - name: Test the Cloud Run deploy script
+        run: ./scripts/tests/deploy-cloud-run.test.sh
       - name: Check docs/sdlc.md is in sync
         env:
           # Fallback only — the script prefers the merge ref's first parent, which is exact.
