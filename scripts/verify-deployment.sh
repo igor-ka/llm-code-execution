@@ -28,10 +28,18 @@
 #
 # Environment:
 #   PROJECT_ID REGION SERVICE   which service to read back
-#   REVISION                    scope the log query to one revision. Set before promotion, empty
-#                               after — see logs() for why those want different scopes.
+#   REVISION                    the revision under test. `shape` reads THAT revision rather than
+#                               the service template, and `logs` scopes its query to it. Set before
+#                               promotion, empty after — see logs() for why those differ.
+#   EXPECT_IMAGE                exact image reference the deploy just pushed. Asserted when set;
+#                               without it `shape` can only check the registry and tag shape.
 #   LOG_SETTLE_SECONDS          how long to let Cloud Logging catch up before believing silence
 #   HTTP_MAX_SECONDS            per-request ceiling, so an unresponsive candidate cannot hang CI
+#
+# Exit codes: 0 pass, 1 an assertion failed, 2 this script was called wrongly. Note the one
+# ambiguity, because the caller has to know it: gcloud also exits 2 on a malformed invocation, and
+# that status propagates. `deploy-cloud-run.sh verify()` normalises any non-zero child status to 1
+# for exactly this reason; anything else branching on 2 must not read it as "you called it wrong".
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -59,22 +67,51 @@ curl_() { curl -sS --connect-timeout 10 --max-time "$HTTP_MAX_SECONDS" "$@"; }
 
 shape() {
   echo
-  echo "==> shape (${SERVICE} in ${PROJECT_ID}/${REGION})"
-  gcloud run services describe "$SERVICE" \
-    --region="$REGION" --project="$PROJECT_ID" --format=json |
-    PROJECT_ID="$PROJECT_ID" REGION="$REGION" python3 -c '
+  echo "==> shape (${REVISION:-serving template} in ${PROJECT_ID}/${REGION})"
+
+  # The SERVICE is read for one field — status.url, which FRONTEND_ORIGIN must equal. The shape
+  # itself comes from the REVISION under test whenever one is named, and that distinction is not
+  # cosmetic: `spec.template` describes the most recently DEPLOYED revision, which after a rollback
+  # is not the one serving traffic, and after a second concurrent deploy is not the one `http` is
+  # probing. Asserting the template while probing a different revision certifies a combination
+  # nobody deployed.
+  local service_json revision_json
+  service_json="$(gcloud run services describe "$SERVICE" \
+    --region="$REGION" --project="$PROJECT_ID" --format=json)"
+  if [[ -n "$REVISION" ]]; then
+    revision_json="$(gcloud run revisions describe "$REVISION" \
+      --region="$REGION" --project="$PROJECT_ID" --format=json)"
+  else
+    revision_json="$service_json"
+  fi
+
+  printf '%s\n%s' "$service_json" "$revision_json" |
+    PROJECT_ID="$PROJECT_ID" REGION="$REGION" EXPECT_IMAGE="${EXPECT_IMAGE:-}" python3 -c '
 import json, os, sys
 
-d = json.load(sys.stdin)
-tpl = d["spec"]["template"]
-ann = tpl["metadata"].get("annotations", {})
-spec = tpl["spec"]
+raw = sys.stdin.read()
+decoder = json.JSONDecoder()
+try:
+    service, idx = decoder.raw_decode(raw.lstrip())
+    rest = raw.lstrip()[idx:].lstrip()
+    revision = decoder.raw_decode(rest)[0] if rest else service
+except ValueError:
+    # gcloud failed and wrote nothing parseable. Without this guard the operator gets a CPython
+    # traceback where the actual cause has already scrolled past.
+    print("could not parse the gcloud response — did the describe call fail above?",
+          file=sys.stderr)
+    sys.exit(1)
+
+# A revision document carries metadata/spec at the top level; a service document nests the same
+# shape under spec.template. Accept either, so `shape` works with and without REVISION.
+node = revision["spec"]["template"] if "template" in revision.get("spec", {}) else revision
+ann = node.get("metadata", {}).get("annotations", {})
+spec = node["spec"] if "spec" in node else node
 c = spec["containers"][0]
 env = {e["name"]: e for e in c.get("env", [])}
 project, region = os.environ["PROJECT_ID"], os.environ["REGION"]
-# The deployed origin must be the SERVICE url, not the candidate revision url this script may have
-# been pointed at — status.url is the one the SPA is served from.
-service_url = d.get("status", {}).get("url", "")
+service_url = service.get("status", {}).get("url", "")
+expect_image = os.environ.get("EXPECT_IMAGE", "")
 
 failures = []
 
@@ -88,7 +125,8 @@ def want(label, actual, expected, why):
 
 want("sandboxLauncher", c.get("sandboxLauncher"), True,
      "no /usr/local/gcp/bin/sandbox in the container, so every execution takes the exit-126 "
-     "path. This is the flag Terraform strips on every apply (ADR-0005).")
+     "path. Terraform STRIPS this field on every apply, so the drifted shape is an absent key "
+     "rather than a false one (ADR-0005).")
 want("execution-environment", ann.get("run.googleapis.com/execution-environment"), "gen2",
      "--sandbox-launcher requires gen2.")
 want("vpc-access-egress", ann.get("run.googleapis.com/vpc-access-egress"), "private-ranges-only",
@@ -106,6 +144,21 @@ want("containerConcurrency", spec.get("containerConcurrency"), 8,
 want("cpu", c.get("resources", {}).get("limits", {}).get("cpu"), "2",
      "sandboxes share the instance allocation (D7); it must hold four executions plus the app.")
 want("memory", c.get("resources", {}).get("limits", {}).get("memory"), "2Gi", "as above.")
+
+# Is this the artifact we just built? A failed deploy leaves the service template pointing at an
+# image that may not be the one this pipeline produced, and every other assertion here would still
+# pass while the container ran a previous commit.
+image = c.get("image", "")
+want("image registry", image.split("/app:")[0],
+     "%s-docker.pkg.dev/%s/app" % (region, project),
+     "the image must come from this project registry, not somewhere else.")
+if expect_image:
+    want("image", image, expect_image, "the deploy pushed a different reference than is running.")
+elif ":" not in image.rsplit("/", 1)[-1]:
+    failures.append("image: %r carries no tag\n         a rollback names a tag; an untagged "
+                    "reference cannot be rolled back to." % image)
+else:
+    print("    ok   image = %r (tag not cross-checked: EXPECT_IMAGE unset)" % image)
 
 try:
     nics = json.loads(ann.get("run.googleapis.com/network-interfaces", "[]"))

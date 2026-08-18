@@ -333,10 +333,11 @@ Details that are easy to get wrong:
 
   Further suites are run by `SDLC docs` even though they belong to other workflows:
   `./scripts/tests/dependabot-auto-merge-disarm.test.sh`,
-  `./scripts/tests/deploy-cloud-run.test.sh` and `./scripts/tests/verify-deployment.test.sh`. Each of their own workflows gates itself so that a PR
+  `./scripts/tests/deploy-cloud-run.test.sh` and
+  `./scripts/tests/verify-deployment.test.sh`. Each belongs to a workflow that gates itself so a PR
   editing it never executes it — `dependabot-auto-merge.yml` to `dependabot/npm_and_yarn/*`
-  branches, `deploy.yml` to pushes on `main` — and the tests would have no host otherwise. Same
-  file locally and in CI, like the other two. See
+  branches, and the deploy workflow (Phase 3) to pushes on `main` — so the tests would have no host
+  otherwise. Same file locally and in CI, like the two above. See
   [Auto-merging dependency bumps](#auto-merging-dependency-bumps).
 - **Dependabot PRs are exempt from `SDLC docs`, and need no exemption from `PR shape`.** The
   first is because `github-actions` bumps touch watched workflow files; the second is because
@@ -626,7 +627,7 @@ Its unit tests, `scripts/tests/deploy-cloud-run.test.sh` and
 `SDLC docs` job for the same reason `dependabot-auto-merge-disarm.test.sh` is, and like the other
 lodgers **the same files are the local pre-push commands**: run
 `./scripts/tests/deploy-cloud-run.test.sh` and `./scripts/tests/verify-deployment.test.sh` before
-pushing, because no `verify.sh` covers it and the
+pushing, because no `verify.sh` covers them and the
 three that exist will stay green while this job goes red.
 
 One consequence of that tooling reaches the `verify.sh` scripts. Docker image tags are
