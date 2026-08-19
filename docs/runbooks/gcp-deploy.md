@@ -31,10 +31,12 @@ runbook does not is deploy with `--no-traffic --tag=candidate` first, verify, an
 traffic — by hand you are watching the output, and the pipeline is not. Reach for this runbook when
 CD cannot run: no environment, the service not yet created (CD refuses to create it), a broken
 pipeline, or a deploy from a branch other than `main` — the workload identity provider's attribute
-condition pins `refs/heads/main`, so CD physically cannot deploy anything else. The script derives every project-specific value from the
-resource names Terraform uses and deliberately reads **no Terraform state**, which is the one place
-it differs from the `terraform output` calls this runbook used to make: state holds the generated
-Cloud SQL password in cleartext, and the same script runs in CI.
+condition pins `refs/heads/main`, so CD physically cannot deploy anything else.
+
+The script derives every project-specific value from the resource names Terraform uses and
+deliberately reads **no Terraform state**, which is the one place it differs from the
+`terraform output` calls this runbook used to make: state holds the generated Cloud SQL password in
+cleartext, and the same script runs in CI.
 
 ## 1. Build the image — on Cloud Build, not your laptop
 

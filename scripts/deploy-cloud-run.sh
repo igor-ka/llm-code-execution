@@ -182,48 +182,21 @@ preflight() {
   fi
   echo "    credential works"
 
-  # STAGE 2 — is there an environment? The Artifact Registry repository is the cheapest proof that
-  # the Terraform layer exists, and it is destroyed between working sessions (spec D17), so this is
-  # the EXPECTED state most of the time rather than a failure.
+  # STAGE 2 — is the DATA LAYER there? Cloud SQL, deliberately, and NOT the Artifact Registry
+  # repository this stage used to probe. Two reasons, and the second is the one that bites.
   #
-  # `list --filter`, for the same reason stage 3 uses it: `describe` with stderr discarded reports a
-  # disabled artifactregistry API, a missing repository-read grant and a network blip identically
-  # to a torn-down environment — and this stage's answer is exit 3, which the workflow finishes
-  # green. Stage 1 proving the credential works does not cover it: that call is a different API
-  # with a different permission.
+  # The registry SURVIVES the between-sessions teardown — that teardown is targeted at the billable
+  # resources so Workload Identity Federation lives through it (gcp-teardown.md), and the registry,
+  # the service accounts and the secret containers all stand. Its presence therefore proves nothing
+  # about whether the environment is usable.
   #
-  # stdout and stderr are kept APART here, unlike stage 3: `artifacts repositories list` prints a
-  # "Listing items under project …" banner on stderr even on success, so folding the streams
-  # together would make the empty (torn-down) case look non-empty and this stage could never fire.
-  local repos rc=0 errfile
-  errfile="$(mktemp)"
-  repos="$(gcloud artifacts repositories list --location="$REGION" --project="$PROJECT_ID" \
-    --filter="name~/repositories/app$" --format='value(name)' 2>"$errfile")" || rc=$?
-  if [[ "$rc" -ne 0 ]]; then
-    echo "    cannot list Artifact Registry repositories in ${PROJECT_ID}/${REGION} — this is an" >&2
-    echo "    ERROR, not a torn-down environment, and must not be reported as 'nothing to deploy':" >&2
-    sed 's/^/      /' "$errfile" >&2
-    rm -f "$errfile"
-    exit 1
-  fi
-  rm -f "$errfile"
-  if [[ -z "$repos" ]]; then
-    echo "    no Artifact Registry repository 'app' in ${PROJECT_ID}/${REGION}."
-    echo "    The environment is torn down — see docs/runbooks/gcp-teardown.md."
-    echo "    Rebuild it with docs/runbooks/gcp-bootstrap.md, then run the 'create' target."
-    exit 3
-  fi
-
-  # STAGE 2b — is the DATA LAYER there? This stage exists because the between-sessions teardown
-  # stopped removing the registry: it is a targeted destroy of the billable resources only, so that
-  # Workload Identity Federation survives (gcp-teardown.md). The registry, the service accounts and
-  # the secret containers all stand through it — which means stage 2 alone can no longer tell a
-  # rebuilt environment from a torn-down one, and CD would happily deploy a revision into a service
-  # whose database and quota store no longer exist.
+  # And listing repositories asks for `artifactregistry.repositories.list` on the LOCATION, while
+  # the CI grant in infra/wif.tf is bound to the single `app` repository. IAM inherits downward, not
+  # upward, so that call either denies (red job) or returns empty (a permanently GREEN "torn down"
+  # no-op that never deploys) — the decorative-probe failure this whole preflight exists to avoid.
   #
-  # Cloud SQL is the right thing to ask about: it IS destroyed between sessions, the service cannot
-  # work without it, and `list --filter` gives the same clean absent-vs-error separation as the
-  # probes above.
+  # Cloud SQL is the right question: it IS destroyed between sessions, the service cannot work
+  # without it, and `sql instances list` is a project-level call the grant can actually cover.
   local sql rc2=0 sqlerr
   sqlerr="$(mktemp)"
   sql="$(gcloud sql instances list --project="$PROJECT_ID" \
@@ -376,6 +349,10 @@ deploy_revision() {
 # pipeline's one invariant does not get an exception. `preflight` already catches this; the check
 # is repeated here so calling `deploy` directly cannot skip it.
 deploy() {
+  # The candidate this creates is only safe because something will check it. `all` guards this up
+  # front; the deploy workflow runs the targets individually and would otherwise build, push and
+  # deploy a tagged public revision before discovering the verifier was gone.
+  require_verify_script
   local state
   state="$(service_state)"
   if [[ "$state" == absent ]]; then
@@ -415,6 +392,12 @@ create() {
 # against code nobody deployed.
 verify() {
   require_verify_script
+  # TAG is required here, not optional. An earlier version omitted EXPECT_IMAGE when TAG was empty
+  # so that `verify` stayed usable on its own — but no caller in this repo needs that: the runbook's
+  # section 4 calls verify-deployment.sh directly, and section 2 calls this target WITH a tag. What
+  # the optional path actually bought was a green "verified" with the stale-image cross-check
+  # silently skipped, which is the decorative-assertion pattern this file argues against.
+  require_tag
   local mode="${1:-candidate}" url revision line
 
   if [[ "$mode" == live ]]; then
@@ -454,16 +437,8 @@ verify() {
   # built". Without it a deploy that silently resolved to a stale tag passes every other assertion
   # while the container runs a previous commit — and the tag is the thing a rollback names.
   #
-  # Only when TAG is set. `verify` is the one target that is genuinely useful on its own — reading
-  # the state of whatever is deployed, which is how the runbook's section 4 uses it — and requiring
-  # a tag for that would be friction. The verifier says out loud when the cross-check is skipped.
-  local -a expect=()
-  if [[ -n "$TAG" ]]; then
-    expect=("EXPECT_IMAGE=${REGISTRY}/${SERVICE}:${TAG}")
-  fi
-
   run env PROJECT_ID="$PROJECT_ID" REGION="$REGION" SERVICE="$SERVICE" REVISION="$revision" \
-    ${expect[@]+"${expect[@]}"} \
+    EXPECT_IMAGE="${REGISTRY}/${SERVICE}:${TAG}" \
     "$VERIFY_SCRIPT" all "$url"
   local rc=$?
   set -e

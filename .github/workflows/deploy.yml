@@ -20,10 +20,23 @@ name: Deploy
 on:
   push:
     branches: [main]
+    # A `paths-ignore` filter is safe HERE and nowhere else in this repository. The trap docs/sdlc.md
+    # records — a path filter on a REQUIRED check means it never reports and hangs every merge —
+    # applies to the gates; this workflow gates nothing. Without it a typo in a runbook rebuilds the
+    # whole image from cold and ships a new production revision. None of these paths reach the
+    # image: the Dockerfile copies application source, not docs.
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - ".claude/**"
+      - "LICENSE"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Image tag to build and deploy. Defaults to the commit SHA."
+        description: >-
+          An EXISTING image tag to redeploy. Leave empty to build the current commit.
+          A tag given here is never rebuilt: the deploy runbook forbids overwriting a tag a
+          working revision still points at, because that is the artifact a rollback names.
         required: false
         type: string
 
@@ -53,7 +66,7 @@ jobs:
       # persist-credentials: false keeps the token out of .git/config. This is the one workflow here
       # holding id-token: write and it runs repository scripts; sdlc-docs.yml sets the same flag for
       # the same reason.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0
         with:
           persist-credentials: false
 
@@ -82,10 +95,11 @@ jobs:
           version: "540.0.0"
           install_components: beta
 
-      # Four stages, and only two of them may report "nothing to deploy". A credential failure exits
-      # 1 and fails the job. Exit 3 means the environment is torn down or the service has not been
-      # created yet — both expected states under spec D17, not failures — and this step turns them
-      # into a green no-op rather than a red X that trains people to ignore red Xs.
+      # Three stages, and two of them may report "nothing to deploy": the data layer (Cloud SQL) and
+      # the service. A credential failure exits 1 and fails the job. Exit 3 means the environment is
+      # torn down or the service has not been created yet — both expected states under spec D17, not
+      # failures — and this step turns them into a green no-op rather than a red X that trains people
+      # to ignore red Xs.
       - name: Preflight — credential, environment, service
         id: preflight
         env:
@@ -117,8 +131,13 @@ jobs:
           [[ "$rc" -eq 0 ]] || exit "$rc"
           echo "present=true" >> "$GITHUB_OUTPUT"
 
+      # Skipped when a dispatch names a tag, and that is the whole difference between "redeploy" and
+      # "rebuild". `docker build -t <registry>/app:v4` on an existing tag force-moves it off the
+      # image a working revision points at — and docs/runbooks/gcp-deploy.md section 5 rolls back by
+      # naming a revision whose image is exactly that tag. Rebuilding here would ship a one-click way
+      # to destroy the rollback target.
       - name: Build the image
-        if: steps.preflight.outputs.present == 'true'
+        if: steps.preflight.outputs.present == 'true' && inputs.tag == ''
         env:
           PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           REGION: ${{ vars.GCP_REGION }}
@@ -157,11 +176,16 @@ jobs:
           REGION: ${{ vars.GCP_REGION }}
         run: ./scripts/deploy-cloud-run.sh promote
 
-      # The candidate was verified through its tag URL. This re-runs the same assertions against the
-      # URL users actually hit, after the traffic split moved — cheap, and the only step that
-      # observes the end state rather than an intermediate one. REVISION is deliberately unset here,
-      # so the log window is service-wide: the question has changed from "is this candidate sound"
-      # to "is the service healthy now".
+      # The candidate was verified through its tag URL; this re-runs the same assertions against the
+      # URL users actually hit, now that traffic has moved. `verify live` rather than a second copy
+      # of the lookup: it reads the service URL, exports PROJECT_ID/REGION/SERVICE so the child
+      # cannot fall back to its own defaults, normalises the child's exit vocabulary, and scopes the
+      # log query to the revision that is NOW serving.
+      #
+      # That scoping is the correction, not a detail. A service-wide window reaches back over the
+      # minutes the OLD revision spent serving live traffic, so one warning it emitted would fail
+      # this step AFTER promotion had already happened — a red pipeline, a promoted revision, and
+      # nothing saying which of the two is wrong.
       - name: Confirm the promoted service
         if: steps.preflight.outputs.present == 'true'
         env:
@@ -169,15 +193,13 @@ jobs:
           REGION: ${{ vars.GCP_REGION }}
           # Through the environment, NOT interpolated into the script body. `${{ … }}` is textually
           # substituted before bash sees the line, so a dispatch input containing `$(…)` or a quote
-          # would be executed rather than printed. It takes repository write access to dispatch,
-          # which makes this a narrow path — but it is a path that runs arbitrary commands while
-          # this job holds the deploy credential, and without leaving a commit on `main`. Every
-          # other expression in this workflow already goes through `env:`; this one is the same rule.
+          # would be executed rather than printed. Every expression in this workflow goes through
+          # `env:` for that reason.
           TAG: ${{ inputs.tag || github.sha }}
         run: |
+          ./scripts/deploy-cloud-run.sh verify live
           url="$(gcloud run services describe app --region="${REGION}" \
             --project="${PROJECT_ID}" --format='value(status.url)')"
-          ./scripts/verify-deployment.sh all "$url"
           {
             echo "### Deployed"
             echo
@@ -193,3 +215,29 @@ jobs:
             echo "An empty application-log window is also weak evidence, not proof: Cloud Logging"
             echo "ingestion is asynchronous and empty is what the check treats as a pass."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # A rejected candidate is the ONE revision known to be bad, and until this runs it is sitting
+      # on a deterministic public URL — `candidate---app-<n>.<region>.run.app` — because the allUsers
+      # invoker binding is service-wide and covers tag URLs. `promote` removes the tag on the success
+      # path; nothing removed it when verification failed, so it stayed reachable until the next
+      # successful deploy re-pointed it. `if: failure()` closes that.
+      #
+      # It does not fail the job on its own: the deploy has already failed, and a cleanup that
+      # cannot reach the API should not overwrite that signal with its own.
+      - name: Untag a rejected candidate
+        if: failure() && steps.preflight.outputs.present == 'true'
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+        run: |
+          set +e
+          gcloud run services update-traffic app --region="${REGION}" \
+            --project="${PROJECT_ID}" --remove-tags=candidate
+          rc=$?
+          set -e
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::warning::could not remove the candidate tag; the rejected revision may still be"
+            echo "::warning::reachable at its tag URL. Remove it by hand:"
+            echo "::warning::  gcloud run services update-traffic app --region=${REGION} \\"
+            echo "::warning::    --project=${PROJECT_ID} --remove-tags=candidate"
+          fi
