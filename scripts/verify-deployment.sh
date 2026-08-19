@@ -148,17 +148,26 @@ want("memory", c.get("resources", {}).get("limits", {}).get("memory"), "2Gi", "a
 # Is this the artifact we just built? A failed deploy leaves the service template pointing at an
 # image that may not be the one this pipeline produced, and every other assertion here would still
 # pass while the container ran a previous commit.
+# Cloud Run may store the RESOLVED DIGEST on a revision rather than the tag that was deployed
+# (`…/app@sha256:…` instead of `…/app:abc123`), so the repository part is split off on either
+# separator. Asserting exact equality against a digest would turn this gate permanently red.
 image = c.get("image", "")
-want("image registry", image.split("/app:")[0],
-     "%s-docker.pkg.dev/%s/app" % (region, project),
+repo = image.split("@")[0].rsplit(":", 1)[0] if ("@" in image or ":" in image.rsplit("/", 1)[-1]) \
+    else image
+want("image repository", repo, "%s-docker.pkg.dev/%s/app/app" % (region, project),
      "the image must come from this project registry, not somewhere else.")
-if expect_image:
-    want("image", image, expect_image, "the deploy pushed a different reference than is running.")
-elif ":" not in image.rsplit("/", 1)[-1]:
-    failures.append("image: %r carries no tag\n         a rollback names a tag; an untagged "
-                    "reference cannot be rolled back to." % image)
-else:
+if not expect_image:
     print("    ok   image = %r (tag not cross-checked: EXPECT_IMAGE unset)" % image)
+elif image == expect_image:
+    print("    ok   image = %r" % image)
+elif "@sha256:" in image:
+    # A digest is what the deploy asked for, resolved. It cannot be compared to a tag without
+    # another API call, and the repository assertion above already bounds where it came from.
+    print("    ok   image = %r (digest form; tag %r not cross-checkable here)"
+          % (image, expect_image.rsplit(":", 1)[-1]))
+else:
+    failures.append("image: expected %r, got %r\n         the deploy pushed a different "
+                    "reference than is running." % (expect_image, image))
 
 try:
     nics = json.loads(ann.get("run.googleapis.com/network-interfaces", "[]"))

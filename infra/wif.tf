@@ -123,3 +123,27 @@ resource "google_project_iam_member" "ci_log_viewer" {
   role    = "roles/logging.viewer"
   member  = local.github_principal
 }
+
+# The preflight in scripts/deploy-cloud-run.sh asks "is the data layer there?" before it builds
+# anything, because the between-sessions teardown removes Cloud SQL and Valkey while leaving the
+# registry, the service accounts and the secret containers standing — so nothing cheaper than this
+# distinguishes a rebuilt environment from a torn-down one.
+#
+# A custom role rather than roles/cloudsql.viewer, which also carries backup, database, user and
+# SSL-certificate reads across every instance in the project. This principal needs to answer one
+# yes/no question about one instance, and P1-D5 says least privilege is granted per resource where
+# it can be — it cannot be here, because listing is a project-level call, so the narrowing has to
+# happen on the verbs instead.
+resource "google_project_iam_custom_role" "deploy_preflight" {
+  role_id     = "deployPreflight"
+  title       = "CD preflight"
+  description = "List Cloud SQL instances, to tell a torn-down environment from a live one."
+  permissions = ["cloudsql.instances.list"]
+  project     = var.project_id
+}
+
+resource "google_project_iam_member" "ci_sql_lister" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.deploy_preflight.id
+  member  = local.github_principal
+}

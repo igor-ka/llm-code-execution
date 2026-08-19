@@ -432,6 +432,18 @@ either `verify.sh`, `scripts/**`, or `.github/workflows/**`) without updating
 close more than one issue — `[multi-child]` in the title is the visible exception. That document
 describes how a change gets from an idea to `main` — phases, gates, and how they meet CI.
 
+A fifth workflow, **`Deploy`**, is not a check either and runs on pushes to `main` rather than on
+pull requests. It builds the image, deploys a Cloud Run revision that receives **no traffic**,
+asserts the deployed service's shape and HTTP surface with `scripts/verify-deployment.sh`, and only
+then moves traffic to it — so **merging to `main` now ships a production revision**. It
+authenticates with Workload Identity Federation and holds no key. Two things it deliberately does
+not do: it will not *create* the service (a new service's first revision takes 100% of traffic and
+cannot be verified first, so that stays a human command), and it verifies nothing behind the auth
+gate — a real execution, the cross-owner 404 and the quota's 429 all need an authenticated caller
+and stay in
+[`docs/runbooks/gcp-isolation-probes.md`](docs/runbooks/gcp-isolation-probes.md). See
+[`docs/sdlc.md`](docs/sdlc.md) under *Continuous deployment*.
+
 A fourth pull-request workflow, **`Dependabot auto-merge`**, is not a check and gates nothing: on
 Dependabot PRs where every dependency is an npm patch or minor bump, it enables GitHub's native
 auto-merge, which still waits for all four required checks and for every review thread to be
@@ -462,7 +474,8 @@ The behavioral checks below have been run and pass (✅). Re-run them anytime.
 - **GCP deploy: the app is deployed.** `https://app-530312723651.us-central1.run.app` — Cloud Run
   with sandboxes, Cloud SQL and Memorystore for Valkey behind a private VPC. The environment is
   destroyed between working sessions (see the teardown runbook), so that URL is live only while
-  someone is working on it. Deploy steps: [`docs/runbooks/gcp-deploy.md`](docs/runbooks/gcp-deploy.md).
+  someone is working on it. Deploy steps: [`docs/runbooks/gcp-deploy.md`](docs/runbooks/gcp-deploy.md), and a push to `main`
+  now deploys automatically — see *Continuous deployment* in [`docs/sdlc.md`](docs/sdlc.md).
 - **GCP deploy background: decided, then done.** Cloud Run (not GKE), with untrusted code executed by
   [Cloud Run sandboxes](https://docs.cloud.google.com/run/docs/code-execution) behind the
   existing `SandboxBackend` seam — egress denied by default and no metadata server, at the cost

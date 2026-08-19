@@ -397,8 +397,72 @@ Details that are easy to get wrong:
   target network-dependent, which building an image always was whenever the cache was cold.
 - **Docker builds run on pull requests only**, to keep pushes to `main` fast.
 
-**There is no CD yet.** Deployment is roadmap (GCP Cloud Run); the release and observability
-phases arrive with it.
+**CD exists** — see [Continuous deployment](#continuous-deployment) below. Observability beyond the
+budget alarm and the deploy-time checks is still roadmap.
+
+---
+
+## Continuous deployment
+
+`Deploy` (`.github/workflows/deploy.yml`) builds and deploys the Cloud Run service on every push to
+`main`, and on demand. It is **not a check**: it never runs on `pull_request`, it is not in the
+"Protect main" ruleset, and it gates no merge. Adding it to the ruleset would block every merge on a
+check that can never report.
+
+It runs the same scripts a human runs — `scripts/deploy-cloud-run.sh` and
+`scripts/verify-deployment.sh` — for the same reason CI runs `verify.sh`: one definition, two
+callers, no drift. `docs/runbooks/gcp-deploy.md` explains why each flag exists; the script is what
+executes.
+
+Five things are load-bearing rather than stylistic:
+
+- **A candidate revision receives no traffic until it has been verified.** `gcloud beta run deploy
+  --no-traffic --tag=candidate`, then `verify-deployment.sh` against the tag URL, then
+  `update-traffic --to-latest` with the resulting split **read back** rather than trusted. Five
+  defects have reached this deployed service — #185, #188, #191, #195 and a rollback that reports
+  failure after succeeding — and **every one passed a fully green `verify.sh`**. That is a fact
+  about the gates, not about carelessness: a check that cannot fail the way production fails is not
+  a gate. So the pipeline treats "the deploy command exited 0" as no evidence at all.
+- **It will not create the service.** A new service's first revision takes 100% of traffic
+  immediately, so it cannot be verified before users reach it. Rather than carry an exception to
+  that invariant, the first deploy after a rebuild is a human command
+  (`./scripts/deploy-cloud-run.sh create`), which is what spec D4/S9 asks for anyway.
+- **"Nothing is deployed" is a green no-op; "the credential is broken" is not.** The environment is
+  destroyed between working sessions (spec D17), so preflight exits **3** when the Terraform layer
+  or the service is absent and the job reports why and stops. A credential or permission failure
+  exits **1** and fails the job — a probe that reported a bad token as "torn down" would finish
+  green, which is the decorative-assertion pattern applied to the step that decides whether
+  anything else runs.
+- **The trigger is `push`, never `workflow_run` on `CI`.** A `workflow_run` trigger fires only when
+  the referenced workflow runs, and CI does not run on `main` for a merge performed with
+  `GITHUB_TOKEN`. `push` shares that blind spot, which is why it is fixed at the source — see
+  [Auto-merging dependency bumps](#auto-merging-dependency-bumps) — rather than routed around here.
+- **What CD does not verify, it says out loud.** A real execution, the cross-owner 404 and the
+  quota's 429 all need an authenticated caller. Holding an Auth0 machine-to-machine credential
+  permanently in GitHub, for an endpoint that spends money, is a worse trade than leaving those to
+  [`gcp-isolation-probes.md`](runbooks/gcp-isolation-probes.md) — which itself says to delete those
+  applications when the probes are done. The job summary prints the gap on every run, along with the
+  weaker point that an empty log window is not proof of a clean boot, because Cloud Logging
+  ingestion is asynchronous.
+
+CD authenticates with the Phase 1 workload identity pool and **no service account**: roles are
+granted directly to the `principalSet`, so no key exists anywhere (S9, P1-D4). The provider's
+attribute condition pins the numeric owner and repository IDs and `refs/heads/main`, so this
+workflow cannot authenticate from any other branch. The consequence for teardown is in
+[`gcp-teardown.md`](runbooks/gcp-teardown.md): a full `terraform destroy` would soft-delete the pool
+and leave CD unable to authenticate for ~30 days, so the between-sessions teardown is targeted at
+the billable resources only.
+
+**Every workflow expression goes through `env:`, never into a `run:` body.** `${{ … }}` is
+substituted textually before bash sees the line, so a `workflow_dispatch` input containing `$(…)`
+or a quote would be executed rather than printed. Dispatching takes repository write access, which
+makes it a narrow path — but it is one that runs arbitrary commands while the job holds the deploy
+credential and without leaving a commit on `main`, and the rule costs nothing to keep.
+
+`deploy.yml` is **not** subject to the `verify.sh` mirroring rule: that rule binds gates, and this
+gates nothing. Its scripts' unit tests do have a local equivalent and it is the same file CI runs —
+`./scripts/tests/deploy-cloud-run.test.sh` and `./scripts/tests/verify-deployment.test.sh`, both
+hosted by the `SDLC docs` job because `deploy.yml` itself never runs on a pull request.
 
 ---
 

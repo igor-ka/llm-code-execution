@@ -1,0 +1,243 @@
+name: Deploy
+
+# Continuous deployment for the Cloud Run service. It runs the SAME scripts a human runs from
+# docs/runbooks/gcp-deploy.md — scripts/deploy-cloud-run.sh and scripts/verify-deployment.sh — so
+# the pipeline and the runbook cannot drift. See docs/sdlc.md, "Continuous deployment".
+#
+# TRIGGERS, and the one that is deliberately absent:
+#   push to main      — the direct expression of "deploy what is on main".
+#   workflow_dispatch — redeploy a tag. NOT a rebuild button: after a teardown the service does not
+#                       exist, and CD refuses to create it (see the preflight step).
+#   NOT workflow_run on CI. It would fire only when CI runs on main, and CI does not run on main for
+#   a merge performed with GITHUB_TOKEN. Note that `push` shares that blind spot — the mechanism is
+#   that NO workflow starts for such a push — which is why the auto-merge job now merges under a
+#   GitHub App token instead. Fixing it at the source beats routing around it here.
+#   The PR's own checks already ran against this base: strict_required_status_checks_policy is on.
+#
+# THIS IS NOT A REQUIRED STATUS CHECK and must not be added to the "Protect main" ruleset. It never
+# runs on pull_request, so requiring it would block every merge on a check that can never report —
+# the trap docs/sdlc.md records for workflow-level `paths:` filters, reached by a different road.
+on:
+  push:
+    branches: [main]
+    # A `paths-ignore` filter is safe HERE and nowhere else in this repository. The trap docs/sdlc.md
+    # records — a path filter on a REQUIRED check means it never reports and hangs every merge —
+    # applies to the gates; this workflow gates nothing. Without it a typo in a runbook rebuilds the
+    # whole image from cold and ships a new production revision. None of these paths reach the
+    # image: the Dockerfile copies application source, not docs.
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - ".claude/**"
+      - "LICENSE"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          An EXISTING image tag to redeploy. Leave empty to build the current commit.
+          A tag given here is never rebuilt: the deploy runbook forbids overwriting a tag a
+          working revision still points at, because that is the artifact a rollback names.
+        required: false
+        type: string
+
+# Never cancel a deploy in flight. ci.yml uses cancel-in-progress correctly for checks, where a
+# superseded run is waste. Here it could kill the job between `update-traffic` and the assertion
+# that reads the split back — the one window where an interrupted run leaves the service in a state
+# nobody has looked at.
+concurrency:
+  group: deploy-cloud-run
+  cancel-in-progress: false
+
+# id-token: write is the OIDC token Workload Identity Federation exchanges. Nothing else — this
+# workflow writes nothing to the repository.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    # The concurrency group above never cancels in progress, so a hung step would hold every later
+    # deploy behind it until GitHub's six-hour ceiling. verify-deployment.sh bounds its own HTTP
+    # calls; this bounds everything else.
+    timeout-minutes: 30
+    steps:
+      # persist-credentials: false keeps the token out of .git/config. This is the one workflow here
+      # holding id-token: write and it runs repository scripts; sdlc-docs.yml sets the same flag for
+      # the same reason.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # Direct Workload Identity Federation: no `service_account` input, because there is no
+      # deployer service account to impersonate and therefore no key to leak (P1-D4). The roles are
+      # granted straight to the principalSet in infra/wif.tf, scoped by attribute.repository, and
+      # the provider's attribute condition pins the numeric owner and repo IDs plus
+      # refs/heads/main — so this workflow physically cannot authenticate from another branch.
+      #
+      # Pinned by SHA with the version in a trailing comment, matching how dependabot-auto-merge.yml
+      # pins its actions. `github_actions` is outside that workflow's auto-merge allow-list, so a new
+      # SHA here is always read by a human before it merges.
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+
+      # `version:` is not decoration: it forces setup-gcloud to install its own SDK. The runner's
+      # preinstalled google-cloud-cli comes from apt, where the component manager is DISABLED, and
+      # `install_components: beta` against it fails with "The component manager is disabled for this
+      # installation". `gcloud beta run deploy` needs that component, so this cannot be skipped.
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        with:
+          version: "540.0.0"
+          install_components: beta
+
+      # Three stages, and two of them may report "nothing to deploy": the data layer (Cloud SQL) and
+      # the service. A credential failure exits 1 and fails the job. Exit 3 means the environment is
+      # torn down or the service has not been created yet — both expected states under spec D17, not
+      # failures — and this step turns them into a green no-op rather than a red X that trains people
+      # to ignore red Xs.
+      - name: Preflight — credential, environment, service
+        id: preflight
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+        run: |
+          set +e
+          ./scripts/deploy-cloud-run.sh preflight
+          rc=$?
+          set -e
+          if [[ "$rc" -eq 3 ]]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### No deploy"
+              echo
+              echo "Nothing was built or deployed: either the GCP environment is torn down"
+              echo "(spec D17) or the Cloud Run service has not been created yet."
+              echo
+              echo "Rebuild with \`docs/runbooks/gcp-bootstrap.md\`, repopulate \`redis-url\`, then"
+              echo "create the service by hand — CD does not create it, because a new service's"
+              echo "first revision serves 100% of traffic immediately and cannot be verified first:"
+              echo
+              echo '```'
+              echo "TAG=<tag> ./scripts/deploy-cloud-run.sh create"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [[ "$rc" -eq 0 ]] || exit "$rc"
+          echo "present=true" >> "$GITHUB_OUTPUT"
+
+      # Skipped when a dispatch names a tag, and that is the whole difference between "redeploy" and
+      # "rebuild". `docker build -t <registry>/app:v4` on an existing tag force-moves it off the
+      # image a working revision points at — and docs/runbooks/gcp-deploy.md section 5 rolls back by
+      # naming a revision whose image is exactly that tag. Rebuilding here would ship a one-click way
+      # to destroy the rollback target.
+      - name: Build the image
+        if: steps.preflight.outputs.present == 'true' && inputs.tag == ''
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+          TAG: ${{ inputs.tag || github.sha }}
+          # Variables, not secrets: all three are inlined into a public JavaScript bundle at build
+          # time, so masking them would buy nothing and cost log readability.
+          VITE_AUTH0_DOMAIN: ${{ vars.VITE_AUTH0_DOMAIN }}
+          VITE_AUTH0_CLIENT_ID: ${{ vars.VITE_AUTH0_CLIENT_ID }}
+          VITE_AUTH0_AUDIENCE: ${{ vars.VITE_AUTH0_AUDIENCE }}
+        run: ./scripts/deploy-cloud-run.sh build
+
+      # Deploys a revision that receives NO traffic. Nothing a user can reach changes until the
+      # verify step below has passed against it.
+      - name: Deploy a candidate revision
+        if: steps.preflight.outputs.present == 'true'
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+          TAG: ${{ inputs.tag || github.sha }}
+        run: ./scripts/deploy-cloud-run.sh deploy
+
+      # The gate. Five defects have reached this service and every one passed a fully green
+      # verify.sh, so a revision is not trusted because it deployed.
+      - name: Verify the candidate
+        if: steps.preflight.outputs.present == 'true'
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+          TAG: ${{ inputs.tag || github.sha }}
+        run: ./scripts/deploy-cloud-run.sh verify
+
+      - name: Promote it
+        if: steps.preflight.outputs.present == 'true'
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+        run: ./scripts/deploy-cloud-run.sh promote
+
+      # The candidate was verified through its tag URL; this re-runs the same assertions against the
+      # URL users actually hit, now that traffic has moved. `verify live` rather than a second copy
+      # of the lookup: it reads the service URL, exports PROJECT_ID/REGION/SERVICE so the child
+      # cannot fall back to its own defaults, normalises the child's exit vocabulary, and scopes the
+      # log query to the revision that is NOW serving.
+      #
+      # That scoping is the correction, not a detail. A service-wide window reaches back over the
+      # minutes the OLD revision spent serving live traffic, so one warning it emitted would fail
+      # this step AFTER promotion had already happened — a red pipeline, a promoted revision, and
+      # nothing saying which of the two is wrong.
+      - name: Confirm the promoted service
+        if: steps.preflight.outputs.present == 'true'
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+          # Through the environment, NOT interpolated into the script body. `${{ … }}` is textually
+          # substituted before bash sees the line, so a dispatch input containing `$(…)` or a quote
+          # would be executed rather than printed. Every expression in this workflow goes through
+          # `env:` for that reason.
+          TAG: ${{ inputs.tag || github.sha }}
+        run: |
+          ./scripts/deploy-cloud-run.sh verify live
+          url="$(gcloud run services describe app --region="${REGION}" \
+            --project="${PROJECT_ID}" --format='value(status.url)')"
+          {
+            echo "### Deployed"
+            echo
+            echo "- URL: $url"
+            echo "- Image tag: \`${TAG}\`"
+            echo
+            echo "**Not verified here**, and deliberately: that generated code actually runs, the"
+            echo "cross-owner history 404, and the quota's 429. All three need an authenticated"
+            echo "caller, and this pipeline holds no Auth0 credential — the probes runbook says to"
+            echo "delete those applications once the probes are done. Run"
+            echo "\`docs/runbooks/gcp-isolation-probes.md\` after any change that could touch them."
+            echo
+            echo "An empty application-log window is also weak evidence, not proof: Cloud Logging"
+            echo "ingestion is asynchronous and empty is what the check treats as a pass."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A rejected candidate is the ONE revision known to be bad, and until this runs it is sitting
+      # on a deterministic public URL — `candidate---app-<n>.<region>.run.app` — because the allUsers
+      # invoker binding is service-wide and covers tag URLs. `promote` removes the tag on the success
+      # path; nothing removed it when verification failed, so it stayed reachable until the next
+      # successful deploy re-pointed it. `if: failure()` closes that.
+      #
+      # It does not fail the job on its own: the deploy has already failed, and a cleanup that
+      # cannot reach the API should not overwrite that signal with its own.
+      - name: Untag a rejected candidate
+        if: failure() && steps.preflight.outputs.present == 'true'
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+        run: |
+          set +e
+          gcloud run services update-traffic app --region="${REGION}" \
+            --project="${PROJECT_ID}" --remove-tags=candidate
+          rc=$?
+          set -e
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::warning::could not remove the candidate tag; the rejected revision may still be"
+            echo "::warning::reachable at its tag URL. Remove it by hand:"
+            echo "::warning::  gcloud run services update-traffic app --region=${REGION} \\"
+            echo "::warning::    --project=${PROJECT_ID} --remove-tags=candidate"
+          fi
