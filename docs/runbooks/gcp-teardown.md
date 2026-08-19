@@ -222,8 +222,12 @@ procedure.
 > **This rehearsal exercised the FULL destroy of 18 targeted resources, not the five-address
 > between-sessions destroy introduced later.** It is evidence for reproducibility, not for that
 > procedure — which, as of this writing, has not been run. This file's own standard applies:
-> *a reproducibility claim nobody has exercised is an assumption.* The address count below also
-> predates `google_project_iam_member.ci_log_viewer`, so a state list today is 31, not 30.
+> *a reproducibility claim nobody has exercised is an assumption.*
+>
+> **The address count below is also stale, and by more than it looks.** It predates all of Phase 2 —
+> Cloud SQL, Memorystore for Valkey, the VPC, the build identity and its staging bucket — plus
+> Phase 3's `ci_log_viewer`. A `terraform state list` on 2026-08-18 returns **50**, not 30. Re-read
+> the count from the live state rather than from this record.
 
 A destroy-and-rebuild against the live project, sparing only what step 4 explains. Recorded here
 because a reproducibility claim nobody has exercised is an assumption.
