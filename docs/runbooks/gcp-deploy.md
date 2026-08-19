@@ -23,7 +23,15 @@ every apply. This runbook *is* the specification for its shape; see
 this file.** [ADR-0005](../adr/0005-cloud-run-service-outside-terraform.md) makes the deploy command
 the specification for the service's shape, and a copy here would be a second specification — the
 copy being the one that goes stale. This runbook says *why* each flag is there and what breaks
-without it; the script is what runs. The script derives every project-specific value from the
+without it; the script is what runs.
+
+**`.github/workflows/deploy.yml` runs these same targets on every push to `main`**, so a deploy by
+hand and a deploy by pipeline produce the same revision shape. What the pipeline does that this
+runbook does not is deploy with `--no-traffic --tag=candidate` first, verify, and only then move
+traffic — by hand you are watching the output, and the pipeline is not. Reach for this runbook when
+CD cannot run: no environment, the service not yet created (CD refuses to create it), a broken
+pipeline, or a deploy from a branch other than `main` — the workload identity provider's attribute
+condition pins `refs/heads/main`, so CD physically cannot deploy anything else. The script derives every project-specific value from the
 resource names Terraform uses and deliberately reads **no Terraform state**, which is the one place
 it differs from the `terraform output` calls this runbook used to make: state holds the generated
 Cloud SQL password in cleartext, and the same script runs in CI.

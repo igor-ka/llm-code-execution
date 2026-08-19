@@ -450,7 +450,20 @@ verify() {
   # 2 and 3 are read by the workflow as "usage" and "nothing to deploy"; passing a child's 3
   # straight through would finish the pipeline green having verified nothing.
   set +e
+  # EXPECT_IMAGE is what turns "an image from the right registry" into "the image this run just
+  # built". Without it a deploy that silently resolved to a stale tag passes every other assertion
+  # while the container runs a previous commit — and the tag is the thing a rollback names.
+  #
+  # Only when TAG is set. `verify` is the one target that is genuinely useful on its own — reading
+  # the state of whatever is deployed, which is how the runbook's section 4 uses it — and requiring
+  # a tag for that would be friction. The verifier says out loud when the cross-check is skipped.
+  local -a expect=()
+  if [[ -n "$TAG" ]]; then
+    expect=("EXPECT_IMAGE=${REGISTRY}/${SERVICE}:${TAG}")
+  fi
+
   run env PROJECT_ID="$PROJECT_ID" REGION="$REGION" SERVICE="$SERVICE" REVISION="$revision" \
+    ${expect[@]+"${expect[@]}"} \
     "$VERIFY_SCRIPT" all "$url"
   local rc=$?
   set -e

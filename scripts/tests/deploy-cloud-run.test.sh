@@ -92,8 +92,8 @@ EOF
 #!/usr/bin/env bash
 {
   printf 'args=%s\n' "\$*"
-  printf 'PROJECT_ID=%s REGION=%s SERVICE=%s REVISION=%s\n' \
-    "\${PROJECT_ID:-}" "\${REGION:-}" "\${SERVICE:-}" "\${REVISION:-}"
+  printf 'PROJECT_ID=%s REGION=%s SERVICE=%s REVISION=%s EXPECT_IMAGE=%s\n' \
+    "\${PROJECT_ID:-}" "\${REGION:-}" "\${SERVICE:-}" "\${REVISION:-}" "\${EXPECT_IMAGE:-}"
 } >> "$work/verify.log"
 exit "\$(cat "$work/state/verify_exit")"
 EOF
@@ -389,6 +389,27 @@ if verified "args=all ${CAND_URL}"; then
 else
   bad "verify targets the candidate URL" "$(cat "$work/verify.log")"
 fi
+# "Is this the artifact we just built?" — the verifier can only answer that if it is told what was
+# built. Without EXPECT_IMAGE a deploy resolving to a stale tag passes every other assertion.
+if verified "EXPECT_IMAGE=us-central1-docker.pkg.dev/test-project/app/app:abc123"; then
+  ok "verify tells the verifier which image this run built"
+else
+  bad "verify passes EXPECT_IMAGE" "$(cat "$work/verify.log")"
+fi
+# ...but `verify` stays usable with no TAG, which is how the runbook reads a deployed service.
+setup serving
+PATH="$work/bin:$PATH" PROJECT_ID=test-project REGION=us-central1 SERVICE=app TAG= \
+  VERIFY_SCRIPT="$work/bin/verify-stub.sh" "$DEPLOY" verify >"$work/out.txt" 2>&1 || true
+# Match a VALUE, not the label: the stub always prints `EXPECT_IMAGE=`, so grepping the key alone
+# would pass whether or not anything was set.
+if grep -q "EXPECT_IMAGE=us-central1" "$work/verify.log"; then
+  bad "verify omits EXPECT_IMAGE when TAG is unset" "$(cat "$work/verify.log")"
+else
+  ok "verify omits EXPECT_IMAGE when TAG is unset, staying useful on its own"
+fi
+
+setup serving
+run_deploy verify || true
 if verified "PROJECT_ID=test-project REGION=us-central1 SERVICE=app REVISION=app-00010-new"; then
   ok "verify exports PROJECT_ID/REGION/SERVICE and scopes REVISION to the candidate"
 else
