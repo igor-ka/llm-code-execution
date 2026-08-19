@@ -167,6 +167,13 @@ jobs:
         env:
           PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           REGION: ${{ vars.GCP_REGION }}
+          # Through the environment, NOT interpolated into the script body. `${{ … }}` is textually
+          # substituted before bash sees the line, so a dispatch input containing `$(…)` or a quote
+          # would be executed rather than printed. It takes repository write access to dispatch,
+          # which makes this a narrow path — but it is a path that runs arbitrary commands while
+          # this job holds the deploy credential, and without leaving a commit on `main`. Every
+          # other expression in this workflow already goes through `env:`; this one is the same rule.
+          TAG: ${{ inputs.tag || github.sha }}
         run: |
           url="$(gcloud run services describe app --region="${REGION}" \
             --project="${PROJECT_ID}" --format='value(status.url)')"
@@ -175,7 +182,7 @@ jobs:
             echo "### Deployed"
             echo
             echo "- URL: $url"
-            echo "- Image tag: \`${{ inputs.tag || github.sha }}\`"
+            echo "- Image tag: \`${TAG}\`"
             echo
             echo "**Not verified here**, and deliberately: that generated code actually runs, the"
             echo "cross-owner history 404, and the quota's 429. All three need an authenticated"

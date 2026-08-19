@@ -453,6 +453,12 @@ workflow cannot authenticate from any other branch. The consequence for teardown
 and leave CD unable to authenticate for ~30 days, so the between-sessions teardown is targeted at
 the billable resources only.
 
+**Every workflow expression goes through `env:`, never into a `run:` body.** `${{ … }}` is
+substituted textually before bash sees the line, so a `workflow_dispatch` input containing `$(…)`
+or a quote would be executed rather than printed. Dispatching takes repository write access, which
+makes it a narrow path — but it is one that runs arbitrary commands while the job holds the deploy
+credential and without leaving a commit on `main`, and the rule costs nothing to keep.
+
 `deploy.yml` is **not** subject to the `verify.sh` mirroring rule: that rule binds gates, and this
 gates nothing. Its scripts' unit tests do have a local equivalent and it is the same file CI runs —
 `./scripts/tests/deploy-cloud-run.test.sh` and `./scripts/tests/verify-deployment.test.sh`, both
