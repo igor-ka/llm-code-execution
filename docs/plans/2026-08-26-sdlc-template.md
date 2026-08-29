@@ -1605,29 +1605,60 @@ implementer — spec Residual risk flags this payload shape as the fragile part:
   "rules": [
     { "type": "deletion" },
     { "type": "non_fast_forward" },
+    { "type": "required_linear_history" },
     { "type": "pull_request",
       "parameters": {
         "required_approving_review_count": 0,
         "required_review_thread_resolution": true,
+        "require_extra_approval_for_unattributed_changes": true,
         "dismiss_stale_reviews_on_push": false,
         "require_code_owner_review": false,
-        "require_last_push_approval": false
+        "require_last_push_approval": false,
+        "required_reviewers": [],
+        "allowed_merge_methods": ["squash", "rebase"]
+      } },
+    { "type": "copilot_code_review",
+      "parameters": {
+        "review_on_push": true,
+        "review_draft_pull_requests": true
       } },
     { "type": "required_status_checks",
       "parameters": {
-        "strict_required_status_checks_policy": false,
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
         "required_status_checks": @@REQUIRED_CHECKS@@
       } }
   ]
 }
 ```
 
-Three choices worth naming. **No bypass actors** — an exception nobody can use is the only kind
-that cannot be used by accident. **Zero required approvals with thread resolution on** — these are
-single-maintainer repositories, so an approval gate would be self-approval theatre, while unresolved
-review threads genuinely block. **`strict_required_status_checks_policy: false`** — requiring a
-branch to be current with `main` before merge means every merge invalidates every other open PR,
-which on a one-person repository buys nothing and costs a re-run per PR.
+This is the live `Protect main` ruleset from `llm-code-execution`, read back with
+`gh api repos/OWNER/REPO/rulesets/ID`, not written from memory. Reproducing a proven configuration
+is the whole point of a baseline, and three of its six rules would have been missed by hand.
+
+Four choices worth naming.
+
+**`copilot_code_review` is a ruleset rule, and that is what makes it automatable.** Copilot review
+is not a repository setting reached through a menu — it is expressed in the ruleset alongside the
+status checks, so `acb init` enables it through the same `gh api` call and a new repository gets it
+on the first pull request. This matters more than it looks: `CLAUDE.md` leans on Copilot as the
+*enforced* half of its review gate, the two skill passes being procedure rather than enforcement. A
+repository scaffolded without this rule would lose that gate silently, with nothing red to show for
+it. `review_on_push: true` re-reviews each push rather than only the opening commit.
+
+**No bypass actors** — an exception nobody can use is the only kind that cannot be used by accident.
+
+**Zero required approvals, but thread resolution required.** These are single-maintainer
+repositories, so an approval gate is self-approval theatre; unresolved review threads genuinely
+block, which is what turns a Copilot comment into something that must be answered.
+`require_extra_approval_for_unattributed_changes` covers commits pushed by an identity the merger
+cannot vouch for.
+
+**`strict_required_status_checks_policy: true`, and it is a real trade.** A branch must be current
+with `main` before it merges, so every merge invalidates every other open pull request and costs
+them a re-run. On a repository with one or two concurrent branches that is cheap and it closes the
+semantic-conflict gap — two PRs that each pass alone and break together. On a busier repository,
+flip it to `false`.
 `CLAUDE.md.tmpl` carries `@@COMPONENT_TABLE@@` and a "dev command" line per component — the place
 Task 9 Step 4 sends the reader.
 
@@ -2134,6 +2165,19 @@ so any of them can be reversed without re-deriving the reasoning.
 - **The scope claim overstated what lands.** "R1 and R2, complete" is now explicit that SC1, SC5 and
   SC11 remain unmet at the end of PR 5, and that the round trip is demonstrated only between
   throwaway consumers.
+
+Correction 2026-08-28, after the review — **the ruleset template was missing half the live
+ruleset.** The block written above was composed from memory rather than read back from the
+repository it claims to reproduce. `gh api repos/igor-ka/llm-code-execution/rulesets/17055903`
+returns six rules; the template had four. Missing outright: **`copilot_code_review`** (with
+`review_on_push` and `review_draft_pull_requests`) and **`required_linear_history`**. Wrong on
+three parameters: `strict_required_status_checks_policy` is `true` here, not `false`;
+`allowed_merge_methods` is `["squash", "rebase"]`, which `required_linear_history` depends on; and
+`require_extra_approval_for_unattributed_changes` is on.
+
+The Copilot omission was the costly one. `CLAUDE.md` treats Copilot review as the *enforced* half of
+the review gate — the two skill passes are procedure, not enforcement — so every repository
+scaffolded from the old template would have lost that gate with nothing red to show for it.
 
 Also applied from the advisory bucket, being consequences of the above rather than separate
 choices: `gh auth refresh -s delete_repo` before `gh repo delete`, and the `verify.sh` lint extended
