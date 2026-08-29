@@ -181,6 +181,22 @@ shape_mutant 's/"SANDBOX_MAX_CONCURRENT", "value": "4"/"SANDBOX_MAX_CONCURRENT",
 # "Is this the artifact we just built?" — every other assertion passes while a previous commit runs.
 shape_mutant 's|us-central1-docker.pkg.dev/test-project/app/app:abc123|docker.io/somebody/app:abc123|' \
   "shape fails when the image is not from this project registry"
+# Cloud Run may store the resolved digest on a revision instead of the tag. That must PASS the
+# repository assertion, not turn the gate permanently red — a path that has never run live.
+make_fakes "$(healthy_json | sed 's|app/app:abc123|app/app@sha256:deadbeef|')" ""
+make_curl 200 "$CSP_OK" 401
+if run_verify shape "$URL"; then
+  ok "shape accepts a digest reference, which a revision may report instead of the tag"
+else
+  bad "shape accepts a digest reference" "$(cat "$work/out.txt")"
+fi
+# ...but a digest from the WRONG repository still fails.
+make_fakes "$(healthy_json | sed 's|us-central1-docker.pkg.dev/test-project/app/app:abc123|docker.io/somebody/app@sha256:deadbeef|')" ""
+if run_verify shape "$URL"; then
+  bad "shape rejects a digest from the wrong repository"
+else
+  ok "shape rejects a digest from the wrong repository"
+fi
 
 # --- the HTTP surface --------------------------------------------------------------------------
 make_fakes "$(healthy_json)" ""

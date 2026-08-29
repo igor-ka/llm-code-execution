@@ -92,8 +92,8 @@ EOF
 #!/usr/bin/env bash
 {
   printf 'args=%s\n' "\$*"
-  printf 'PROJECT_ID=%s REGION=%s SERVICE=%s REVISION=%s\n' \
-    "\${PROJECT_ID:-}" "\${REGION:-}" "\${SERVICE:-}" "\${REVISION:-}"
+  printf 'PROJECT_ID=%s REGION=%s SERVICE=%s REVISION=%s EXPECT_IMAGE=%s\n' \
+    "\${PROJECT_ID:-}" "\${REGION:-}" "\${SERVICE:-}" "\${REVISION:-}" "\${EXPECT_IMAGE:-}"
 } >> "$work/verify.log"
 exit "\$(cat "$work/state/verify_exit")"
 EOF
@@ -180,31 +180,17 @@ setup serving
 expect_exit 2 "an unknown target exits 2" frobnicate
 
 # --- preflight: three stages, and an ERROR is never reported as an absence ----------------------
-setup absent
-: >"$work/state/registry_out"
-expect_exit 3 "preflight exits 3 when the registry is absent" preflight
-
-# The banner `artifacts repositories list` prints on stderr must not be mistaken for a repository.
-setup absent
-: >"$work/state/registry_out"
-run_deploy preflight || true
-if grep -q "environment is torn down" "$work/out.txt"; then
-  ok "the stderr banner is not mistaken for a repository"
-else
-  bad "the stderr banner is not mistaken for a repository" "$(cat "$work/out.txt")"
-fi
-
-# A registry lookup ERROR is exit 1, not a green "torn down" — stage 1 passing does not cover it,
-# because that is a different API with a different permission.
-setup serving
-echo 1 >"$work/state/registry_exit"
-expect_exit 1 "preflight exits 1, not 3, when the registry lookup itself errors" preflight
-
-# The between-sessions teardown leaves the REGISTRY standing, so its presence no longer proves the
-# environment is usable. Cloud SQL is what that teardown actually removes.
+# Preflight no longer probes Artifact Registry at all: it survives the between-sessions teardown,
+# and listing it asks for a permission on the LOCATION that the repository-scoped grant does not
+# carry. Cloud SQL is what that teardown removes and what the grant can cover.
 setup serving
 : >"$work/state/sql_out"
-expect_exit 3 "preflight exits 3 when the data layer is torn down but the registry survives" preflight
+expect_exit 3 "preflight exits 3 when the data layer is torn down" preflight
+if logged "artifacts repositories list"; then
+  bad "preflight does not probe Artifact Registry" "$(cat "$work/calls.log")"
+else
+  ok "preflight does not probe Artifact Registry, whose grant cannot cover a location-level list"
+fi
 
 setup serving
 echo 1 >"$work/state/sql_exit"
@@ -327,6 +313,18 @@ else
   bad "deploy binds allUsers explicitly" "$(cat "$work/calls.log")"
 fi
 
+# deploy creates a candidate that MUST be verified, so a missing verifier stops it before it
+# builds or pushes anything — not after, when a tagged public revision already exists.
+setup serving
+rc=0
+PATH="$work/bin:$PATH" PROJECT_ID=test-project REGION=us-central1 SERVICE=app TAG=abc123 \
+  VERIFY_SCRIPT="$work/does-not-exist.sh" "$DEPLOY" deploy >"$work/out.txt" 2>&1 || rc=$?
+if [[ "$rc" -eq 1 ]] && ! logged "beta run deploy"; then
+  ok "deploy refuses when the verifier is missing, before deploying anything"
+else
+  bad "deploy refuses when the verifier is missing" "rc=$rc calls=$(cat "$work/calls.log")"
+fi
+
 setup absent
 expect_exit 3 "deploy exits 3 rather than creating the service" deploy
 if logged "beta run deploy"; then
@@ -389,6 +387,27 @@ if verified "args=all ${CAND_URL}"; then
 else
   bad "verify targets the candidate URL" "$(cat "$work/verify.log")"
 fi
+# "Is this the artifact we just built?" — the verifier can only answer that if it is told what was
+# built. Without EXPECT_IMAGE a deploy resolving to a stale tag passes every other assertion.
+if verified "EXPECT_IMAGE=us-central1-docker.pkg.dev/test-project/app/app:abc123"; then
+  ok "verify tells the verifier which image this run built"
+else
+  bad "verify passes EXPECT_IMAGE" "$(cat "$work/verify.log")"
+fi
+# TAG is required, so the stale-image cross-check can never be silently skipped. The earlier
+# optional path bought a green "verified" with that assertion quietly absent.
+setup serving
+rc=0
+PATH="$work/bin:$PATH" PROJECT_ID=test-project REGION=us-central1 SERVICE=app TAG= \
+  VERIFY_SCRIPT="$work/bin/verify-stub.sh" "$DEPLOY" verify >"$work/out.txt" 2>&1 || rc=$?
+if [[ "$rc" -eq 1 && ! -s "$work/verify.log" ]]; then
+  ok "verify refuses without TAG rather than dropping the stale-image cross-check"
+else
+  bad "verify refuses without TAG" "rc=$rc log=$(cat "$work/verify.log")"
+fi
+
+setup serving
+run_deploy verify || true
 if verified "PROJECT_ID=test-project REGION=us-central1 SERVICE=app REVISION=app-00010-new"; then
   ok "verify exports PROJECT_ID/REGION/SERVICE and scopes REVISION to the candidate"
 else
