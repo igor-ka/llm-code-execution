@@ -81,9 +81,9 @@ jobs:
           REDIS_URL: redis://localhost:6379
         run: ./verify.sh test:integration
       # Build the images on PRs only — keeps pushes to main fast.
-      - name: Docker build
+      - name: Package
         if: github.event_name == 'pull_request'
-        run: ./verify.sh docker
+        run: ./verify.sh package
 
   frontend:
     name: Frontend checks
@@ -114,9 +114,9 @@ jobs:
       - name: Build
         run: ./verify.sh build
       # Build the image on PRs only — keeps pushes to main fast.
-      - name: Docker build
+      - name: Package
         if: github.event_name == 'pull_request'
-        run: ./verify.sh docker
+        run: ./verify.sh package
 
   # The "SDLC docs" check lives in its own workflow (.github/workflows/sdlc-docs.yml)
   # because it must also trigger on `pull_request: edited` — the [skip-sdlc-sync] escape

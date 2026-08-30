@@ -46,10 +46,10 @@ jobs:
       - name: Gate self-test
         run: ./verify.sh selftest
       - name: Format check
-        run: ./verify.sh fmt
-      - name: Init
-        run: ./verify.sh init
-      - name: Validate
-        run: ./verify.sh validate
+        run: ./verify.sh format
+      - name: Install providers
+        run: ./verify.sh install
+      - name: Lint
+        run: ./verify.sh lint
       - name: Gates
         run: ./verify.sh gates
