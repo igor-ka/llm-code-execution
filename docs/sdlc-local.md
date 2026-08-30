@@ -217,3 +217,28 @@ than a third home.
 never report at all, which hangs every merge forever — the same trap `.github/workflows/terraform.yml`
 carries a comment about. Both suites drive fakes on `PATH` and run in seconds; they run on
 everything.
+
+## Branch protection is a document
+
+`.github/ruleset.json` is the "Protect main" ruleset written down, and `scripts/apply-ruleset.sh`
+is what puts it into effect:
+
+```bash
+GITHUB_REPOSITORY=igor-ka/llm-code-execution ./scripts/apply-ruleset.sh
+```
+
+Branch protection is API state rather than a file, so shipping the checks without the enforcement
+would contradict this process's own maxim — an instruction is a request, a check is a guarantee —
+at exactly the moment of installation.
+
+**The live ruleset is the reference, not the document.** The document was generated once and is
+this repository's own thereafter; when the two disagree, read the live one first and find out why
+before overwriting it. The template that generated it was written from memory once and was wrong
+in three parameters, which is the whole reason for that ordering. `acb status` reports the one
+disagreement that matters on its own: a required check that no job in `.github/workflows/`
+produces, which blocks every merge until it is fixed.
+
+Six checks are required today: `Backend checks`, `Frontend checks`, `Terraform checks`,
+`SDLC docs`, `PR shape` and `Deploy scripts`. Adding a seventh means adding the job first, merging
+it, and only then adding the name — a required check whose job does not yet exist on `main` blocks
+everything, including the pull request that would create it.
