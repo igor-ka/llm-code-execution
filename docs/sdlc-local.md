@@ -19,6 +19,11 @@ shared half is not the document a change to `backend/verify.sh` invalidates; thi
 **The rule:** a PR that touches any of
 
 - `.claude/skills/**`
+- `.acb.json` — it holds the watched list, both escape hatches, the process-document path and
+  every component's check name. Those semantics used to live in `scripts/`, which is why that
+  directory is watched; they moved here, so this is watched too.
+- `.github/ruleset.json` — the required-check names in prose below are enumerated by hand, and
+  nothing else would notice them going stale
 - `backend/verify.sh`, `frontend/verify.sh` or `infra/verify.sh`
 - `infra/tests/**` — the self-tests `infra/verify.sh` runs first: the gates, and `bootstrap.sh`
   against a fake `gcloud` (a live run proves the script worked that day, not that the next edit is safe)
@@ -232,11 +237,23 @@ would contradict this process's own maxim — an instruction is a request, a che
 at exactly the moment of installation.
 
 **The live ruleset is the reference, not the document.** The document was generated once and is
-this repository's own thereafter; when the two disagree, read the live one first and find out why
-before overwriting it. The template that generated it was written from memory once and was wrong
-in three parameters, which is the whole reason for that ordering. `acb status` reports the one
-disagreement that matters on its own: a required check that no job in `.github/workflows/`
-produces, which blocks every merge until it is fixed.
+this repository's own thereafter; when the two disagree, read the live one first and find out why.
+The demonstrable reason for that ordering is `Deploy scripts`: `acb`'s renderer emits the two
+process checks plus one per component, so regenerating this file would produce a five-check
+document and silently stop gating the sixth. A generated file is the consumer's own precisely
+because the generator cannot know everything about it.
+
+**Which is why `--apply` is opt-in and the diff is the default.** Running
+`scripts/apply-ruleset.sh` with no arguments prints live-versus-document and writes nothing.
+`scripts/tests/apply-ruleset.test.sh` covers it, hosted by the `Deploy scripts` job.
+
+**Two things nothing checks, stated plainly rather than implied.** `acb status`'s drift check
+compares the *document* against the job names in `.github/workflows/` — not the document against
+the live ruleset. And nothing in CI runs it: no workflow and no `verify.sh` invokes `acb`. So the
+document can drift from live — a UI edit, a partial apply — and this repository stays green while
+its branch protection no longer matches the file describing it. Reading the diff before `--apply`
+is the control, and it is an instruction rather than a guarantee. A CI check would need a token
+that can read rulesets, which the read-only `SDLC docs` job deliberately does not have.
 
 Six checks are required today: `Backend checks`, `Frontend checks`, `Terraform checks`,
 `SDLC docs`, `PR shape` and `Deploy scripts`. Adding a seventh means adding the job first, merging
