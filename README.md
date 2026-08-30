@@ -424,21 +424,29 @@ could reject it. It reads the committed lockfile and needs no `node_modules`. Th
 a registry outage aborts the pass before the offline checks; reach for a single target then
 (`./verify.sh test`). It covers **dev dependencies too** — neither image ships them, but they
 execute here and in CI. Moderate and below stay visible in the output and are Dependabot's job; the
-threshold and the reasoning live in [`docs/sdlc.md`](docs/sdlc.md).
+threshold and the reasoning live in [`docs/sdlc-local.md`](docs/sdlc-local.md).
 
 The backend and frontend scripts accept `SKIP_INSTALL=1` (reuse the current environment) and `SKIP_PACKAGE=1`
 (host checks only, skip the image build).
 
-Three CI jobs have no local equivalent in a `verify.sh`, because each reads something that does
-not exist in a working tree. The **`SDLC docs`** job compares a pull request against its base ref
-and fails if the change touches the development process — the list is `process.watched` in
-[`.acb.json`](.acb.json) — without updating [`docs/sdlc-local.md`](docs/sdlc-local.md). It also
-hosts `scripts/check-conformance.sh` as a step, which proves each component's `verify.sh` knows
-every target it declares and fails when a target fails. The **`PR shape`** job fails a pull request
-whose body would close more than one issue — `[multi-child]` in the title is the visible exception.
-The **`Deploy scripts`** job runs the unit tests for the two deployment scripts, which no other
-workflow executes on a pull request. That document
-describes how a change gets from an idea to `main` — phases, gates, and how they meet CI.
+Three CI jobs are not mirrored by any `verify.sh`. The **`SDLC docs`** job compares a pull request
+against its base ref and fails if the change touches the development process — the list is
+`process.watched` in [`.acb.json`](.acb.json) — without updating
+[`docs/sdlc-local.md`](docs/sdlc-local.md). It also hosts `scripts/check-conformance.sh` as a step,
+which proves each component's `verify.sh` knows every target it declares and fails when a target
+fails. The **`PR shape`** job fails a pull request whose body would close more than one issue —
+`[multi-child]` in the title is the visible exception. The **`Deploy scripts`** job runs the unit
+tests for `scripts/deploy-cloud-run.sh` and `scripts/verify-deployment.sh`, which no other workflow
+executes on a pull request.
+
+The first two read pull-request metadata that does not exist in a working tree, so there is nothing
+to mirror. The third is different: **its two suites are exactly the local pre-push commands** —
+run `./scripts/tests/deploy-cloud-run.test.sh` and `./scripts/tests/verify-deployment.test.sh`
+before pushing. It has its own job because the workflows that own those scripts never run on a
+pull request that edits them, not because it cannot run locally.
+
+[`docs/sdlc.md`](docs/sdlc.md) describes how a change gets from an idea to `main` — phases, gates,
+and how they meet CI.
 
 A fourth pull-request workflow, **`Dependabot auto-merge`**, is not a check and gates nothing: on
 Dependabot PRs where every dependency is an npm patch or minor bump, it enables GitHub's native

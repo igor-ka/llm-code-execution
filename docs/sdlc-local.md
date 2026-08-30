@@ -38,8 +38,13 @@ production fails is not a gate.
 
 ## The three components
 
-cd backend  && ./verify.sh     # npm audit, eslint, prettier, tsc, vitest, build, docker images
-cd frontend && ./verify.sh     # npm audit, eslint, prettier, vitest, tsc -b && vite build, docker image
+**Not a skill — a script.** Each component has one `verify.sh` that is the single source of truth,
+and **CI runs the same script**, so local and CI cannot drift.
+
+```bash
+cd backend  && ./verify.sh     # npm audit, eslint, prettier, tsc, vitest, build, three images
+cd frontend && ./verify.sh     # npm audit, eslint, prettier, vitest, tsc -b && vite build, one image
+cd infra    && ./verify.sh     # gate self-tests, terraform fmt/init/validate, the repo-specific gates
 ```
 
 The backend `package` target builds **three** images: the dev backend image, the sandbox image,
@@ -96,6 +101,8 @@ not skip.
   dated exception in the `audit()` function, where review can see it; not a permanently green
   check. The threshold is a judgment call, so it is written down here rather than left in a flag.
 - **Postgres and Redis run as service containers**, and only the `Integration test` step sets
+  `DATABASE_URL` / `REDIS_URL` — which is exactly why the service-free `Test` step still skips
+  those suites.
 
 ## The deployment scripts
 
@@ -153,12 +160,11 @@ making silence proof.
 
 Its unit tests, `scripts/tests/deploy-cloud-run.test.sh` and
 `scripts/tests/verify-deployment.test.sh`, drive their scripts against fake `gcloud`, `docker`,
-`curl` and verifier executables on `PATH` — no project, no credentials, no network. They are hosted by the
-`SDLC docs` job for the same reason `dependabot-auto-merge-disarm.test.sh` is, and like the other
-lodgers **the same files are the local pre-push commands**: run
-`./scripts/tests/deploy-cloud-run.test.sh` and `./scripts/tests/verify-deployment.test.sh` before
-pushing, because no `verify.sh` covers them and the
-three that exist will stay green while this job goes red.
+`curl` and verifier executables on `PATH` — no project, no credentials, no network. They run in the
+**`Deploy scripts`** job (see the last section of this document), and **the same files are the
+local pre-push commands**: run `./scripts/tests/deploy-cloud-run.test.sh` and
+`./scripts/tests/verify-deployment.test.sh` before pushing, because no `verify.sh` covers them —
+all three components will stay green while that job goes red.
 
 One consequence of that tooling reaches the `verify.sh` scripts. Docker image tags are
 daemon-wide, and `backend/verify.sh`'s `package` target *builds* a tag and then *runs* it. With two
@@ -201,7 +207,9 @@ because it knows nothing about Cloud Run — so they get their own workflow and 
 check.
 
 Required, not merely present: `SDLC docs` **is** a required check, so hosting these in a job that
-was not would silently downgrade gating that already existed. `Terraform checks` is wrong by
+was not would silently downgrade gating that already existed. The ruleset entry is added *the
+moment this job lands on `main`* and not in the pull request that creates it — a required check
+whose job does not yet exist on the default branch blocks every merge, including its own. `Terraform checks` is wrong by
 subject and `Backend checks` already means something else, which is why it is a sixth name rather
 than a third home.
 

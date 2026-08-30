@@ -8,9 +8,11 @@ name: Deploy scripts
 # them — it cannot, because it knows nothing about Cloud Run.
 #
 # They get their own job rather than a step in an existing one. `Terraform checks` is wrong by
-# subject; `Backend checks` already means something else. And the job is added to the ruleset's
-# required checks in the same change: `SDLC docs` IS required, so hosting these in a job that is
-# not would silently downgrade gating that exists today.
+# subject; `Backend checks` already means something else. It is added to the ruleset's required
+# checks the moment this workflow reaches `main` — not in the pull request that creates it, because
+# a required check whose job does not yet exist on the default branch blocks every merge including
+# its own. Until then this job reports without gating, which is a downgrade from `SDLC docs`
+# (required) and is why the ruleset edit is the very next step rather than a follow-up.
 #
 # NO `paths:` filter, deliberately — a workflow-level path filter on a required check makes it
 # never report at all, which hangs every merge forever. .github/workflows/terraform.yml carries a

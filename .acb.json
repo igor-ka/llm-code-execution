@@ -9,6 +9,7 @@
       "^\\.claude/skills/",
       "^\\.github/workflows/",
       "^scripts/",
+      "^\\.acb\\.json$",
       "^backend/verify\\.sh$",
       "^frontend/verify\\.sh$",
       "^infra/verify\\.sh$",
