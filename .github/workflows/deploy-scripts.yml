@@ -1,0 +1,46 @@
+name: Deploy scripts
+
+# scripts/deploy-cloud-run.sh and scripts/verify-deployment.sh have no workflow that runs them on a
+# pull request. There is no deploy workflow in this repository yet — Phase 3 of epic #79 is in
+# progress and the environment has been torn down since 2026-08-25 — and when it lands it will run
+# on pushes to `main`, so a PR that edits either script will still never execute it. Their unit
+# tests lodged in `SDLC docs` for that reason, and the carried copy of that workflow does not carry
+# them — it cannot, because it knows nothing about Cloud Run.
+#
+# They get their own job rather than a step in an existing one. `Terraform checks` is wrong by
+# subject; `Backend checks` already means something else. And the job is added to the ruleset's
+# required checks in the same change: `SDLC docs` IS required, so hosting these in a job that is
+# not would silently downgrade gating that exists today.
+#
+# NO `paths:` filter, deliberately — a workflow-level path filter on a required check makes it
+# never report at all, which hangs every merge forever. .github/workflows/terraform.yml carries a
+# comment about the same trap. Both suites drive fakes on PATH and run in seconds.
+#
+# The job `name:` is a contract like the others. See docs/sdlc.md.
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: deploy-scripts-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only. Both suites drive fake `gcloud`, `docker`, `curl` and verifier executables on PATH —
+# no project, no credentials, no network. They run scripts from the PR branch, so this job must
+# never hold a writable token.
+permissions:
+  contents: read
+
+jobs:
+  deploy-scripts:
+    name: Deploy scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Test the Cloud Run deploy script
+        run: ./scripts/tests/deploy-cloud-run.test.sh
+      - name: Test the deployment verification script
+        run: ./scripts/tests/verify-deployment.test.sh

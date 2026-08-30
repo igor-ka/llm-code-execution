@@ -157,10 +157,11 @@ nothing a README reader relies on.
 ## CI job names are a contract
 
 The "Protect main" ruleset requires status checks by job name (`Backend checks`,
-`Frontend checks`, `SDLC docs`, `PR shape`, `Terraform checks`). Renaming or removing a CI job
-breaks merges until the ruleset's required checks are updated to match. Change what runs *inside* a job freely; keep
+`Frontend checks`, `SDLC docs`, `PR shape`, `Terraform checks`, `Deploy scripts`). Renaming or
+removing a CI job breaks merges until the ruleset's required checks are updated to match. Change what runs *inside* a job freely; keep
 its name stable, or update the ruleset in the same PR.
 
-`SDLC docs` and `PR shape` (PRs only, each in its own workflow) are the two deliberate exceptions
-to the `verify.sh` mirroring rule above: one diffs a PR against its base, the other reads the PR
-body, and neither has a single-working-tree equivalent.
+`SDLC docs`, `PR shape` and `Deploy scripts` (PRs only, each in its own workflow) are the
+deliberate exceptions to the `verify.sh` mirroring rule above: the first diffs a PR against its
+base, the second reads the PR body, and the third runs the unit tests for two deployment scripts
+that no `verify.sh` owns. None has a single-working-tree equivalent as a CI check.
