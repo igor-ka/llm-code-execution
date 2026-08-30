@@ -79,15 +79,15 @@ Cannot reproduce on demand:
 
 For test failures, use the component's own targets:
 ```bash
-# The whole suite
+# The whole suite, from the component's directory
 ./verify.sh test
-
-# One test, and the same test in isolation — if it passes alone and fails in the
-# suite, the bug is test pollution, not the code under test.
 ```
-Running *one* test is the test runner's own invocation, not a `verify.sh` target: the contract
-covers whole targets, and a focused run is a debugging affordance. `CLAUDE.md` records this
-repository's.
+
+Running *one* test, and running it in isolation, are the test runner's own invocations rather than
+`verify.sh` targets: the contract covers whole targets, and a focused run is a debugging
+affordance. A test that passes alone and fails in the suite is test pollution, not a bug in the
+code under test. `CLAUDE.md` records this repository's focused-test command.
+
 
 ### Step 2: Localize
 
@@ -110,7 +110,7 @@ git bisect start
 git bisect bad                    # Current commit is broken
 git bisect good <known-good-sha> # This commit worked
 # Git will checkout midpoint commits; run your test at each
-git bisect run ./verify.sh test
+git bisect run sh -c 'cd <component> && ./verify.sh test'
 ```
 
 ### Step 3: Reduce

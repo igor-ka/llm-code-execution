@@ -234,6 +234,40 @@ vcheck "a second allowed ecosystem works"       "eligible"                    "n
 vcheck "more than one commit is not eligible"   "only the first is verified"  "npm_and_yarn" 3 "$PATCH"
 vcheck "non-array metadata is handled"          "no dependency metadata"      "npm_and_yarn" 1 '{}'
 
+# --- The write-scoped job must not run for a rejected ecosystem ---------------------------------
+#
+# `gate` runs for every `dependabot/*` branch. When the allow-list rejects the ecosystem its later
+# steps skip, but a job whose steps skip still reports `success` — so `needs.gate.result !=
+# 'skipped'` is TRUE and `apply` would run. `apply` holds contents:write and the App private key,
+# and its first step executes a third-party action read from the merge ref: precisely the pull
+# request that bumps that action's pin. Nothing else in this file would notice.
+apply_if="$(awk '/^  apply:/ { inapply = 1 } inapply && /^    if:/ { print; exit }' "$WORKFLOW")"
+if [[ "$apply_if" == *"needs.gate.outputs.ecosystem != 'skip'"* ]]; then
+  printf 'ok   %-40s\n' "apply is gated on the ecosystem verdict"
+else
+  printf 'FAIL %-40s got %q\n' "apply is gated on the ecosystem verdict" "$apply_if"
+  fails=$((fails + 1))
+fi
+
+# The clause above is only meaningful if the verdict is actually published as a job output.
+# shellcheck disable=SC2016  # ${{ }} is GitHub Actions syntax being matched, not a shell expansion
+if grep -q 'ecosystem: ${{ steps.ecosystem.outputs.verdict }}' "$WORKFLOW"; then
+  printf 'ok   %-40s\n' "the ecosystem verdict is a job output"
+else
+  printf 'FAIL %-40s\n' "the ecosystem verdict is a job output"
+  fails=$((fails + 1))
+fi
+
+# And only if the disarm path still runs when the gate HARD-FAILS, where the ecosystem output is
+# 'allowed' and the verdict is empty. `!= 'skip'` keeps that path; `== 'allowed'` would too, but a
+# future edit to `== 'eligible'` would silently make disarming fail open.
+if [[ "$apply_if" == *"!cancelled()"* ]]; then
+  printf 'ok   %-40s\n' "a failed gate still reaches disarm"
+else
+  printf 'FAIL %-40s got %q\n' "a failed gate still reaches disarm" "$apply_if"
+  fails=$((fails + 1))
+fi
+
 if [[ "$fails" -gt 0 ]]; then
   echo
   echo "$fails case(s) failed."

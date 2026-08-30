@@ -65,9 +65,12 @@ unskipped — CI does not skip.
       relies on — commands, layout, verification/setup steps, security posture, or the roadmap.
       Keep this tight: internal-only refactors don't touch it.
 - [ ] Decisions worth preserving recorded as an ADR in `docs/adr/` (see `documentation-and-adrs`).
-- [ ] `docs/sdlc.md` updated if the change alters the development process itself — the skills in
-      `.claude/skills/`, either `verify.sh`, or `.github/workflows/ci.yml`. This is enforced by
-      the `SDLC docs` CI job.
+- [ ] The process document updated if the change alters the development process itself — the
+      skills in `.claude/skills/`, any component's `verify.sh`, anything in `scripts/`, or a
+      workflow in `.github/workflows/`. Which document that is comes from `process.doc` in
+      `.acb.json`, and the exact watched list from `process.watched` beside it; `docs/sdlc.md` is
+      carried and must not be edited locally when `process.doc` names a companion. Enforced by the
+      `SDLC docs` CI job.
 - [ ] Documentation describes the current state in timeless language, not the change history.
 
 ### Review (mandatory — never skipped because a change "looks small")

@@ -79,6 +79,11 @@ jobs:
       pull-requests: read
     outputs:
       verdict: ${{ steps.gate.outputs.verdict }}
+      # Separate from `verdict`, and the difference is load-bearing. When the allow-list rejects an
+      # ecosystem the gate step never runs, so `verdict` is empty — indistinguishable from "the
+      # gate failed", which is a state that MUST still reach `apply` so it can disarm. `apply`
+      # reads this one to skip entirely.
+      ecosystem: ${{ steps.ecosystem.outputs.verdict }}
     steps:
       # The ecosystem allow-list. It runs BEFORE dependabot/fetch-metadata, which is the security
       # requirement the job-level `if:` used to carry: on `pull_request` the workflow is read from
@@ -190,8 +195,20 @@ jobs:
     # `!cancelled()` rather than the implicit `success()`: if `gate` FAILS, its verdict is empty,
     # which is not 'eligible', and the disarm branch below must still run. Skipping on failure
     # would make the only mechanism that un-arms a PR fail open. `needs.gate.result != 'skipped'`
-    # keeps this off PRs that were never Dependabot npm bumps in the first place.
-    if: ${{ !cancelled() && needs.gate.result != 'skipped' }}
+    # keeps this off pull requests that were never Dependabot bumps in the first place.
+    #
+    # THE ECOSYSTEM CLAUSE IS A SECURITY CONTROL, not tidiness. `gate` runs for every
+    # `dependabot/*` branch and *succeeds* when the allow-list rejects the ecosystem — its later
+    # steps are skipped, but a job whose steps skip still reports `success`, so
+    # `result != 'skipped'` is TRUE. Without this clause a `dependabot/github_actions/…` pull
+    # request bumping the `create-github-app-token` pin below would reach this job, whose first
+    # step runs that action FROM THE MERGE REF with the App private key — exactly the
+    # "execute the replacement action" attack the allow-list is hoisted to the first step to
+    # prevent, arriving in the only job that holds a writable token.
+    #
+    # An empty `ecosystem` output means the gate job never got that far (a hard failure), and that
+    # case must still run the disarm branch — so the test is `!= 'skip'`, not `== 'allowed'`.
+    if: ${{ !cancelled() && needs.gate.result != 'skipped' && needs.gate.outputs.ecosystem != 'skip' }}
     # This job runs no third-party code — only `gh`, preinstalled on the runner.
     #
     # `contents: write` is required. It was first shipped omitted, on the argument that

@@ -4,9 +4,9 @@
 > **The examples below use Vitest's API rather than Jest's**: `vi.fn()`,
 > `vi.mock()`, and `await vi.importActual()` (async, unlike Jest's `requireActual`). Import
 > the helpers explicitly — `import { describe, it, expect, vi } from 'vitest'` — Vitest does
-<!-- /portability-exempt -->
 > not inject globals here. The **Playwright** section is illustrative only: Playwright is not
 > a dependency of this repo and there is no E2E suite.
+<!-- /portability-exempt -->
 
 
 Quick reference of JavaScript/TypeScript testing patterns — Jest, React Testing Library, Supertest, and Playwright — illustrating the universal principles from the `test-driven-development` skill. The principles (Arrange-Act-Assert, naming, mock discipline, anti-patterns) apply in any ecosystem; the syntax and tooling shown here are JS/TS-specific. In another stack, follow the same principles with the repository's own test framework and commands.

@@ -49,7 +49,7 @@ The examples below use TypeScript, which is what this repo is written in.
 | Suites needing a live service | `./verify.sh test:integration` |
 | One focused test | the runner's own invocation — `CLAUDE.md` records it |
 
-One trap that generalises:
+Two traps that generalise:
 
 - **A suite gated on an environment variable self-skips when that variable is unset.** A green
   `./verify.sh test` is *not* evidence it ran. Set the variable and use
@@ -62,8 +62,10 @@ One trap that generalises:
 
 Test layout follows the component's own convention — a sibling `tests/` directory, or files
 beside the source they cover.
-This repo already applies the "prefer real implementations over mocks" rule above: `memoryStore`
-is a **fake**, not a mock, and it doubles as the contract oracle.
+
+The contract-suite pattern above is the "prefer real implementations over mocks" rule applied: the
+in-memory implementation is a **fake**, not a mock, and it doubles as the oracle the real one is
+measured against.
 
 ## The TDD Cycle
 
