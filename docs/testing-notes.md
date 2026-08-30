@@ -23,6 +23,18 @@ DATABASE_URL=postgres://app:app@localhost:5432/app REDIS_URL=redis://localhost:6
 The target runs when *either* variable is set and prints which half is self-skipping. A partial
 run is better than none and is **not** full coverage; the message says which you got.
 
+## Ruling out test pollution
+
+If a test passes alone and fails in the suite, the bug is in the tests, not the code under test.
+Vitest runs files in parallel by default, so the isolating run is:
+
+```bash
+cd backend && npx vitest run tests/<path>.test.ts --no-file-parallelism
+```
+
+`git bisect` takes the same shape — `git bisect run ./verify.sh test` for the whole suite, or the
+focused invocation above when the suite is slow.
+
 ## One contract suite, two implementations
 
 `HistoryStore` has two implementations — `memoryStore` and `PostgresHistoryStore` — and one
