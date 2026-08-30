@@ -4,9 +4,9 @@
 # the "PR shape" job runs this same file as its first step, so the two cannot drift.
 set -uo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 SCRIPT="./check-pr-shape.sh"
-export GITHUB_REPOSITORY="igor-ka/llm-code-execution"
+export GITHUB_REPOSITORY="example/repo"
 
 pass=0
 fail=0
@@ -51,10 +51,10 @@ case_ "the same issue twice counts once" 0 "feat: thing" \
   "Closes #64. Superseded text, still closes #64."
 
 case_ "bare and URL forms of one issue count once" 0 "feat: thing" \
-  "Closes #64 — see also Closes https://github.com/igor-ka/llm-code-execution/issues/64"
+  "Closes #64 — see also Closes https://github.com/example/repo/issues/64"
 
 case_ "http and www URL forms normalise too" 0 "feat: thing" \
-  "Closes #64 — see also Closes http://www.github.com/igor-ka/llm-code-execution/issues/64"
+  "Closes #64 — see also Closes http://www.github.com/example/repo/issues/64"
 
 case_ "cross-repo reference is distinct from a bare one" 1 "feat: thing" \
   "Closes #64 and closes other/repo#64"
@@ -101,9 +101,11 @@ case_ "an HTML comment marker inside a fence does not disable the check" 1 "feat
 
 Closes #65'
 
+# shellcheck disable=SC2016  # literal backticks are the fixture; expansion would defeat it
 case_ "a closer in an inline code span is ignored" 0 "feat: thing" \
   'Closes #64 and the doc says `Closes #65`'
 
+# shellcheck disable=SC2016  # as above — the backticks are data, not syntax
 case_ "a closer in a double-backtick span is ignored" 0 "feat: thing" \
   'Closes #64 and the doc says ``Closes #65`` verbatim'
 
@@ -123,11 +125,11 @@ still inside the quote
 # find_closers is case-insensitive; normalise was not, so a mixed-case URL matched and was then
 # silently dropped, and a mixed-case owner/repo survived sort -u as a second issue.
 case_ "a mixed-case GitHub URL is not silently dropped" 1 "feat: thing" \
-  "Closes https://GitHub.com/igor-ka/llm-code-execution/issues/64
+  "Closes https://GitHub.com/example/repo/issues/64
 Closes #65"
 
 case_ "mixed-case owner/repo dedupes with the canonical form" 0 "feat: thing" \
-  "Closes igor-ka/llm-code-execution#64 and closes Igor-Ka/LLM-Code-Execution#64"
+  "Closes example/repo#64 and closes Example/Repo#64"
 
 case_ "a multi-line HTML comment is ignored" 0 "feat: thing" \
   "Closes #64

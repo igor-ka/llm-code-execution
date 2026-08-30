@@ -1,0 +1,68 @@
+{
+  "template": {
+    "repo": "igor-ka/acb",
+    "commit": "9064b5498c1e4be99f1b4d4c17cc08bdad3e9720"
+  },
+  "process": {
+    "doc": "docs/sdlc-local.md",
+    "watched": [
+      "^\\.claude/skills/",
+      "^\\.github/workflows/",
+      "^scripts/",
+      "^\\.acb\\.json$",
+      "^backend/verify\\.sh$",
+      "^frontend/verify\\.sh$",
+      "^infra/verify\\.sh$",
+      "^infra/tests/"
+    ],
+    "prShapeHatch": "[multi-child]",
+    "sdlcSyncHatch": "[skip-sdlc-sync]",
+    "dependabotEcosystems": [
+      "npm_and_yarn"
+    ]
+  },
+  "components": [
+    {
+      "id": "backend",
+      "checkName": "Backend checks",
+      "runner": "ubuntu-latest",
+      "targets": [
+        "install",
+        "audit",
+        "lint",
+        "format",
+        "test",
+        "build",
+        "migrate",
+        "test:integration",
+        "package"
+      ]
+    },
+    {
+      "id": "frontend",
+      "checkName": "Frontend checks",
+      "runner": "ubuntu-latest",
+      "targets": [
+        "install",
+        "audit",
+        "lint",
+        "format",
+        "test",
+        "build",
+        "package"
+      ]
+    },
+    {
+      "id": "infra",
+      "checkName": "Terraform checks",
+      "runner": "ubuntu-latest",
+      "targets": [
+        "selftest",
+        "format",
+        "install",
+        "lint",
+        "gates"
+      ]
+    }
+  ]
+}

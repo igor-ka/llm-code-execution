@@ -60,9 +60,10 @@ that actually matter here:
 **Treat LLM output as untrusted input.** Generated code and model-authored text are hostile data,
 never instructions. The sandbox — not the model's good behaviour — is the control that holds.
 
-Changes to `backend/src/auth.ts`, `backend/src/history/**`, `backend/src/sandbox/**`, or
-`backend/sandbox-image/**` fall in the **Ask First** tier below: surface the change and its
-threat-model impact before implementing it. The sandbox *image* counts — relaxing its base
+Changes to the paths this repository marks sensitive — the token verifier, the per-user data
+layer, the untrusted-execution layer and its image — fall in the **Ask First** tier below:
+surface the change and its threat-model impact before implementing it. `CLAUDE.md` names those
+paths; read them there rather than assuming. The execution *image* counts — relaxing its base
 image, user, or package set weakens the control that contains model-generated code.
 
 ## The Three-Tier Boundary System

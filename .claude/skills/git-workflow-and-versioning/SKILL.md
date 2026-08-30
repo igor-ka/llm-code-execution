@@ -155,11 +155,10 @@ refactor/<short-description>  → refactor/auth-module
 `git worktree add`, and never with the built-in worktree tool.** Both of those produce a directory
 that cannot run anything:
 
-- no stack slot, so its ports collide with the main checkout's on all four services;
-- no `node_modules` on either side;
-- none of the gitignored files a worktree does not inherit — `.env.shared` (the API key),
-  `frontend/.env.local` (Auth0), `.claude/settings.local.json` (the permission allowlist, whose
-  absence makes a fresh session re-prompt for everything already granted).
+- no installed dependencies;
+- none of the gitignored files a worktree does not inherit — shared secrets, per-tree environment,
+  and `.claude/settings.local.json` (the permission allowlist, whose absence makes a fresh session
+  re-prompt for everything already granted).
 
 ```bash
 # From the MAIN checkout. Branch defaults to feat/<slug>.
@@ -175,16 +174,16 @@ those files, and installs both sides. It refuses to run from inside a worktree, 
 runs queue briefly for the slot claim rather than colliding on it.
 
 **It exits non-zero rather than claiming success on a worktree that cannot run** — if the shared
-env or the Auth0 values are absent, or merely unfilled (a copied `.env.shared.example` looks
-identical to a configured one), it prints no ✓, names exactly what is missing, and returns 1.
+environment is absent, or merely unfilled (a copied `.env.example` looks identical to a configured
+one), it prints no ✓, names exactly what is missing, and returns 1.
 Check the exit status; do not assume the tree is usable because the command finished.
 
 **When to use one:** every child issue of a plan — the PR-sized slice. Not for answering a
 question, a one-line doc fix, or anything that will not become its own PR.
 
-**The pool is four slots** (the main checkout plus three), bounded by the frontend origins
-registered in the Auth0 SPA, whose allowed-origins list is exact-match. `scripts/worktree-new.sh`
-fails with a clear message when they are all taken.
+**The pool is bounded**, usually by something outside the repository — an identity provider's
+exact-match origin allowlist is the common one. `scripts/worktree-new.sh` fails with a clear
+message when every slot is taken.
 
 When the PR merges, free the slot:
 
@@ -236,7 +235,7 @@ THINGS I DIDN'T TOUCH (intentionally):
 
 POTENTIAL CONCERNS:
 - The Zod schema is strict — rejects extra fields. Confirm this is desired.
-- Added zod as a dependency (72KB gzipped) — already in package.json
+- Added zod as a dependency (72KB gzipped) — already in the manifest
 ```
 
 This pattern catches wrong assumptions early and gives reviewers a clear map of the change. The "DIDN'T TOUCH" section is especially important — it shows you exercised scope discipline and didn't go on an unsolicited renovation.
@@ -256,9 +255,9 @@ git diff --staged | grep -i "password\|secret\|api_key\|token"
 cd backend  && ./verify.sh      # or: cd frontend && ./verify.sh
 ```
 
-**Do not substitute bare `npm test` / `npm run lint` / `npx tsc --noEmit` for `verify.sh`.**
-There is no root `package.json`, and that sequence runs a *different* check set than CI
-(no `prettier --check`, no build, no image build, no `test:integration`) — so a commit can
+**Do not substitute the underlying tools for `verify.sh`.** Calling the test runner, the linter
+and the type checker by hand runs a *different* check set than CI — it skips the formatter, the
+build, the image build and the integration targets — so a commit can
 pass it and still fail CI. `verify.sh` is the single source of truth precisely so local and
 CI cannot diverge; adding a second definition of "the checks" is the thing it exists to
 prevent. For the same reason this repo does not use husky/lint-staged.

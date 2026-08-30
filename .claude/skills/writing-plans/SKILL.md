@@ -232,3 +232,5 @@ even when both buckets come back empty.
 
 Once the user has seen the review and the plan is settled, implement it task by task,
 committing as you go. Run the project's checks before pushing (see `CLAUDE.md`).
+
+<!-- round-trip marker: an improvement discovered while using the process -->

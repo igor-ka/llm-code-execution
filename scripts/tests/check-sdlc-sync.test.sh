@@ -16,12 +16,33 @@
 # touches watched files is red by construction.
 set -uo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 SCRIPT="./check-sdlc-sync.sh"
 EXEMPT_LINE="author is dependabot[bot]"
 
 pass=0
 fail=0
+
+# The script now reads its knobs from .acb.json, so the suite supplies one. It pins the same
+# watched set the table below asserts against — the table's job shifts from "this repository's
+# path list is right" to "the alternation jq builds from process.watched behaves", which is the
+# right test to carry once the list belongs to the consumer.
+CFGDIR="$(mktemp -d)"
+trap 'rm -rf "$CFGDIR"' EXIT
+cat > "$CFGDIR/.acb.json" <<'JSON'
+{ "template": { "repo": "example/repo", "commit": "0" },
+  "process": {
+    "doc": "docs/sdlc.md",
+    "sdlcSyncHatch": "[skip-sdlc-sync]",
+    "watched": [
+      "^\\.claude/skills/", "^\\.github/workflows/", "^scripts/",
+      "^backend/verify\\.sh$", "^frontend/verify\\.sh$", "^infra/verify\\.sh$",
+      "^infra/tests/"
+    ]
+  },
+  "components": [] }
+JSON
+export ACB_CONFIG="$CFGDIR/.acb.json"
 
 run() { PR_TITLE="$1" PR_ACTOR="$2" "$SCRIPT" 2>&1; }
 
@@ -68,17 +89,17 @@ refutes() {
 echo "check-sdlc-sync.sh (early exits)"
 
 asserts "the [skip-sdlc-sync] title hatch exits 0" \
-  0 "skip-sdlc-sync" "chore: reflow a comment [skip-sdlc-sync]" "igor-ka"
+  0 "skip-sdlc-sync" "chore: reflow a comment [skip-sdlc-sync]" "a-human"
 
 asserts "a dependabot PR is exempt" \
   0 "$EXEMPT_LINE" "chore(deps): bump actions/checkout from 4 to 5" "dependabot[bot]"
 
 asserts "the hatch still works for a bot-shaped title from a human" \
-  0 "skip-sdlc-sync" "chore(deps): bump something [skip-sdlc-sync]" "igor-ka"
+  0 "skip-sdlc-sync" "chore(deps): bump something [skip-sdlc-sync]" "a-human"
 
 # The exemption must be exact. A human whose title mentions the bot is not Dependabot, and
 # neither is a lookalike account name.
-refutes "a human author is not exempt" "chore(deps): mimic dependabot[bot]" "igor-ka"
+refutes "a human author is not exempt" "chore(deps): mimic dependabot[bot]" "a-human"
 
 refutes "a lookalike actor is not exempt" "chore(deps): bump something" "dependabot"
 
@@ -94,11 +115,11 @@ refutes "a glob-collision actor is not exempt" "chore(deps): bump something" "de
 # typo in the alternation (a missing backslash, a stray anchor) silently un-watches a path and
 # the failure mode is invisible — PRs go green that should have been red.
 #
-# Extracted from the script rather than duplicated here, because a copy would drift and then
-# assert against itself. Single-quoted assignment on its own line is the shape it has; if that
-# ever changes, this extraction yields empty and every case below fails loudly, which is the
-# correct outcome.
-WATCHED_RE="$(sed -n "s/^WATCHED_RE='\(.*\)'$/\1/p" "$SCRIPT")"
+# Built the same way the script builds it — from the fixture config, through the same jq
+# expression — rather than scraped out of the source. Scraping was correct while the pattern was
+# a literal assignment; it is now a jq call, and a scrape would yield empty. An empty pattern
+# matches everything, which would invert every `unwatched` case below into a silent pass.
+WATCHED_RE="$(jq -r '[.process.watched[]] | join("|")' "$ACB_CONFIG")"
 if [[ -z "$WATCHED_RE" ]]; then
   bad "WATCHED_RE extraction" "could not parse WATCHED_RE out of $SCRIPT" ""
 fi

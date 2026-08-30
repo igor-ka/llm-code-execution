@@ -213,17 +213,17 @@ One-paragraph description of what this project does.
 
 ## Quick Start
 1. Clone the repo
-2. Install dependencies: `npm install`
+2. Install dependencies: `./verify.sh install`
 3. Set up environment: `cp .env.example .env`
-4. Run the dev server: `npm run dev`
+4. Run the dev server: the component's dev command
 
 ## Commands
 | Command | Description |
 |---------|-------------|
-| `npm run dev` | Start development server |
-| `npm test` | Run tests |
-| `npm run build` | Production build |
-| `npm run lint` | Run linter |
+| the component's dev command | Start development server |
+| `./verify.sh test` | Run tests |
+| `./verify.sh build` | Production build |
+| `./verify.sh lint` | Run linter |
 
 ## Architecture
 Brief overview of the project structure and key design decisions.
