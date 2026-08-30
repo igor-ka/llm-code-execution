@@ -100,8 +100,12 @@ else bad "a malformed document is refused before any call" "exit $rc, calls=$(ca
 
 # 7. An unset GITHUB_REPOSITORY is loud. A default would silently rewrite another repository's
 #    branch protection.
+#
+#    `unset` explicitly, inside the subshell. GitHub Actions exports GITHUB_REPOSITORY into every
+#    step, so "I did not pass it" is not the same as "it is unset" — this case passed locally and
+#    failed in CI on exactly that difference.
 d="$(mkrepo "$GOOD_DOC")"
-out="$( cd "$d" && PATH="$TMP/bin:$PATH" ./scripts/apply-ruleset.sh 2>&1 )"; rc=$?
+out="$( cd "$d" && unset GITHUB_REPOSITORY && PATH="$TMP/bin:$PATH" ./scripts/apply-ruleset.sh 2>&1 )"; rc=$?
 if [[ $rc -ne 0 && "$out" == *"GITHUB_REPOSITORY"* ]]; then ok "an unset GITHUB_REPOSITORY stops the script"
 else bad "an unset GITHUB_REPOSITORY stops the script" "exit $rc: $out"; fi
 
