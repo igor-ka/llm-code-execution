@@ -1,8 +1,10 @@
 # Testing Patterns Reference (JavaScript/TypeScript)
 
-> **This repo runs Vitest, not Jest.** Examples below have been converted: `vi.fn()`,
+<!-- portability-exempt: this file's examples are written in one runner's API; the note says which -->
+> **The examples below use Vitest's API rather than Jest's**: `vi.fn()`,
 > `vi.mock()`, and `await vi.importActual()` (async, unlike Jest's `requireActual`). Import
 > the helpers explicitly — `import { describe, it, expect, vi } from 'vitest'` — Vitest does
+<!-- /portability-exempt -->
 > not inject globals here. The **Playwright** section is illustrative only: Playwright is not
 > a dependency of this repo and there is no E2E suite.
 

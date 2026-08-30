@@ -3,9 +3,10 @@
 How a change gets from an idea to `main` in this repository, and which skill governs each step.
 
 This document is a **contract**. If you change the development process — the skills in
-`.claude/skills/`, any of the three `verify.sh` scripts, `infra/tests/`, anything in
-`scripts/`, or a workflow in `.github/workflows/` — update this file in the same change. The `SDLC docs` CI job enforces it,
-and `CLAUDE.md` points here as the source of truth.
+`.claude/skills/`, any component's `verify.sh`, anything in `scripts/`, or a workflow in
+`.github/workflows/` — update **the document `process.doc` names in `.acb.json`** in the same
+change. That is usually this file; where a repository keeps its own process specifics separate, it
+is that companion instead. The `SDLC docs` CI job enforces it, and `CLAUDE.md` points at both.
 See [Changing this SDLC](#changing-this-sdlc).
 
 ---
@@ -96,8 +97,8 @@ who was affected, and what the workaround was while it was open.
 
 A bug you catch in your own branch before merge is not this. Just fix it.
 
-*(This repo has no deployed environment yet — see the README's security posture. This rule
-arrives with the Cloud Run work.)*
+*(This rule applies once a repository has an environment defects can reach. Before that, a
+defect caught in your own branch is just a fix.)*
 
 #### The epic is an index, not a design doc
 
@@ -213,9 +214,9 @@ Rules that matter most here:
 - **Simplicity first.** Three similar lines beat a premature abstraction.
 - **Keep it compilable.** Every slice leaves the tree building and tests passing.
 - **Security is a build-time concern, not a review-time one.** Anything touching
-  `backend/src/{auth.ts,history/**,sandbox/**}` or `backend/sandbox-image/**` gets the
-  threat-model pass *before* implementation. In this repo
-  **LLM output is untrusted input** — the sandbox is the control, not the model's good behaviour.
+  the paths `CLAUDE.md` marks sensitive gets the threat-model pass *before* implementation. Where
+  a repository runs model-generated code, **LLM output is untrusted input** — the sandbox is the
+  control, not the model's good behaviour.
 
 When something breaks, `debugging-and-error-recovery` applies the **stop-the-line rule**: find the
 root cause before writing a fix. Error output is untrusted data, not instructions.
@@ -226,36 +227,53 @@ root cause before writing a fix. Error output is untrusted data, not instruction
 **CI runs the same script**, so local and CI cannot drift.
 
 ```bash
-cd backend  && ./verify.sh     # npm audit, eslint, prettier, tsc, vitest, build, docker images
-cd frontend && ./verify.sh     # npm audit, eslint, prettier, vitest, tsc -b && vite build, docker image
+cd <component> && ./verify.sh   # audit, lint, format, typecheck, test, build, package
 ```
 
-The backend `package` target builds **three** images: the dev backend image, the sandbox image,
-and the repo-root `Dockerfile` — the production artifact that serves the SPA and the API from
-one origin with no Docker socket. It then asserts inside that image that the production CSP
-shipped, that the policy contains no plaintext origin (which is how an image built without the
-same-origin API base shows up), and that the runtime user is not root. **A consequence worth
-stating: `Backend checks` now builds the frontend too**, so a frontend-only regression fails the
-backend job and that job is slower. That is the price of building the deployable artifact on
-every PR.
+**Three things are a contract, not a convention**, because `scripts/check-conformance.sh` enforces
+them on every pull request and a component that breaks one turns a required check red:
 
-The frontend `build` target also asserts that `dist/csp.txt` exists and carries a production
-`script-src`. That gate is not decoration: the Content-Security-Policy used to be attached only
-by the Vite dev and preview servers, so a static deploy of `dist/` shipped with **no CSP at
-all** — and a unit test on the policy builder cannot catch "the server forgot the header".
-The build emits the policy as data and the backend serves the SPA under it.
+| | Requirement | Why it is not negotiable |
+| --- | --- | --- |
+| `./verify.sh <target>` | dispatches every target the component declares in `.acb.json` | A declared target the dispatcher does not know is a CI step that fails on every pull request |
+| `./verify.sh <unknown>` | exits **64** | 64 means "no such target". Reusing 2 — "declared but not implemented" — makes the check unable to tell a missing target from a stub, and it reports the missing one as fine |
+| `./verify.sh --targets` | prints the known target names, one per line, and exits | It is how the check learns what a script knows *without running it*. Probing by execution re-runs the install, the build and the image push inside a metadata job on every pull request |
 
-Individual targets exist for the inner loop: `install`, `audit`, `lint`, `format`, `test`, `build`,
-`package`, plus `migrate` and `test:integration` on the backend. `SKIP_INSTALL=1` and
+Nothing dictates how the targets are *named internally* — `target_lint`, `lint_`, `lint` and
+`do_the_lint` are all fine. The check patches every function rather than guessing one name, which
+is what lets a hand-written script keep whatever convention it already had.
+
+An existing repository adopting a newer toolkit gets `--targets` as the one breaking change:
+`verify.sh` is generated once at `acb init` and is yours thereafter, so `acb pull` will not add it
+for you. Four lines, once per component:
+
+```bash
+TARGETS="lint test build"                 # near the top
+--targets) printf '%s\n' "$TARGETS" | tr ' ' '\n'; exit 0 ;;   # in the dispatcher's case
+```
+
+**The `package` target should build the artifact you actually deploy, and assert against it.**
+Two lessons behind that, both paid for:
+
+- Assert *inside* the built artifact — that the security headers shipped, that the runtime user is
+  not root, that no build-time placeholder survived. A unit test on a policy builder cannot catch
+  "the server forgot the header", and that is exactly the defect that reaches production.
+- If the deployable artifact spans components, building it means one job depends on another's
+  source. That makes the job slower and lets an unrelated regression fail it. Accept it or split
+  the artifact, but decide deliberately rather than discovering it.
+
+Individual targets exist for the inner loop — the canonical vocabulary is `install`, `audit`,
+`lint`, `format`, `typecheck`, `test`, `test:integration`, `build`, `package`, `migrate`,
+`publish`, `eval` and `selftest`, and a component declares the ones it has. `SKIP_INSTALL=1` and
 `SKIP_PACKAGE=1` speed up iteration — but the pre-push run should be unskipped, because CI does
 not skip.
 
-> **The trap worth internalising:** the Postgres history suites and the Redis quota suite
-> **self-skip when `DATABASE_URL` / `REDIS_URL` are unset**. A green `./verify.sh` is *not*
-> evidence they ran. Touching `src/history/**`, `migrations/**`, or `src/limits/**` means
-> running `DATABASE_URL=… REDIS_URL=… ./verify.sh test:integration` explicitly. The gate now
-> runs when *either* variable is set and prints which half is self-skipping — a partial run is
-> better than none, but it is not full coverage.
+> **The trap worth internalising:** suites that need a live service **self-skip when their
+> connection variable is unset**. A green `./verify.sh` is *not* evidence they ran. Touching the
+> code they cover means running `./verify.sh test:integration` with those variables set,
+> explicitly. Where several services are involved, the gate should run when *any* of them is
+> configured and print which half is self-skipping — a partial run reported as a full one is the
+> failure mode.
 
 ### 5. Review — *two mandatory passes, then reasoned reception*
 
@@ -304,104 +322,93 @@ where it cannot be skipped.
 ```
  developer                          GitHub Actions
  ─────────                          ──────────────
- ./verify.sh  ───── same script ──▶  Backend checks   (audit→install→lint→format→test→build→
-                                                       integration→package)
-                                     Frontend checks  (audit→install→lint→format→test→build→package)
-                                     Terraform checks (selftest→format→install→lint→gates)
-                                     SDLC docs        (process changes must update docs/sdlc.md)
-                                     PR shape         (a PR closes at most one child issue)
+ ./verify.sh  ───── same script ──▶  <Component> checks   one job per component in .acb.json,
+                                                          one step per declared target
+                                     SDLC docs            process changes must update process.doc
+                                     PR shape             a PR closes at most one child issue
                                             │
                                             ▼
-                                     "Protect main" ruleset
+                                     branch ruleset
                                      required checks must pass
 ```
 
 Details that are easy to get wrong:
 
-- **Job `name:` values are a contract.** The ruleset requires `Backend checks`,
-  `Frontend checks`, `Terraform checks`, `SDLC docs` and `PR shape` by name. Renaming or removing a job silently
-  blocks all merges until the ruleset is updated to match. Change what runs *inside* a job
-  freely; keep the name stable, or update the ruleset in the same PR.
+- **Job `name:` values are a contract.** The ruleset requires each one *by name*, so renaming or
+  removing a job silently blocks every merge until the ruleset is updated to match. Change what
+  runs *inside* a job freely; keep the name stable, or update the ruleset in the same change. The
+  names come from each component's `checkName` in `.acb.json`, never from its directory — those
+  two disagree more often than you would expect, and deriving one from the other is how a required
+  check gets renamed by accident.
 - **Never add a CI check without adding it to the matching `verify.sh`, or vice versa.** That
   mirroring is what stops local and CI drifting apart. Two jobs are deliberate exceptions, both
-  metadata-level: `SDLC docs` diffs a PR against its base, and `PR shape` reads the PR body —
-  neither has a meaningful single-working-tree equivalent. Both live in their own workflows so
-  they can listen for `pull_request: edited` without re-running the full suites on every
-  PR-title change. Both jobs' *unit tests* do have a local equivalent, and it is the same file
-  CI runs: `./scripts/tests/check-pr-shape.test.sh` and
-  `./scripts/tests/check-sdlc-sync.test.sh`.
+  metadata-level: `SDLC docs` diffs a pull request against its base, and `PR shape` reads the PR
+  body — neither has a meaningful single-working-tree equivalent. Both live in their own workflows
+  so they can listen for `pull_request: edited` without re-running the full suites on every
+  PR-title change. Both jobs' *unit tests* do have a local equivalent, and it is the same file CI
+  runs.
+- **Watch for suites that lodge in another workflow.** A workflow that gates itself — to a branch
+  prefix, or to pushes on the default branch — never runs on a pull request that edits it, so its
+  own tests would have no host. Hosting them in a job that always runs is correct; hosting a test
+  whose *subject* is not carried alongside it is not, and produces a required check that fails on
+  a missing file forever.
+- **Bot pull requests are exempt from `SDLC docs`, and need no exemption from `PR shape`.** The
+  first because dependency bumps touch watched workflow files; the second because bot PRs close no
+  issue and the rule is *at most* one. A proposal to add an actor exemption to `PR shape` is a
+  sign the rule has drifted — see [One child per PR](#one-child-per-pr).
+- **One workflow is not a check: `Dependabot auto-merge`.** It runs on every pull request and does
+  nothing unless the author is the bot, and then only presses "enable auto-merge" on patch and
+  minor bumps. The required checks still decide whether the PR is mergeable. It is therefore
+  **not** in the ruleset's required checks and **not** subject to the mirroring rule above — that
+  rule binds gates, and this gates nothing. It also holds the only writable token in CI, which is
+  why it checks nothing out.
+- **CI splits `verify.sh` into named steps** purely so each gets its own pass/fail and timing in
+  the log. That is presentation, not a second definition of the checks.
+- **The `audit` target fails on high and critical advisories only.** The same invocation locally
+  and in CI. Moderate and below stay visible in the output and are the dependency bot's job;
+  blocking every merge on a moderate transitive advisory buys noise rather than safety.
 
-  Further suites are run by `SDLC docs` even though they belong to other workflows:
-  `./scripts/tests/dependabot-auto-merge-disarm.test.sh`,
-  `./scripts/tests/deploy-cloud-run.test.sh` and
-  `./scripts/tests/verify-deployment.test.sh`. Each belongs to a workflow that gates itself so a PR
-  editing it never executes it — `dependabot-auto-merge.yml` to `dependabot/npm_and_yarn/*`
-  branches, and the deploy workflow (Phase 3) to pushes on `main` — so the tests would have no host
-  otherwise. Same file locally and in CI, like the two above. See
-  [Auto-merging dependency bumps](#auto-merging-dependency-bumps).
-- **Dependabot PRs are exempt from `SDLC docs`, and need no exemption from `PR shape`.** The
-  first is because `github-actions` bumps touch watched workflow files; the second is because
-  bot PRs close no issue and the rule is *at most* one. If someone proposes an actor exemption
-  for `PR shape`, that is a sign the rule drifted — see
-  [One child per PR](#one-child-per-pr).
-- **One workflow is not a check: `Dependabot auto-merge`.** It runs on every pull request but
-  does nothing unless the author is `dependabot[bot]`, and all it does then is press "enable
-  auto-merge" on patch and minor bumps. The four required checks still decide whether the PR is
-  mergeable. It is therefore **not** in the ruleset's required checks and **not** subject to the
-  `verify.sh` mirroring rule above — that rule binds gates, and this gates nothing. It also holds
-  the only writable `GITHUB_TOKEN` in this repository's CI, which is why it checks nothing out;
-  see [Auto-merging dependency bumps](#auto-merging-dependency-bumps).
-- **CI splits `verify.sh` into named steps** (Audit / Install / Lint / Format / Test / Build / …) purely
-  so each gets its own pass/fail and timing in the log. That is presentation, not a second
-  definition of the checks.
-- **The `Audit` step fails on high and critical advisories only.** `npm audit --audit-level=high`,
-  the same command locally and in CI. Moderate and below stay visible in the output and are
-  Dependabot's job; blocking every merge on a moderate transitive advisory buys noise rather than
-  safety. It reads the lockfile, so `SKIP_INSTALL=1` does not weaken it.
+  **The lesson that generalises: dependency auditors are configurable from the environment, and
+  their bypasses fail *open*.** In one ecosystem alone there are three — an offline flag that
+  makes the auditor report "found 0 vulnerabilities" and exit 0; a production/omit setting that
+  silently drops every dev-dependency advisory, which is the scope the gate claims to cover; and
+  the `|| true` that is tempting when a build goes red. All were found by review rather than by
+  the gate noticing, which is the point: **state the intent in explicit flags rather than
+  inheriting whatever the environment says.** Whatever your ecosystem, find its equivalents before
+  trusting the target.
 
-  **Two flags close environment-driven bypasses, and both were found by review rather than by the
-  gate noticing.** `--no-offline`, because `npm_config_offline=true` otherwise makes `npm audit`
-  report "found 0 vulnerabilities" and exit 0. `--include=dev`, because `npm audit` honours the
-  `omit` config and both `npm_config_omit=dev` and `NODE_ENV=production` set it, silently dropping
-  every dev-dependency advisory — the scope this gate claims. Counting the `|| true` rejected at
-  design time, that is three bypasses of one class: `npm audit` is configurable from the
-  environment in several ways, and all of them fail **open**. State the intent in flags rather
-  than inheriting whatever the environment says. Scope is every dependency, dev included: neither image ships
-  devDependencies, but they execute in CI. It runs FIRST in `all`, before `npm ci`: that command
-  executes dependency lifecycle scripts, so auditing afterwards would let a package with a known
-  install-time vulnerability run before the gate could reject it. The cost is that a registry
-  outage aborts the pass before the offline checks — reach for a single target then.
+  Audit **first**, before the install target. Installing executes dependency lifecycle scripts, so
+  auditing afterwards lets a package with a known install-time vulnerability run before the gate
+  can reject it. The cost is that a registry outage aborts the pass before the offline checks —
+  reach for a single target then.
 
   It is a **hard fail, not `|| true`**. A check that cannot fail is the decorative-assertion
-  pattern this repo has already shipped once and had to fix — it reads as coverage and provides
-  none. When a high advisory lands with no upstream patch, the honest response is an explicit,
-  dated exception in the `audit()` function, where review can see it; not a permanently green
-  check. The threshold is a judgment call, so it is written down here rather than left in a flag.
-- **Postgres and Redis run as service containers**, and only the `Integration test` step sets
-  `DATABASE_URL` / `REDIS_URL` — which is exactly why the service-free `Test` step still skips
-  those suites.
-- **Every `docker build` passes `--pull`.** Without it Docker reuses whatever base image is
-  cached locally, so the identical script yields different artifacts on two machines: CI starts
-  from a cold cache and gets the current `node:22-slim`, a developer's laptop can be months behind
-  and still report green. That is drift arriving through the *inputs* rather than the commands —
-  the one gap the single-`verify.sh` design does not otherwise close.
+  pattern — it reads as coverage and provides none. When a high advisory lands with no upstream
+  patch, the honest response is an explicit, dated exception inside the `audit` function where
+  review can see it; not a permanently green check. The threshold is a judgment call, so write it
+  down rather than leaving it in a flag.
+- **Services run as containers, and only the integration step sets their connection variables** —
+  which is exactly why the service-free `test` step still skips those suites. A suite that
+  self-skips on a missing variable is correct; a green `test` treated as evidence it ran is not.
+- **Pull the base image on every build.** Without it a builder reuses whatever is cached locally,
+  so the identical script yields different artifacts on two machines: CI starts cold and gets the
+  current tag, a laptop can be months behind and still report green. That is drift arriving
+  through the *inputs* rather than the commands — the one gap the single-`verify.sh` design does
+  not otherwise close.
 
-  It narrows that gap rather than eliminating it, and the difference is deliberate. These are
-  **mutable tags**, re-resolved independently at each build, so two builds still differ if upstream
-  republishes between them. Only digest pins would make the two provably identical, and they turn
-  every upstream rebuild into a PR. The residual window is upstream-republish timing; the one it
-  replaces was a laptop months behind CI.
+  It narrows the gap rather than closing it, and the difference is deliberate. Mutable tags are
+  re-resolved at each build, so two builds still differ if upstream republishes between them. Only
+  digest pins make them provably identical, and those turn every upstream rebuild into a pull
+  request. The residual window is upstream-republish timing; the one it replaces was a laptop
+  months behind CI.
 
-  Cost is 0.15s **when the cached digest is current** — a manifest check, not a download. When the
-  tag has moved, `--pull` fetches the changed layers, which is the point. It makes the `package`
-  target network-dependent, which building an image always was whenever the cache was cold.
-- **Docker builds run on pull requests only**, to keep pushes to `main` fast.
+  Cost is a manifest check, not a download, when the cached digest is current.
+- **Image builds run on pull requests only**, to keep pushes to the default branch fast.
 
-**There is no CD yet.** Deployment is roadmap (GCP Cloud Run); the release and observability
-phases arrive with it.
+**CD is out of scope for this document.** A repository that deploys should describe its release
+path in its own runbooks; the phases above end at merge.
 
 ---
-
 ## Where the skills come from
 
 Every skill in `.claude/skills/` is **vendored** — copied in, adapted to this repo, pinned to an
@@ -419,113 +426,52 @@ back; some were excluded because they actively conflict with the CI design descr
 
 ## Changing this SDLC
 
-This file is the contract, and it is enforced deterministically rather than by good intentions.
+The process document is a contract, and it is enforced deterministically rather than by good
+intentions. Which document that is comes from `process.doc` in `.acb.json` — usually this file,
+sometimes a local companion to it, for the reason set out below.
 
 **The rule:** a PR that touches any of
 
 - `.claude/skills/**`
-- `backend/verify.sh`, `frontend/verify.sh` or `infra/verify.sh`
-- The production-image assertions in `backend/verify.sh` also require a `python3` interpreter in
-  the image, because a Cloud Run sandbox executes against the application image's own filesystem.
-  That assertion names the interpreter by its **absolute** path, `/usr/bin/python3`, and must keep
-  doing so: a Cloud Run sandbox inherits no environment, so `PATH` inside it is empty and a bare
-  command name resolves against nothing. A `python3` or `command -v python3` check runs in a shell
-  that *has* a `PATH`, passes, and proves only that the packaging is right — which is how #185
-  reached a deployed service through a fully green gate. A check that cannot fail the way
-  production fails is not a gate
-- `infra/tests/**` — the self-tests `infra/verify.sh` runs first: the gates, and `bootstrap.sh`
-  against a fake `gcloud` (a live run proves the script worked that day, not that the next edit is safe)
+- any component's `verify.sh`, and the self-tests it runs first
 - `.github/workflows/**`
 - `scripts/**`
 
-must also touch `docs/sdlc.md`.
+must also touch **the document `process.doc` names in `.acb.json`**, and the watched list itself
+is `process.watched` in the same file — both read at run time, so a repository tunes them without
+editing the gate.
+
+Pointing `process.doc` at a local companion is the right answer whenever this file is carried and
+a consumer's process changes are its own: a change to one component's `verify.sh` has nothing to
+say in a document shared with every other repository, and requiring an edit here would make that
+repository permanently *ahead* of the toolkit — `acb pull` would revert it on the next run.
+
+> **A check that cannot fail the way production fails is not a gate.** One worked example, because
+> the shape recurs: an image assertion that ran `command -v python3` passed in a shell that *has* a
+> `PATH`, while the runtime it modelled inherits no environment and resolves bare command names
+> against nothing. The assertion proved the packaging was right and the deployment still broke.
+> Name interpreters by absolute path, and make the check run the way the failure runs.
 
 That last entry is deliberate: this document describes the exact semantics of the checks in
 `scripts/` — their watched paths, failure messages and escape hatches — so a change to one that
 skipped the doc would leave the two silently disagreeing.
 
-`scripts/` also holds **developer tooling that is not a CI check**: `scripts/worktree-new.sh`
-creates a git worktree with its own application stack. The watched-path rule covers it too, and
-that is the right outcome rather than an accident — the stack-slot contract it encodes (which
-ports a slot owns, and the Auth0 origins that bound the pool) is process. A change to it that
-skipped the docs would leave `README.md`'s slot table and `backend/src/config.ts`'s
-`stackSlotWarnings()` describing a scheme the script no longer implements.
+`scripts/` also holds **developer tooling that is not a CI check**: the worktree helper creates a
+git worktree ready to work in. The watched-path rule covers it too, and that is the right outcome
+rather than an accident — whatever contract it encodes is process, and a change that skipped the
+docs would leave the documentation describing a scheme the script no longer implements.
 
 Its unit tests, `scripts/tests/worktree-new.test.sh`, run **locally only** — CI never creates a
 worktree, so there is nothing there for them to protect. That is why they are absent from the two
 jobs named above, and why they are **not** an exception to the `verify.sh` mirroring rule: there
 is no CI check to mirror. Run them before pushing a change to the script.
 
-`scripts/deploy-cloud-run.sh` is the other piece of tooling here that is not a CI check. It holds
-the `gcloud beta run deploy` command that
-[ADR-0005](adr/0005-cloud-run-service-outside-terraform.md) makes the Cloud Run service's
-*specification* — the provider does not model `sandboxLauncher` and strips it on every apply, so the
-service is deployed by this command rather than by Terraform. A human runs it from
-[`docs/runbooks/gcp-deploy.md`](runbooks/gcp-deploy.md); the deploy workflow will run the same
-targets. That is the same "one definition, two callers" contract the `verify.sh` scripts have, and
-it is why the command is not written out twice.
-
-Three things about it are process rather than implementation, which is why they are here:
-
-- **It reads no Terraform state, ever.** State holds the generated Cloud SQL password in cleartext,
-  so a pipeline that could read it would hold the database password. Every project-specific value is
-  instead derived from the resource names Terraform itself uses, which means a rename in `infra/`
-  breaks the deploy loudly on the next run rather than silently.
-- **Its exit codes are an interface.** `0` success, `3` nothing to deploy — the environment is torn
-  down between working sessions, or the service does not exist yet — `2` a usage error, `1`
-  everything else *including a credential that does not work*. That last distinction is the point:
-  a probe that reported a bad token as "torn down" would finish green. Two consequences follow, and
-  both are enforced rather than intended. The existence probe is `gcloud run services list
-  --filter`, not `describe`, because list exits 0-with-no-output for a missing service and non-zero
-  only for a real failure, while `describe` fails identically for "missing" and "permission
-  denied". And a child process's exit status is **normalised to 1** — the verification script has
-  its own exit vocabulary, and passing its `3` straight through would tell the workflow there was
-  nothing to deploy.
-- **"Is there an environment?" asks about the DATA LAYER, not the registry.** The between-sessions
-  teardown is a targeted destroy of the billable resources only, so the Artifact Registry
-  repository, the service accounts and the secret containers all survive it — their presence proves
-  nothing. The probe is the Cloud SQL instance, which that teardown does remove and without which
-  the service cannot work. A change to what the session-end teardown destroys is therefore a change
-  to this script's premise, which is why both live in this document.
-- **The default target is `help`, not `all`.** Every other target changes production, so the thing
-  that happens when someone types the script's name to see what it does must not be a deploy.
-- **It will not create the service.** Cloud Run gives a brand-new service's first revision 100% of
-  traffic, so it cannot be verified before users reach it. Creating the service is a separate
-  `create` target, run by hand after a rebuild; automation only ever deploys a revision that serves
-  nobody until it has been checked.
-
-`scripts/verify-deployment.sh` is its companion, and the answer to a question the deploy script
-cannot answer for itself: what does a pipeline owe beyond "the command exited 0"? It reads the
-deployed service back from the API and asserts its shape against the deploy runbook's flag list —
-`sandboxLauncher`, gen2, the VPC interfaces, the Cloud SQL instance, the runtime identity,
-concurrency 8, `FRONTEND_ORIGIN` equal to the service URL, all six secret bindings — then checks the
-endpoints an anonymous caller can reach and the application's own log window.
-
-Two limits are written into it rather than left for a reader to discover. Nothing behind the auth
-gate is covered: a real execution, the cross-owner 404 and the quota's 429 all need an authenticated
-caller, and [`gcp-isolation-probes.md`](runbooks/gcp-isolation-probes.md) stays the authority for
-those. And **an empty log window is weak evidence**, because Cloud Logging ingestion is asynchronous
-and empty is exactly what the check treats as a pass — a settle wait buys some of that back without
-making silence proof.
-
-Its unit tests, `scripts/tests/deploy-cloud-run.test.sh` and
-`scripts/tests/verify-deployment.test.sh`, drive their scripts against fake `gcloud`, `docker`,
-`curl` and verifier executables on `PATH` — no project, no credentials, no network. They are hosted by the
-`SDLC docs` job for the same reason `dependabot-auto-merge-disarm.test.sh` is, and like the other
-lodgers **the same files are the local pre-push commands**: run
-`./scripts/tests/deploy-cloud-run.test.sh` and `./scripts/tests/verify-deployment.test.sh` before
-pushing, because no `verify.sh` covers them and the
-three that exist will stay green while this job goes red.
-
-One consequence of that tooling reaches the `verify.sh` scripts. Docker image tags are
-daemon-wide, and `backend/verify.sh`'s `package` target *builds* a tag and then *runs* it. With two
-worktrees verifying at once a fixed `…:verify` tag lets one tree's assertions execute the other
-tree's image — a pass or fail belonging to a different branch. `backend/verify.sh` and
-`frontend/verify.sh` therefore derive their throwaway tags from the checkout's directory name
-(`verify-<dirname truncated>-<cksum of the full path>` — the basename alone is neither unique, since
-a worktree may share it with the main checkout, nor bounded against Docker's 128-character tag
-limit), which is unique per worktree and deterministic in CI. `infra/verify.sh`
-needs no equivalent: it builds no image.
+A second consequence of that tooling reaches the `verify.sh` scripts, and it generalises to any
+builder with a shared daemon. **Image tags are daemon-wide.** A `package` target that builds a tag
+and then runs it will, with two worktrees verifying at once, have one tree's assertions execute the
+other tree's image — a pass or a fail belonging to a different branch. Derive throwaway tags from
+something unique per checkout rather than from a fixed name, and make it deterministic so CI
+reproduces it. A component that builds no image needs no equivalent.
 
 **The enforcement:** the `SDLC docs` job — in its own workflow, `.github/workflows/sdlc-docs.yml`
 — runs `scripts/check-sdlc-sync.sh`, which diffs the PR against its base and fails with a message
@@ -569,8 +515,8 @@ prompt diff gets reviewed like code, because that is exactly what it is.
 
 `.github/workflows/dependabot-auto-merge.yml` arms GitHub's native auto-merge on Dependabot PRs
 where **every** dependency is a patch or minor bump. Majors are always merged by a human, because
-a major is where a peer range breaks — #78 raised `vite` without `@vitejs/plugin-react` and died
-at `npm ci`.
+a major is where a peer range breaks — one such PR raised a build tool without its companion
+plugin and died at install.
 
 Four details in that rule are not decoration:
 
@@ -580,22 +526,29 @@ Four details in that rule are not decoration:
   "Removes `esbuild`". The summary output is the *max* across entries and skips those blanks, so a
   security PR whose only major is an unparseable entry reports minor. The gate reads the
   per-dependency JSON instead and fails closed on a blank, a missing key or malformed input.
-- **An allow-list of ecosystems, not a deny-list, and it is applied *before* any step runs.** Only
-  `npm_and_yarn` auto-merges. `github_actions` must not: the workflow pins its own action by SHA
+- **An allow-list of ecosystems, not a deny-list, and it is applied *before* any third-party step
+  runs.** The list lives in `ACB_DEPENDABOT_ECOSYSTEMS`, and an unset variable allows nothing.
+  `github_actions` must never be on it: the workflow pins its own action by SHA
   with the version in a trailing comment, and Dependabot bumps SHA pins by that comment, so a new
   third-party action SHA would arrive as a *patch* and merge unread — and `SDLC docs` exits 0 for
   `dependabot[bot]` while no `verify.sh` reads workflow files. An allow-list also fails closed on
-  ecosystems added later, which is not hypothetical: `docker` was added in #110 and is ineligible
-  by construction, with no exclusion rule to write or remember. That matters most for
-  `backend/sandbox-image/`, the containment boundary around LLM-generated code — a base image
-  there must never merge unread.
+  ecosystems added later, with no exclusion rule to write or remember. That matters most for
+  container base images: where one forms a containment boundary around untrusted code, it must
+  never merge unread.
 
-  The check lives in the **job-level `if:`**, on `github.head_ref`, not in the gate that reads the
-  action's output — and that placement is the whole point. For `pull_request` the workflow file is
-  read from the merge ref, so a Dependabot PR bumping this workflow's own `fetch-metadata` pin
-  would execute the *replacement* action under the job's writable token and only afterwards reach
-  a gate that rejects it. Any rule that depends on metadata the third-party action produces is too
-  late by construction. The gate repeats the check as defence in depth.
+  The check is the **first step of the job**, before any third-party action runs — and that
+  placement is the whole point. For `pull_request` the workflow file is read from the merge ref,
+  so a Dependabot pull request bumping this workflow's own `fetch-metadata` pin would execute the
+  *replacement* action under the job's writable token and only afterwards reach a gate that
+  rejects it. Any rule that depends on metadata the third-party action produces is too late by
+  construction. It was a job-level `if:` while the list was a literal in the file, and became a
+  step when the list moved to a repository variable — **not** because a job-level `if:` cannot
+  read a variable (`vars` is available in that context) but because workflow expressions cannot
+  split `github.head_ref` on `/` to extract the ecosystem, nor test membership of a
+  space-separated list. A shell step does both in four lines. The cost of moving it is that a
+  step's position is not self-enforcing the way a job-level `if:` was, so
+  `scripts/tests/dependabot-auto-merge-disarm.test.sh` asserts the ordering. The gate repeats the
+  check as defence in depth.
 - **One commit, or nothing.** `fetch-metadata` verifies the PR author and then reads and
   signature-checks only `commits[0]`; auto-merge merges HEAD. Requiring a single commit closes the
   gap between what was inspected and what would merge. Every Dependabot PR this repository has
@@ -629,7 +582,7 @@ Four details in that rule are not decoration:
 
   Its tests are `scripts/tests/dependabot-auto-merge-disarm.test.sh`, ten cases, run by the
   **`SDLC docs`** job. That job is a host, not the owner: this workflow gates itself to
-  `dependabot/npm_and_yarn/*` branches, so a PR that edits it never executes it, and the logic
+  `dependabot/*` branches, so a PR that edits it never executes it, and the logic
   would otherwise ship with no automated coverage — which is how a wrong actor constant survived
   two reviews. `SDLC docs` already has a checkout and a read-only token, runs on every PR, and
   exists to check that a process change is self-consistent.

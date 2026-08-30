@@ -52,31 +52,67 @@ jobs:
     # `github.repository` keeps this inert in forks. `user.login` is set by GitHub from the
     # authenticated actor and cannot be forged by a PR author.
     #
-    # The branch-prefix test is the ecosystem allow-list, hoisted to where it runs BEFORE any
-    # step does. It has to be here, not in the jq rules below: for `pull_request` the workflow
+    # The branch-prefix test here is only "is this Dependabot at all". THE ECOSYSTEM ALLOW-LIST
+    # IS THE FIRST STEP OF THIS JOB, not this `if:` — see "Check the ecosystem is allowed" below.
+    # What matters is that it runs BEFORE any third-party action: for `pull_request` the workflow
     # file is read from the merge ref, so a Dependabot PR that bumps this file's own
     # `fetch-metadata` pin would run the *replacement* action, and only afterwards reach a rule
     # that rejects the `github_actions` ecosystem. Rejecting on metadata the action itself
-    # produces is too late by construction. `github.head_ref` is event data, available before the
-    # first step, and Dependabot always names branches `dependabot/<ecosystem>/…`. Verified live
-    # on PR #98 (`dependabot/github_actions/…`), run 31434426736: both jobs report `skipped`, so
-    # `fetch-metadata` never executed. Note a job-level `if:` still *creates* a workflow run — it
-    # suppresses the jobs, not the run.
+    # produces is too late by construction.
+    #
+    # It moved out of this `if:` when the list moved to a repository variable. Not because a
+    # job-level `if:` cannot read one — `vars` IS available in that context — but because workflow
+    # expressions cannot split `github.head_ref` on `/` to extract the ecosystem, nor test
+    # membership of a space-separated list. `cut -d/ -f2` and a `case` do both in four lines.
+    # `scripts/tests/dependabot-auto-merge-disarm.test.sh` asserts the ordering, since a step's
+    # position is not self-enforcing the way a job-level `if:` was.
+    #
+    # Verified live on PR #98 (`dependabot/github_actions/…`), run 31434426736: both jobs report
+    # `skipped`, so `fetch-metadata` never executed. Note a job-level `if:` still *creates* a
+    # workflow run — it suppresses the jobs, not the run.
     if: >-
       github.event.pull_request.user.login == 'dependabot[bot]' &&
-      github.repository == 'igor-ka/llm-code-execution' &&
-      startsWith(github.head_ref, 'dependabot/npm_and_yarn/')
+      github.event.repository.fork == false &&
+      startsWith(github.head_ref, 'dependabot/')
     # Read-only. This is the job that runs third-party code.
     permissions:
       pull-requests: read
     outputs:
       verdict: ${{ steps.gate.outputs.verdict }}
     steps:
+      # The ecosystem allow-list. It runs BEFORE dependabot/fetch-metadata, which is the security
+      # requirement the job-level `if:` used to carry: on `pull_request` the workflow is read from
+      # the merge ref, so a `dependabot/github_actions/…` PR bumping the pin below would otherwise
+      # execute the REPLACEMENT action and only then reach a rule rejecting it.
+      #
+      # It reads a repository VARIABLE, not .acb.json, and that is deliberate. This workflow has no
+      # `actions/checkout` anywhere (see the header): `apply` holds the only writable token, and
+      # checking out the head ref would put PR-branch code inside it. With no working tree there is
+      # no file to read, so `acb init` writes the list to `vars.ACB_DEPENDABOT_ECOSYSTEMS` and
+      # `acb status` reconciles it against .acb.json.
+      - name: Check the ecosystem is allowed to auto-merge
+        id: ecosystem
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          ALLOWED: ${{ vars.ACB_DEPENDABOT_ECOSYSTEMS }}
+        run: |
+          set -euo pipefail
+          # Dependabot always names branches `dependabot/<ecosystem>/…`.
+          eco="$(cut -d/ -f2 <<<"$HEAD_REF")"
+          # An unset variable allows nothing. That is the right default for a repository that has
+          # not decided, which is why the empty case is not special-cased.
+          case " ${ALLOWED:-} " in
+            *" $eco "*) echo "verdict=allowed" >> "$GITHUB_OUTPUT" ;;
+            *) echo "==> '$eco' is not in ACB_DEPENDABOT_ECOSYSTEMS — not auto-merging."
+               echo "verdict=skip" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       # Pinned to the full commit SHA for v3.1.0, not @v3 — a moving tag is a supply-chain
       # rewrite waiting to happen. `alert-lookup` and `compat-lookup` stay off: both require a
       # PAT, and neither is used.
       - name: Fetch Dependabot metadata
         id: metadata
+        if: steps.ecosystem.outputs.verdict == 'allowed'
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -90,7 +126,7 @@ jobs:
       #          commit the gate never examined. Every Dependabot PR this repository has seen
       #          carries exactly one commit, so requiring that closes the gap for free.
       #
-      # Rule 2 — the ecosystem allow-list again, as defence in depth behind the job-level `if:`.
+      # Rule 2 — the ecosystem allow-list again, as defence in depth behind the first step.
       #
       # Rule 3 — every dependency must declare patch or minor. Why not
       #          `steps.metadata.outputs.update-type`, which would be one line: on SECURITY
@@ -112,7 +148,9 @@ jobs:
       # construction — `apply` treats an unknown verdict as ineligible, never as eligible.
       - name: Decide whether this PR may auto-merge
         id: gate
+        if: steps.ecosystem.outputs.verdict == 'allowed'
         env:
+          ALLOWED: ${{ vars.ACB_DEPENDABOT_ECOSYSTEMS }}
           DEPS_JSON: ${{ steps.metadata.outputs.updated-dependencies-json }}
           PR_COMMITS: ${{ github.event.pull_request.commits }}
         run: |
@@ -124,8 +162,9 @@ jobs:
           else
             verdict="$(printf '%s' "$DEPS_JSON" | jq -r '
               if type != "array" or length == 0 then "not-eligible: no dependency metadata"
-              elif any(.[]; .packageEcosystem != "npm_and_yarn")
-                then "not-eligible: only npm dependency bumps auto-merge"
+              elif any(.[]; .packageEcosystem as $e
+                            | ((env.ALLOWED // "") | split(" ") | index($e)) | not)
+                then "not-eligible: an ecosystem outside the allow-list"
               elif all(.[]; .updateType == "version-update:semver-patch"
                          or .updateType == "version-update:semver-minor")
                 then "eligible"

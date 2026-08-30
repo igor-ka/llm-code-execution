@@ -77,17 +77,17 @@ Cannot reproduce on demand:
     └── Document the conditions observed and revisit when it recurs
 ```
 
-For test failures (npm shown — substitute the repository's own test command, per the test-driven-development skill's Discover the Stack First section):
+For test failures, use the component's own targets:
 ```bash
-# Run the specific failing test
-npx vitest run -t "test name"
+# The whole suite
+./verify.sh test
 
-# Run with verbose output
-npm test -- --verbose
-
-# Run in isolation (rules out test pollution)
-npx vitest run tests/path/to/file.test.ts --no-file-parallelism
+# One test, and the same test in isolation — if it passes alone and fails in the
+# suite, the bug is test pollution, not the code under test.
 ```
+Running *one* test is the test runner's own invocation, not a `verify.sh` target: the contract
+covers whole targets, and a focused run is a debugging affordance. `CLAUDE.md` records this
+repository's.
 
 ### Step 2: Localize
 
@@ -110,7 +110,7 @@ git bisect start
 git bisect bad                    # Current commit is broken
 git bisect good <known-good-sha> # This commit worked
 # Git will checkout midpoint commits; run your test at each
-git bisect run npx vitest run -t "failing test"
+git bisect run ./verify.sh test
 ```
 
 ### Step 3: Reduce
@@ -161,17 +161,13 @@ This test will prevent the same bug from recurring. It should fail without the f
 After fixing, verify the complete scenario with the repository's own commands (npm shown):
 
 ```bash
-# Run the specific test
-npx vitest run -t "specific test"
+# The suite that was failing
+./verify.sh test
 
-# Run the full test suite (check for regressions)
-npm test
+# Everything CI runs — the regression check that matters
+./verify.sh
 
-# Build the project (check for type/compilation errors)
-npm run build
-
-# Manual spot check if applicable
-npm run dev  # Verify in browser
+# Manual spot check if applicable: the component's dev command, recorded in CLAUDE.md
 ```
 
 ## Error-Specific Patterns
@@ -197,7 +193,7 @@ Build fails:
 ├── Type error → Read the error, check the types at the cited location
 ├── Import error → Check the module exists, exports match, paths are correct
 ├── Config error → Check build config files for syntax/schema issues
-├── Dependency error → Check package.json, run npm install
+├── Dependency error → Check the manifest, run `./verify.sh install`
 └── Environment error → Check Node version, OS compatibility
 ```
 

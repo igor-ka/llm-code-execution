@@ -15,9 +15,15 @@ set -euo pipefail
 
 : "${PR_BODY:=}"
 : "${PR_TITLE:=}"
-: "${GITHUB_REPOSITORY:=igor-ka/llm-code-execution}"
+# No default. A wrong default silently qualifies bare "#N" against another repository and every
+# assertion still passes; an unset variable is loud. GitHub Actions always sets it.
+: "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must be set — Actions sets it; set it by hand to run locally}"
 
-HATCH='[multi-child]'
+# Read from config, with a fallback — unlike check-sdlc-sync.sh. This hatch only WIDENS what is
+# allowed, so a missing config degrading to the strict default is safe. There, the config decides
+# what is checked at all, so it must fail.
+ACB_CONFIG="${ACB_CONFIG:-.acb.json}"
+HATCH="$(jq -r '.process.prShapeHatch // "[multi-child]"' "$ACB_CONFIG" 2>/dev/null || echo '[multi-child]')"
 
 if [[ "$PR_TITLE" == *"$HATCH"* ]]; then
   echo "==> ${HATCH} found in the PR title — this PR deliberately closes more than one issue."
@@ -56,6 +62,7 @@ strip_comments() {
 # and the failure message's advice ("put the quotation in a fence") does not apply to a span.
 # Double-backtick spans go first so their contents are not exposed by the single-backtick pass.
 strip_code_spans() {
+  # shellcheck disable=SC2016  # the backticks are the pattern being matched, not substitution
   sed -e 's/``[^`]*``//g' -e 's/`[^`]*`//g'
 }
 

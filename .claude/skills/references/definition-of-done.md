@@ -33,18 +33,18 @@ satisfied. Skipping either leaves work that looks finished but is not.
 This repo's single source of truth is `verify.sh` — CI runs the **same script**, so local and CI
 cannot drift. Run the side(s) you touched:
 
-- [ ] `cd backend && ./verify.sh` — eslint, prettier, `tsc` typecheck, Vitest, build, Docker images.
-- [ ] `cd frontend && ./verify.sh` — eslint, prettier, Vitest, `tsc -b && vite build`, Docker image.
-- [ ] Touched `backend/src/history/**` or `backend/migrations/**`? Also run the Postgres suites:
-      `DATABASE_URL=… ./verify.sh test:integration` (they self-skip without `DATABASE_URL`, so a
-      green `./verify.sh` alone does **not** prove they ran).
+- [ ] `cd <component> && ./verify.sh`, for each component you touched — lint, format, typecheck,
+      tests, build, package. The same script, and the same targets, that CI runs.
+- [ ] Touched code covered by a suite that needs a live service? Run it explicitly:
+      `./verify.sh test:integration` with the service's environment variable set. Such suites
+      self-skip when it is unset, so a green `./verify.sh` alone does **not** prove they ran.
 
 `SKIP_INSTALL=1` and `SKIP_PACKAGE=1` speed up the inner loop, but a final pre-push run should be
 unskipped — CI does not skip.
 
 ### Security invariants
 
-- [ ] Changes touching `backend/src/{auth.ts,history/**,sandbox/**}` or `backend/sandbox-image/**` keep the isolation invariants
+- [ ] Changes touching the sensitive paths `CLAUDE.md` names keep the isolation invariants
       intact: identity comes from the **verified token** (`sub`), never the request body; every
       store method filters on the owner; a record you don't own returns **404**, never 403.
 - [ ] The cross-user battery and planted-hole mutants still pass
@@ -87,7 +87,7 @@ unskipped — CI does not skip.
 ## Red flags
 
 - "It's done, I just haven't run `verify.sh` yet" — unverified work is not done.
-- A green `./verify.sh` treated as proof the Postgres suites ran (they self-skip).
+- A green `./verify.sh` treated as proof the service-backed suites ran (they self-skip).
 - Weakening the isolation battery or mutants so a change passes.
 - Skipping the review skills because the diff is small.
 - A different bar applied under deadline pressure.

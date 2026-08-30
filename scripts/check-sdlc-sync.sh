@@ -16,15 +16,26 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# Files whose change means the development process itself changed. This deliberately includes
-# all of scripts/: docs/sdlc.md documents the exact semantics of the checks that live there
-# (watched paths, failure messages, escape hatches), so changing one without updating the doc
-# would let the documentation silently desync from the enforcement it describes.
-WATCHED_RE='^(\.claude/skills/|\.github/workflows/|scripts/|backend/verify\.sh$|frontend/verify\.sh$|infra/verify\.sh$|infra/tests/)'
-DOC='docs/sdlc.md'
+# The three values that vary between repositories. Read from .acb.json at run time rather than
+# substituted at render time: this file must stay byte-identical across every consumer, which is
+# what makes `acb pull` a copy and `git diff` the review.
+#
+# A missing config is a HARD failure, not a fallback. process.watched decides what is checked at
+# all, so a default would make this gate pass for the wrong reason — the one failure mode a gate
+# must not have.
+ACB_CONFIG="${ACB_CONFIG:-.acb.json}"
+if [[ ! -f "$ACB_CONFIG" ]]; then
+  echo "✗ no $ACB_CONFIG — this check needs one. Run 'acb init', or add it by hand." >&2
+  exit 1
+fi
+DOC="$(jq -r '.process.doc' "$ACB_CONFIG")"
+# An alternation, not a list: the script greps once, and an alternation is the cheapest way to
+# say "any of these" to grep -E.
+WATCHED_RE="$(jq -r '[.process.watched[]] | join("|")' "$ACB_CONFIG")"
+HATCH="$(jq -r '.process.sdlcSyncHatch // "[skip-sdlc-sync]"' "$ACB_CONFIG")"
 
-if [[ "${PR_TITLE:-}" == *"[skip-sdlc-sync]"* ]]; then
-  echo "==> [skip-sdlc-sync] found in the PR title — skipping the SDLC doc check."
+if [[ "${PR_TITLE:-}" == *"$HATCH"* ]]; then
+  echo "==> $HATCH found in the PR title — skipping the ${DOC} check."
   exit 0
 fi
 
@@ -95,7 +106,7 @@ fi
   echo "  ${DOC} documents that process and is a contract — see its \"Changing this SDLC\""
   echo "  section. Update it in this PR so the documented process matches the real one."
   echo
-  echo "  For a genuine no-op (typo in a skill, comment reflow), put [skip-sdlc-sync] in"
+  echo "  For a genuine no-op (typo in a skill, comment reflow), put ${HATCH} in"
   echo "  the PR title. That stays visible in the PR list rather than silently bypassing."
   echo
 } >&2

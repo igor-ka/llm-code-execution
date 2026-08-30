@@ -1,5 +1,10 @@
 # Vendored skills — attribution
 
+> Both upstreams are MIT-licensed. Their copyright remains with their authors, and the full
+> licence texts live in the upstream repositories linked below. Redistributing this directory —
+> which every consumer of the toolkit does — carries that attribution with it, which is why this
+> file is part of the carried set rather than a note in the toolkit only.
+
 Everything in this directory is **vendored**: copied in, adapted to this repo, and reviewed as
 part of the diff. Nothing here is fetched at runtime, and no plugin marketplace is wired into
 this repository. Upstream commits are pinned below so the next sync is a reviewable diff rather
@@ -37,7 +42,7 @@ Addy Osmani (https://github.com/addyosmani/agent-skills), MIT.
 | `code-review-and-quality` | `CLAUDE.md` mandates the **built-in** `code-review` skill. A second, competing review checklist splits the standard. |
 | `planning-and-task-breakdown` | Weaker than our `writing-plans`: no adversarial staff-engineer review, and it writes to `tasks/plan.md` instead of this repo's `docs/plans/YYYY-MM-DD-*.md`. |
 | `using-agent-skills` | A router skill only helps once something loads it — upstream relied on a SessionStart hook we did not take. The routing table in `CLAUDE.md` is always in context and costs less. |
-| `shipping-and-launch`, `observability-and-instrumentation` | Premature: there is no deployment yet. Revisit with the GCP Cloud Run work. |
+| `shipping-and-launch`, `observability-and-instrumentation` | Premature for a repository with no deployment yet. Revisit once one exists. |
 | `browser-testing-with-devtools` | Requires a `chrome-devtools` MCP server that is not configured here. |
 | `code-simplification` | The built-in `simplify` skill already covers this. |
 | `performance-optimization`, `frontend-ui-engineering`, `api-and-interface-design`, `deprecation-and-migration`, `context-engineering`, `source-driven-development`, `doubt-driven-development`, `idea-refine`, `interview-me` | Not part of this repo's core loop today. Vendor later if a real need appears. |
@@ -53,7 +58,7 @@ Of the shared `references/`, only `definition-of-done.md`, `security-checklist.m
 - `documentation-and-adrs` now points at this repo's real ADR location (`docs/adr/`, `NNNN-` prefix)
   instead of the upstream default `docs/decisions/`.
 - `test-driven-development` gained a *This repository's commands* section (`verify.sh` targets, the
-  `DATABASE_URL` self-skip trap, the shared `HistoryStore` contract suite).
+  self-skip trap for service-backed suites, and the shared contract-suite pattern).
 - `security-and-hardening` gained a *Trust boundaries in this repository* section covering the
   sandbox, the auth gate, history isolation, and treating **LLM output as untrusted input**.
 - `writing-plans` gained a mandatory `PR boundaries` field in the plan header (see
