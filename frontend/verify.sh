@@ -3,23 +3,24 @@
 # CI runs the SAME script (see .github/workflows/ci.yml), so local and CI can't drift.
 #
 # Usage: ./verify.sh [target]
-#   all      (default) audit + install + lint + format + test + build + docker
+#   all      (default) audit + install + lint + format + test + build + package
+#   --targets print the target names this script knows, one per line
 #   audit    npm audit (fails on high+ advisories)
 #   install  npm ci
 #   lint     eslint
 #   format   prettier --check
 #   test     vitest
 #   build    tsc -b && vite build (+ assert the production CSP shipped)
-#   docker   build the frontend image
+#   package  build the frontend image
 #
 # CI invokes the individual targets as separate named steps (Audit / Install / Lint / Format /
-# Test / Build / Docker build) so each gets its own pass/fail and timing in the job log,
+# Test / Build / Package) so each gets its own pass/fail and timing in the job log,
 # while the job stays a single check. If you later want each target as its own line on the
 # GitHub *checks screen*, split them into separate jobs that each call `./verify.sh <target>`
 # — this script doesn't need to change.
 #
 # Env toggles apply to the `all` target only: SKIP_INSTALL=1 (reuse node_modules),
-# SKIP_DOCKER=1 (host checks only, no image build).
+# SKIP_PACKAGE=1 (host checks only, no image build).
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -28,6 +29,11 @@ cd "$(dirname "$0")"
 # invoked: cwd is now the script's own directory, so the root is simply its parent. The
 # basename is unique per worktree, which is what scopes the throwaway image tags below.
 CHECKOUT_ROOT="$(cd .. && pwd)"
+
+# The single list, and the same order .acb.json declares. NOT the order `all` runs them, which
+# audits first — `install` leads because the conformance check plants a `false` in the FIRST
+# declared target, and it must be one that exits before doing any work. See backend/verify.sh.
+TARGETS="install audit lint format test build package"
 
 run() {
   echo
@@ -94,7 +100,7 @@ build() {
 # identical script yields different artifacts on two machines. See the fuller note in
 # backend/verify.sh.
 
-docker_() {
+package_() {
   # Daemon-wide tag, unique per worktree — see the fuller note in backend/verify.sh.
   # Readable truncated name + a checksum of the FULL path — see the fuller note in
   # backend/verify.sh for why the basename alone is neither unique nor length-bounded.
@@ -121,20 +127,22 @@ all() {
   format
   test_
   build
-  [[ "${SKIP_DOCKER:-}" == "1" ]] || docker_
+  [[ "${SKIP_PACKAGE:-}" == "1" ]] || package_
 }
 
 target="${1:-all}"
 case "$target" in
-  all)     all ;;
-  install) install ;;
-  audit)   audit ;;
-  lint)    lint ;;
-  format)  format ;;
-  test)    test_ ;;
-  build)   build ;;
-  docker)  docker_ ;;
-  *)       echo "unknown target: $target (expected: all|install|audit|lint|format|test|build|docker)" >&2; exit 2 ;;
+  all)       all ;;
+  --targets) printf '%s\n' "$TARGETS" | tr ' ' '\n'; exit 0 ;;
+  install)   install ;;
+  audit)     audit ;;
+  lint)      lint ;;
+  format)    format ;;
+  test)      test_ ;;
+  build)     build ;;
+  package)   package_ ;;
+  *)         # 64, not 2 — see infra/verify.sh for the full reason.
+             echo "unknown target: $target (expected: all|$TARGETS)" >&2; exit 64 ;;
 esac
 
 echo

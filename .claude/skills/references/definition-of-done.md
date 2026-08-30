@@ -39,7 +39,7 @@ cannot drift. Run the side(s) you touched:
       `DATABASE_URL=… ./verify.sh test:integration` (they self-skip without `DATABASE_URL`, so a
       green `./verify.sh` alone does **not** prove they ran).
 
-`SKIP_INSTALL=1` and `SKIP_DOCKER=1` speed up the inner loop, but a final pre-push run should be
+`SKIP_INSTALL=1` and `SKIP_PACKAGE=1` speed up the inner loop, but a final pre-push run should be
 unskipped — CI does not skip.
 
 ### Security invariants

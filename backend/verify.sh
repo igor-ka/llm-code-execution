@@ -3,7 +3,8 @@
 # CI runs the SAME script (see .github/workflows/ci.yml), so local and CI can't drift.
 #
 # Usage: ./verify.sh [target]
-#   all              (default) audit + install + lint + format + test + build + integration + docker
+#   all              (default) audit + install + lint + format + test + build + integration + package
+#   --targets        print the target names this script knows, one per line
 #   audit            npm audit (fails on high+ advisories)
 #   install          npm ci
 #   lint             eslint
@@ -13,15 +14,15 @@
 #   migrate          apply history migrations (requires DATABASE_URL)
 #   test:integration contract suites against a real Postgres and Redis (require DATABASE_URL
 #                    and REDIS_URL respectively; each self-skips when its variable is unset)
-#   docker           build the backend and sandbox images
+#   package          build the backend, sandbox and production images, and assert against them
 #
 # CI invokes the individual targets as separate named steps (Audit / Install / Lint / Format /
-# Test / Build / Integration test / Docker build) so each gets its own pass/fail and timing
+# Test / Build / Integration test / Package) so each gets its own pass/fail and timing
 # in the job log, while the job stays a single check.
 #
 # Env toggles apply to the `all` target only: SKIP_INSTALL=1 (reuse node_modules),
-# SKIP_DOCKER=1 (host checks only, no image builds). The integration step is gated on
-# DATABASE_URL / REDIS_URL exactly like SKIP_DOCKER: both absent -> skipped with a message.
+# SKIP_PACKAGE=1 (host checks only, no image builds). The integration step is gated on
+# DATABASE_URL / REDIS_URL exactly like SKIP_PACKAGE: both absent -> skipped with a message.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -30,6 +31,13 @@ cd "$(dirname "$0")"
 # invoked: cwd is now the script's own directory, so the root is simply its parent. The
 # basename is unique per worktree, which is what scopes the throwaway image tags below.
 CHECKOUT_ROOT="$(cd .. && pwd)"
+
+# The single list, and the same order .acb.json declares. NOT the order `all` runs them — `all`
+# audits first, deliberately, because `npm ci` executes lifecycle scripts. `install` leads this
+# list instead because the conformance check plants a `false` in the FIRST declared target, and a
+# target that exits before doing anything is what keeps that probe free. Do not "fix" the order to
+# match `all()`: that would put `audit` first and make every conformance run a real `npm audit`.
+TARGETS="install audit lint format test build migrate test:integration package"
 
 run() {
   echo
@@ -125,9 +133,9 @@ verify_tag() {
 #
 # Cost is 0.15s (0.52s -> 0.66s, sandbox image) WHEN THE CACHED DIGEST IS CURRENT — a manifest
 # check, not a download. When the tag has actually moved, --pull fetches the changed layers, which
-# is the entire point. It does mean the `docker` target needs the network, which building an image
+# is the entire point. It does mean the `package` target needs the network, which building an image
 # always did whenever the cache was cold.
-docker_() {
+package_() {
   local tag
   tag="$(verify_tag)"
   run docker build --pull -t "llm-code-execution-backend:${tag}" .
@@ -239,12 +247,13 @@ all() {
   test_
   build
   integration
-  [[ "${SKIP_DOCKER:-}" == "1" ]] || docker_
+  [[ "${SKIP_PACKAGE:-}" == "1" ]] || package_
 }
 
 target="${1:-all}"
 case "$target" in
   all)              all ;;
+  --targets)        printf '%s\n' "$TARGETS" | tr ' ' '\n'; exit 0 ;;
   install)          install ;;
   audit)            audit ;;
   lint)             lint ;;
@@ -253,8 +262,9 @@ case "$target" in
   build)            build ;;
   migrate)          migrate ;;
   test:integration) integration ;;
-  docker)           docker_ ;;
-  *)                echo "unknown target: $target (expected: all|install|audit|lint|format|test|build|migrate|test:integration|docker)" >&2; exit 2 ;;
+  package)          package_ ;;
+  *)                # 64, not 2 — see infra/verify.sh for the full reason.
+                    echo "unknown target: $target (expected: all|$TARGETS)" >&2; exit 64 ;;
 esac
 
 echo

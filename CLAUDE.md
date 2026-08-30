@@ -65,7 +65,7 @@ Each side has one script that mirrors CI exactly — run it from that directory:
 - Frontend: `cd frontend && ./verify.sh`
 - Infra: `cd infra && ./verify.sh`
 
-The backend and frontend scripts accept `SKIP_INSTALL=1` and `SKIP_DOCKER=1`; the infra script
+The backend and frontend scripts accept `SKIP_INSTALL=1` and `SKIP_PACKAGE=1`; the infra script
 takes neither — it has no install step and builds no image. CI runs these same scripts, so never
 add a check to CI without adding it to the matching `verify.sh` (and vice versa).
 
