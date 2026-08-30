@@ -46,3 +46,10 @@ jobs:
         run: ./scripts/tests/deploy-cloud-run.test.sh
       - name: Test the deployment verification script
         run: ./scripts/tests/verify-deployment.test.sh
+      # A third script no `verify.sh` owns and no other workflow runs. It mutates branch
+      # protection — the one piece of this repository's configuration with no undo short of a
+      # saved copy — so it is the last script that should ship untested. The carried
+      # `sdlc-docs.yml` cannot host it: it is byte-identical in every consumer and knows nothing
+      # about this one. Driven by a fake `gh` on PATH; applies nothing.
+      - name: Test the ruleset apply script
+        run: ./scripts/tests/apply-ruleset.test.sh

@@ -57,6 +57,7 @@ infra/                       Terraform root for the GCP environment (Phase 1 fou
   verify.sh                  selftest + format + install -backend=false + lint + gates (no credentials)
   bootstrap.sh               creates the state bucket — the one resource Terraform does not own
 .acb.json                    the acb declaration: components, check names, targets, watched paths
+.github/ruleset.json         the "Protect main" ruleset as a document; GITHUB_REPOSITORY=owner/name ./scripts/apply-ruleset.sh --apply
 docs/sdlc.md                 the shared development process (carried from igor-ka/acb)
 docs/sdlc-local.md           this repository's half of it — and what the SDLC docs gate enforces
 docs/sdlc-example.md         the seven phases walked end to end on one real feature

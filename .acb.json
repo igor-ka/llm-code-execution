@@ -1,7 +1,7 @@
 {
   "template": {
     "repo": "igor-ka/acb",
-    "commit": "9064b5498c1e4be99f1b4d4c17cc08bdad3e9720"
+    "commit": "9fc5e1692c8b1d1aa25e51c6477bbece789954c4"
   },
   "process": {
     "doc": "docs/sdlc-local.md",
@@ -10,6 +10,7 @@
       "^\\.github/workflows/",
       "^scripts/",
       "^\\.acb\\.json$",
+      "^\\.github/ruleset\\.json$",
       "^backend/verify\\.sh$",
       "^frontend/verify\\.sh$",
       "^infra/verify\\.sh$",
