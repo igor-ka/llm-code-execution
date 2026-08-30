@@ -56,6 +56,11 @@ infra/                       Terraform root for the GCP environment (Phase 1 fou
   tests/                     unit tests for the repo-specific gates and bootstrap.sh, run first by verify.sh
   verify.sh                  selftest + format + install -backend=false + lint + gates (no credentials)
   bootstrap.sh               creates the state bucket — the one resource Terraform does not own
+.acb.json                    the acb declaration: components, check names, targets, watched paths
+docs/sdlc.md                 the shared development process (carried from igor-ka/acb)
+docs/sdlc-local.md           this repository's half of it — and what the SDLC docs gate enforces
+docs/sdlc-example.md         the seven phases walked end to end on one real feature
+docs/testing-notes.md        the self-skip trap and the contract-suite pattern
 docker-compose.yml           local dev topology: backend + frontend + postgres + redis + one-shot sandbox-image build
 Dockerfile                   PRODUCTION image: SPA + API in one container, one origin, non-root, no Docker socket
 .dockerignore                build context for the production image (the repo root is that context)
@@ -424,18 +429,22 @@ threshold and the reasoning live in [`docs/sdlc.md`](docs/sdlc.md).
 The backend and frontend scripts accept `SKIP_INSTALL=1` (reuse the current environment) and `SKIP_PACKAGE=1`
 (host checks only, skip the image build).
 
-CI runs two additional checks that have no local equivalent, because both read pull-request
-metadata rather than a working tree. The **`SDLC docs`** job compares a pull request against
-its base ref and fails if the change touches the development process (`.claude/skills/**`,
-either `verify.sh`, `scripts/**`, or `.github/workflows/**`) without updating
-[`docs/sdlc.md`](docs/sdlc.md). The **`PR shape`** job fails a pull request whose body would
-close more than one issue — `[multi-child]` in the title is the visible exception. That document
+Three CI jobs have no local equivalent in a `verify.sh`, because each reads something that does
+not exist in a working tree. The **`SDLC docs`** job compares a pull request against its base ref
+and fails if the change touches the development process — the list is `process.watched` in
+[`.acb.json`](.acb.json) — without updating [`docs/sdlc-local.md`](docs/sdlc-local.md). It also
+hosts `scripts/check-conformance.sh` as a step, which proves each component's `verify.sh` knows
+every target it declares and fails when a target fails. The **`PR shape`** job fails a pull request
+whose body would close more than one issue — `[multi-child]` in the title is the visible exception.
+The **`Deploy scripts`** job runs the unit tests for the two deployment scripts, which no other
+workflow executes on a pull request. That document
 describes how a change gets from an idea to `main` — phases, gates, and how they meet CI.
 
 A fourth pull-request workflow, **`Dependabot auto-merge`**, is not a check and gates nothing: on
 Dependabot PRs where every dependency is an npm patch or minor bump, it enables GitHub's native
-auto-merge, which still waits for all four required checks and for every review thread to be
-resolved. Majors are always merged by a human.
+auto-merge, which still waits for every required check and for every review thread to be
+resolved. Majors are always merged by a human. The ecosystems it will act on are the repository
+variable `ACB_DEPENDABOT_ECOSYSTEMS`, reconciled against `.acb.json` by `acb status`.
 
 The behavioral checks below have been run and pass (✅). Re-run them anytime.
 
