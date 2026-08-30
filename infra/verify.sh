@@ -3,11 +3,12 @@
 # CI runs the SAME script (see .github/workflows/terraform.yml), so local and CI can't drift.
 #
 # Usage: ./verify.sh [target] [dir]
-#   all       (default) selftest + fmt + init + validate + gates
+#   all       (default) selftest + format + install + lint + gates
+#   --targets print the target names this script knows, one per line
 #   selftest  the unit tests for the gates below, and for bootstrap.sh
-#   fmt       terraform fmt -check -recursive
-#   init      terraform init -backend=false   (no credentials, no state, no network to GCS)
-#   validate  terraform validate
+#   format    terraform fmt -check -recursive
+#   install   terraform init -backend=false   (no credentials, no state, no network to GCS)
+#   lint      terraform validate
 #   gates     repo-specific invariants that terraform validate cannot express
 #
 # Deliberately NOT here: `terraform plan`. A plan needs credentials against a live project, and
@@ -16,6 +17,10 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
+
+# The single list. `--targets` prints it for the conformance check, and `all` iterates the ones
+# that belong in a full pass — `gates` takes an argument, so it is called explicitly below.
+TARGETS="selftest format install lint gates"
 
 run() {
   echo
@@ -34,17 +39,18 @@ selftest() {
   run ./tests/gates.test.sh
   run ./tests/bootstrap.test.sh
 }
-fmt() {
+format() {
   require_terraform
   run terraform fmt -check -recursive
 }
 # -backend=false is what makes this runnable with no credentials and no state bucket: it installs
-# providers and builds the graph without ever contacting GCS.
-init() {
+# providers and builds the graph without ever contacting GCS. That is why the canonical name for
+# it is `install`.
+install() {
   require_terraform
   run terraform init -backend=false -input=false
 }
-validate() {
+lint() {
   require_terraform
   run terraform validate
 }
@@ -131,21 +137,24 @@ gates() {
 
 all() {
   selftest
-  fmt
-  init
-  validate
+  format
+  install
+  lint
   gates .
 }
 
 case "${1:-all}" in
 all) all ;;
+--targets) printf '%s\n' "$TARGETS" | tr ' ' '\n' ;;
 selftest) selftest ;;
-fmt) fmt ;;
-init) init ;;
-validate) validate ;;
+format) format ;;
+install) install ;;
+lint) lint ;;
 gates) gates "${2:-.}" ;;
 *)
-  echo "unknown target: $1" >&2
-  exit 2
+  # 64, not 2: the conformance check distinguishes "this target exists but is not implemented"
+  # from "this target does not exist", and one shared code would make that check vacuous.
+  echo "unknown target '${1}'. Known: $TARGETS all" >&2
+  exit 64
   ;;
 esac
