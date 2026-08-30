@@ -44,17 +44,17 @@ backend/
   migrations/                ordered SQL, applied on boot (001_history.sql)
   sandbox-image/Dockerfile   the minimal, non-root EXECUTION image (Python — unchanged)
   tests/                     Vitest suites; history/ = contract + router + persist + isolation battery
-  verify.sh                  checks (eslint + prettier + vitest + tsc + docker + npm audit); +test:integration (Postgres, Redis)
+  verify.sh                  checks (eslint + prettier + vitest + tsc + package + npm audit); +test:integration (Postgres, Redis)
 frontend/                    React + Vite UI
   src/                       App.tsx, api.ts, history.ts, components/ (HistorySidebar, SessionView, RunResult)
-  verify.sh                  one-command checks (lint + format + vitest + build + docker + npm audit)
+  verify.sh                  one-command checks (lint + format + vitest + build + package + npm audit)
 infra/                       Terraform root for the GCP environment (Phase 1 foundation + Phase 2 data stores)
   apis.tf registry.tf        enabled APIs; Artifact Registry with cleanup policies
   identity.tf secrets.tf     runtime service account; six secret CONTAINERS (payloads never in Terraform)
   wif.tf budget.tf           keyless GitHub federation; credit-burn + real-spend budgets
   sql.tf valkey.tf           Cloud SQL (no public access) and Memorystore for Valkey behind a private VPC/PSC
   tests/                     unit tests for the repo-specific gates and bootstrap.sh, run first by verify.sh
-  verify.sh                  selftest + fmt + init -backend=false + validate + gates (no credentials)
+  verify.sh                  selftest + format + install -backend=false + lint + gates (no credentials)
   bootstrap.sh               creates the state bucket — the one resource Terraform does not own
 docker-compose.yml           local dev topology: backend + frontend + postgres + redis + one-shot sandbox-image build
 Dockerfile                   PRODUCTION image: SPA + API in one container, one origin, non-root, no Docker socket
@@ -421,7 +421,7 @@ a registry outage aborts the pass before the offline checks; reach for a single 
 execute here and in CI. Moderate and below stay visible in the output and are Dependabot's job; the
 threshold and the reasoning live in [`docs/sdlc.md`](docs/sdlc.md).
 
-The backend and frontend scripts accept `SKIP_INSTALL=1` (reuse the current environment) and `SKIP_DOCKER=1`
+The backend and frontend scripts accept `SKIP_INSTALL=1` (reuse the current environment) and `SKIP_PACKAGE=1`
 (host checks only, skip the image build).
 
 CI runs two additional checks that have no local equivalent, because both read pull-request

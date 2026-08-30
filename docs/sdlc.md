@@ -230,7 +230,7 @@ cd backend  && ./verify.sh     # npm audit, eslint, prettier, tsc, vitest, build
 cd frontend && ./verify.sh     # npm audit, eslint, prettier, vitest, tsc -b && vite build, docker image
 ```
 
-The backend `docker` target builds **three** images: the dev backend image, the sandbox image,
+The backend `package` target builds **three** images: the dev backend image, the sandbox image,
 and the repo-root `Dockerfile` — the production artifact that serves the SPA and the API from
 one origin with no Docker socket. It then asserts inside that image that the production CSP
 shipped, that the policy contains no plaintext origin (which is how an image built without the
@@ -246,8 +246,8 @@ all** — and a unit test on the policy builder cannot catch "the server forgot 
 The build emits the policy as data and the backend serves the SPA under it.
 
 Individual targets exist for the inner loop: `install`, `audit`, `lint`, `format`, `test`, `build`,
-`docker`, plus `migrate` and `test:integration` on the backend. `SKIP_INSTALL=1` and
-`SKIP_DOCKER=1` speed up iteration — but the pre-push run should be unskipped, because CI does
+`package`, plus `migrate` and `test:integration` on the backend. `SKIP_INSTALL=1` and
+`SKIP_PACKAGE=1` speed up iteration — but the pre-push run should be unskipped, because CI does
 not skip.
 
 > **The trap worth internalising:** the Postgres history suites and the Redis quota suite
@@ -305,9 +305,9 @@ where it cannot be skipped.
  developer                          GitHub Actions
  ─────────                          ──────────────
  ./verify.sh  ───── same script ──▶  Backend checks   (audit→install→lint→format→test→build→
-                                                       integration→docker)
-                                     Frontend checks  (audit→install→lint→format→test→build→docker)
-                                     Terraform checks (selftest→fmt→init→validate→gates)
+                                                       integration→package)
+                                     Frontend checks  (audit→install→lint→format→test→build→package)
+                                     Terraform checks (selftest→format→install→lint→gates)
                                      SDLC docs        (process changes must update docs/sdlc.md)
                                      PR shape         (a PR closes at most one child issue)
                                             │
@@ -393,7 +393,7 @@ Details that are easy to get wrong:
   replaces was a laptop months behind CI.
 
   Cost is 0.15s **when the cached digest is current** — a manifest check, not a download. When the
-  tag has moved, `--pull` fetches the changed layers, which is the point. It makes the `docker`
+  tag has moved, `--pull` fetches the changed layers, which is the point. It makes the `package`
   target network-dependent, which building an image always was whenever the cache was cold.
 - **Docker builds run on pull requests only**, to keep pushes to `main` fast.
 
@@ -637,7 +637,7 @@ pushing, because no `verify.sh` covers them and the
 three that exist will stay green while this job goes red.
 
 One consequence of that tooling reaches the `verify.sh` scripts. Docker image tags are
-daemon-wide, and `backend/verify.sh`'s `docker` target *builds* a tag and then *runs* it. With two
+daemon-wide, and `backend/verify.sh`'s `package` target *builds* a tag and then *runs* it. With two
 worktrees verifying at once a fixed `…:verify` tag lets one tree's assertions execute the other
 tree's image — a pass or fail belonging to a different branch. `backend/verify.sh` and
 `frontend/verify.sh` therefore derive their throwaway tags from the checkout's directory name
