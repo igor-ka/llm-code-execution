@@ -5,7 +5,7 @@
 # listens on $PORT because that is the Cloud Run contract.
 
 # --- Stage 1: build the SPA -------------------------------------------------------------------
-FROM node:22-slim AS frontend
+FROM node:26-slim AS frontend
 WORKDIR /fe
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -37,7 +37,7 @@ RUN for v in VITE_AUTH0_DOMAIN VITE_AUTH0_CLIENT_ID VITE_AUTH0_AUDIENCE; do \
 RUN npm run build
 
 # --- Stage 2: compile the backend -------------------------------------------------------------
-FROM node:22-slim AS backend
+FROM node:26-slim AS backend
 WORKDIR /be
 COPY backend/package.json backend/package-lock.json ./
 RUN npm ci
@@ -46,7 +46,7 @@ COPY backend/src ./src
 RUN npm run build
 
 # --- Stage 3: runtime -------------------------------------------------------------------------
-FROM node:22-slim
+FROM node:26-slim
 WORKDIR /app
 ENV NODE_ENV=production
 
