@@ -57,3 +57,39 @@ and cross-user isolation suites. Frontend tests sit beside their source in `fron
 There is no `chrome-devtools` MCP server here, so an agent has no in-browser inspection loop.
 Frontend behaviour is covered by Vitest; verify UI changes manually against the running app
 (`npm run dev`, or the Compose stack).
+
+## Property-based tests, and why the seed is pinned
+
+`isolation.test.ts` asserts INV-1..8 over cases a human or a model chose. That is the weakness:
+whoever picked the cases picked them from the same understanding that produced the code, so a
+shared misunderstanding survives every one of them.
+
+`isolation.property.test.ts` inverts it. You state the rule and `fast-check` generates hundreds of
+operation sequences trying to break it, then **shrinks** any failure to the smallest input that
+still fails. Dropping the owner filter from `memoryStore.listSessions` reduces a random 25-operation
+sequence to `[{ kind: "append", owner: A, prompt: " " }]` in three shrinks. The generator does not
+share the model's misunderstanding — it is not reasoning, it is trying things — which is the
+uncorrelated evidence hand-picked examples cannot provide.
+
+**The seed is pinned in [`../backend/tests/fc.ts`](../backend/tests/fc.ts), and that is deliberate.**
+fast-check defaults to a fresh seed per run, so a property can pass ninety-nine times and fail on
+the hundredth. That failure is real — a counterexample, not a flake — but a gate that fails for a
+reason unrelated to the change under review is the one thing that gets a gate ignored. It is worse
+here than elsewhere: the mutation gate reads a test failure as a **kill**, so an unrelated failure
+makes *that* gate pass for the wrong reason.
+
+So CI is a deterministic regression suite over a fixed seed, and the search happens locally:
+
+```bash
+cd backend && FC_SEED=$RANDOM npm run test
+```
+
+A counterexample found that way is a bug to fix, and the seed that found it is worth pinning in
+`fc.ts` alongside the original.
+
+**One long-lived server per owner, not one per assertion.** Handing supertest an app makes it create
+and tear down an ephemeral server per request; at `numRuns: 200` these two properties would make
+roughly 2,000 of them in a single worker, which fails on socket churn rather than on logic. The
+servers are created once in `beforeAll` on port 0, and the store stays fresh per run behind a
+delegating proxy whose target is swapped — resetting with `clearAll()` would use the very method
+INV-5 tests to set up INV-5.
