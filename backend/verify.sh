@@ -97,7 +97,7 @@ integration() {
   [[ -n "${REDIS_URL:-}" ]]    || echo "==> note: REDIS_URL unset — Redis quota suite will self-skip"
   run npm run test:integration
 }
-# The diff-scoped mutation gate. See docs/adr/0006-trusting-ai-written-tests.md.
+# The diff-scoped mutation gate. Its rationale is ADR 0006 ("Trusting AI-written tests").
 #
 # THE LOCAL RUN IS THE FIRST SIGNAL AND CI IS THE BACKSTOP. Run this at the REFACTOR step on the
 # lines you just touched — survivors are the assertions you have not written yet, and they are a
@@ -125,7 +125,9 @@ mutation() {
   run ../scripts/tests/mutation-scope.test.sh
   run ../scripts/tests/mutation-decide.test.sh
   run ../scripts/tests/mutation-suppressions.test.sh
-  run ../scripts/mutation-suppressions.sh src
+  # No argument: the script reads the same declaration mutation-scope.sh does, so the eligible set
+  # lives in exactly one place.
+  run ../scripts/mutation-suppressions.sh
 
   local scope
   scope="$(../scripts/mutation-scope.sh)"
@@ -140,33 +142,35 @@ mutation() {
   echo "==> mutating $(printf '%s\n' "$scope" | wc -l | tr -d ' ') changed range(s):"
   printf '      %s\n' $scope
 
-  # CONCURRENCY IS CHOSEN FROM THE SCOPE, and this is a correctness control, not a tuning knob.
+  # ALWAYS SINGLE-WORKER WHEN A DATASTORE IS IN PLAY, with no allowlist.
   #
   # Stryker forks N worker processes, each running its own vitest. CI provides ONE Postgres and ONE
-  # Redis, and the Postgres suites share a single schema — which is exactly why vitest.config.ts
-  # sets fileParallelism:false. That setting serializes files WITHIN one vitest process; it does
-  # nothing about two Stryker workers running two vitest processes at once. Two workers colliding
-  # is worse than slow: a spurious failure KILLS a mutant, so the collision makes the gate pass for
-  # the wrong reason and nobody can tell that from a real kill.
+  # Redis, and the Postgres suites share a single schema — which is why vitest.config.ts sets
+  # fileParallelism:false. That serializes files WITHIN one vitest process; it does nothing about
+  # two Stryker workers running two vitest processes at once. A collision produces a spurious
+  # failure, and a spurious failure KILLS a mutant — so the gate passes for the wrong reason and
+  # nobody can tell that from a real kill.
   #
-  # AN ALLOWLIST, NOT A DENYLIST, and the direction is the point. Listing the files that DO touch a
-  # datastore fails OPEN: one added where the pattern does not anticipate runs in parallel against
-  # the shared schema, silently. Listing the ones that provably DO NOT fails CLOSED: anything
-  # unrecognised — every future file included — serializes until someone adds it here deliberately.
-  #
-  # The three entries are the whole eligible set outside history/ and limits/, and none of their
-  # suites opens a connection: auth.ts is jose against an in-memory keypair, schemas.ts is zod, and
-  # sandbox/** is dockerode and a spawned CLI, both faked.
-  #
-  # NOT `grep -qv`. frontend/verify.sh already carries the warning — "-qv inverts per LINE" — and
-  # the same trap applies to the exit code: the question is whether ANY line is off the allowlist,
-  # which is a test on the OUTPUT.
-  local offlist stryker_args=()
-  offlist="$(printf '%s\n' "$scope" | grep -vE '^src/(auth\.ts|schemas\.ts|sandbox/)' || true)"
-  if [[ -n "$offlist" ]]; then
-    echo "    scope is not provably datastore-free — running single-worker to protect the shared schema"
+  # AN EARLIER VERSION ALLOWLISTED auth.ts, schemas.ts AND sandbox/ as "provably datastore-free".
+  # That was a category error, caught in review: the allowlist named SOURCE files, but the hazard is
+  # which TESTS execute. With coverageAnalysis:perTest Stryker runs whatever covers each mutant —
+  # and `schemas.ts` is imported by server.ts, which tests/history/isolation.test.ts drives through
+  # /api/execute while its `postgres` block holds a real pool on the shared schema. Proving a file
+  # datastore-free means proving a negative about the whole coverage graph, and getting it wrong
+  # fails OPEN. Serializing costs seconds — measured at 8s for a real two-line change against live
+  # Postgres and Redis — so the trade is not close.
+  local stryker_args=()
+  if [[ -n "${DATABASE_URL:-}" || -n "${REDIS_URL:-}" ]]; then
+    echo "    a datastore is configured — running single-worker to protect the shared schema"
     stryker_args+=(--concurrency 1)
   fi
+
+  # A STALE REPORT MUST NOT BE READABLE. reports/ is gitignored and persists between runs, so if
+  # Stryker exits 0 without writing (a broken json reporter, a --mutate list it declines), the
+  # decide script would read the PREVIOUS run's file and report plausible file:line data from a
+  # different scope. mutation-decide.mjs already fails closed on absence; this makes absence the
+  # only possible failure mode.
+  rm -rf reports/mutation
 
   # Stryker's exit code is captured rather than left to `set -e` so the decision script always runs
   # and always explains WHY. It is not swallowed: a non-zero Stryker exit with no offending mutant
@@ -334,9 +338,11 @@ package_() {
   echo "    rejected as expected, by the guard"
 }
 
-# `mutation` and `mutation:selftest` are deliberately absent from `all`. The first needs a
-# resolvable merge base against origin/main, which a detached checkout or a fresh clone may not
-# have, and `all` must stay runnable anywhere. Run them explicitly: ./verify.sh mutation
+# `mutation` and `mutation:selftest` are deliberately absent from `all`, for DIFFERENT reasons.
+# `mutation` needs a resolvable merge base against origin/main, which a detached checkout or a fresh
+# clone may not have, and `all` must stay runnable anywhere. `mutation:selftest` needs no merge base
+# at all — its fixture carries its own `mutate` key — and is out purely on COST: two full Stryker
+# runs. Run them explicitly: ./verify.sh mutation && ./verify.sh mutation:selftest
 all() {
   # FIRST, before install: `npm ci` runs dependency lifecycle scripts, so auditing afterwards
   # lets a package with a known install-time vulnerability execute before the gate can reject it.

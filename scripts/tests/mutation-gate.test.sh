@@ -4,7 +4,7 @@
 # The three unit suites prove the pieces; this proves the WIRING — Stryker really generates mutants,
 # really runs vitest against them, really writes the report, and the report really fails the gate.
 # Without it the whole target could be a no-op and every check would stay green, which is the
-# decorative-assertion pattern docs/escaped-defects.md records this repository shipping more than
+# decorative-assertion pattern the escaped-defect log records this repository shipping more than
 # once.
 set -uo pipefail
 
@@ -20,6 +20,9 @@ bad() { fail=$((fail + 1)); printf '  ✗ %s — %s\n' "$1" "$2"; }
 cleanup() { rm -rf "$strong" "$fixture/reports" "$fixture/.stryker-tmp"; }
 trap cleanup EXIT
 
+# Clear any stale report FIRST: if this run dies without writing, the assertions below would
+# otherwise be made against a previous run's file.
+rm -rf "$fixture/reports" "$fixture/.stryker-tmp"
 echo "==> Stryker against the deliberately-weak fixture"
 ( cd "$fixture" && npx --prefix "$root/backend" stryker run ) >/dev/null 2>&1
 
@@ -61,10 +64,19 @@ TS
 
 if [[ ! -f "$strong/reports/mutation/mutation.json" ]]; then
   bad "the strengthened fixture produces a report" "no report written"
-elif node "$decide" "$strong/reports/mutation/mutation.json" >/dev/null 2>&1; then
-  ok "a boundary-asserting test kills them and the gate passes"
-else
+elif ! node "$decide" "$strong/reports/mutation/mutation.json" >/dev/null 2>&1; then
   bad "a boundary-asserting test kills them" "the gate still rejects it — it is always-red"
+elif ! node -e '
+    const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+    const all = Object.values(r.files).flatMap((f) => f.mutants);
+    process.exit(all.some((m) => m.status === "Killed") ? 0 : 1);
+  ' "$strong/reports/mutation/mutation.json"; then
+  # An exit-0 from `decide` is not enough: RuntimeError and CompileError are ACCEPTABLE, so a
+  # Stryker sandbox that failed to run any test at all would also exit 0 and print "the gate
+  # passes" — the decorative assertion this file exists to prevent, in the file itself.
+  bad "at least one mutant was actually Killed" "the gate exited 0 with no kill — Stryker ran nothing"
+else
+  ok "a boundary-asserting test kills them and the gate passes"
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
