@@ -26,7 +26,7 @@ approved (`docs/sdlc.md`: children come after the plan), in this order:
 | 3 | `roles/logging.viewer` for CI, and federation that survives a session-end teardown | — |
 | 4 | Dependabot auto-merges under a GitHub App, so they fire workflows like any other merge | — |
 | 5 | `.github/workflows/deploy.yml` — the pipeline | PRs 1–3 |
-| 6 | Exercise it end to end, ADR-0006, README and epic close-out | PRs 4–5 |
+| 6 | Exercise it end to end, ADR-0007, README and epic close-out | PRs 4–5 |
 
 PRs 1–4 are independent of each other and can be worked in any order or in parallel worktrees.
 PR 5 needs 1–3: it calls both scripts and reads logs with the grant PR 3 adds. PR 6 needs a live
@@ -311,7 +311,7 @@ locally and in CI, so the two cannot drift.
 | `scripts/verify-deployment.sh` | Post-deploy assertions: service shape, HTTP surface, application logs. |
 | `scripts/tests/verify-deployment.test.sh` | Same harness, plus a fake `curl`; proves each assertion goes RED. |
 | `.github/workflows/deploy.yml` | The pipeline. WIF auth, the five targets in order, a job summary. |
-| `docs/adr/0006-continuous-deployment-scope.md` | What CD does, what it deliberately does not, and the reversal conditions. |
+| `docs/adr/0007-continuous-deployment-scope.md` | What CD does, what it deliberately does not, and the reversal conditions. |
 
 **Modified**
 
@@ -2402,7 +2402,7 @@ matters is the record of what the pipeline actually did, not the pipeline.
 ### Task 6: Prove it, then close out
 
 **Files:**
-- Create: `docs/adr/0006-continuous-deployment-scope.md`
+- Create: `docs/adr/0007-continuous-deployment-scope.md`
 - Modify: `docs/runbooks/gcp-deploy.md`, `README.md`, `docs/plans/2026-08-17-deploy-to-gcp-phase3.md`
 
 - [ ] **Step 1: Watch the first real run**
@@ -2461,9 +2461,9 @@ the existing rollback drill: step, command, elapsed, outcome. Include the refusa
 whatever surprised you. Phase 2's outcome log is the model — the value is in what the plan did
 **not** anticipate.
 
-- [ ] **Step 4: Write ADR-0006**
+- [ ] **Step 4: Write ADR-0007**
 
-Create `docs/adr/0006-continuous-deployment-scope.md`. Contents, in the repository's ADR shape
+Create `docs/adr/0007-continuous-deployment-scope.md`. Contents, in the repository's ADR shape
 (Context / Decision / Alternatives considered / Consequences / Reversal):
 
 - **Context:** ADR-0005 put the service outside Terraform and made a `gcloud` command its
@@ -2529,7 +2529,7 @@ In *Roadmap*, replace *"the rollback drill (#163) is what remains"* with a line 
 - [ ] **Step 6: Close out the epic**
 
 The Children list and the D18–D23 decisions were added to #79 and to the spec when the plan was
-approved, so what remains here is the closing edit: add ADR-0006 to **Artifacts**, tick the six
+approved, so what remains here is the closing edit: add ADR-0007 to **Artifacts**, tick the six
 children, and state explicitly that **S9 is now fully met** — CD performs the same steps as the
 by-hand deploy, and no long-lived service-account key exists anywhere. Leave the still-open
 governance question (`required_approving_review_count: 0`) named rather than silently dropped.
@@ -2540,11 +2540,11 @@ Append an `## Outcome log` section here recording plan-vs-applied differences, i
 used. Then commit:
 
 ```bash
-git add docs/adr/0006-continuous-deployment-scope.md docs/runbooks/gcp-deploy.md README.md \
+git add docs/adr/0007-continuous-deployment-scope.md docs/runbooks/gcp-deploy.md README.md \
         docs/plans/2026-08-17-deploy-to-gcp-phase3.md
-git commit -m "docs(cd): record the first pipeline run, ADR-0006, and the epic close-out"
+git commit -m "docs(cd): record the first pipeline run, ADR-0007, and the epic close-out"
 git push -u origin docs/cd-closeout
-gh pr create --title "docs(cd): first pipeline run, ADR-0006, epic close-out" \
+gh pr create --title "docs(cd): first pipeline run, ADR-0007, epic close-out" \
              --body "Closes #202. …"
 ```
 
@@ -2628,7 +2628,7 @@ decided on 2026-08-17 and are recorded below; they become **D18–D23** in
 | 3 | The create path deploys unverified code to 100% of the public URL | **CD refuses to create the service.** `preflight` requires it to exist; creating it is the by-hand `create` target (spec D4/S9). `workflow_dispatch` stops being a rebuild button. | **P3-D6** extended; `create` target; preflight stage 3 |
 | 4 | `preflight` reported credential and permission failures as "environment torn down", green | **Two-stage probe.** `gcloud projects describe` proves the credential and exits **1** on failure; only then does the registry probe decide. Not stderr pattern-matching. | **P3-D8** extended; preflight stages 1–2 |
 | 5 | The log check was service-scoped, so the old revision could veto a good candidate | **Revision-scoped before promotion, service-scoped after.** `REVISION` is set for the candidate call and empty for the confirmation. The misleading comment is corrected. | `logs()` in PR 2; `verify()` in PR 1 |
-| 6 | ADR-0006 omitted that merging `main` becomes production deploy authority | **Record it**, together with what the ruleset actually requires — verified as `required_approving_review_count: 0`. Whether to change that setting is a separate, still-open question. | PR 6 Step 4, Consequences |
+| 6 | ADR-0007 omitted that merging `main` becomes production deploy authority | **Record it**, together with what the ruleset actually requires — verified as `required_approving_review_count: 0`. Whether to change that setting is a separate, still-open question. | PR 6 Step 4, Consequences |
 | 7 | `roles/storage.objectUser` may not carry `storage.buckets.get`, and nothing could test it pre-merge | **Moot.** Confirmed the role has no `storage.buckets.*` permission at all — and finding 2 removes the grant entirely. | Deleted along with the Cloud Build grants |
 
 Advisory items applied while making the above edits, because the surrounding code was being

@@ -382,7 +382,7 @@ on 2026-08-17 and decided the same day; they are D18–D23, one of them dissolve
 the grant).
 
 One item is **open but not blocking**, and is a repository-governance question rather than a deploy
-one: now that merging to `main` is production deploy authority (D19, and ADR-0006 records it), the
+one: now that merging to `main` is production deploy authority (D19, and ADR-0007 records it), the
 "Protect main" ruleset still has `required_approving_review_count: 0`. Whether that should change is
 undecided. Two items were deferred
 as configuration rather than architecture. Both are now closed:
