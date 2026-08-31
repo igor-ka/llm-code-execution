@@ -82,27 +82,29 @@ not skip.
 
 ## Tests: the oracle must not come from the implementation
 
-Most tests here are model-written. A test's **oracle** — whatever decides pass from fail — is the
-half no tool can check, because a tool has nothing to compare it against except the code it is
-supposed to be independent of. The three legal sources are in
-[`testing-notes.md`](testing-notes.md); the rules themselves are in [`../CLAUDE.md`](../CLAUDE.md)
-under *Testing standards*. What belongs here is where they bind in the process:
+The rules are in [`../CLAUDE.md`](../CLAUDE.md) under *Testing standards*; the reasoning and the
+three legal oracle sources are in [`testing-notes.md`](testing-notes.md). Neither is restated here —
+this section is only **where they bind in the process**, which is the part specific to this
+repository.
 
-- **Spec** — success criteria are written as observable behaviour, because they are the oracle every
-  downstream test copies from. "The quota resets at the window boundary" is an oracle; "the quota
-  works correctly" is not.
-- **Plan** — every task that writes a test names the oracle that test asserts. "Matches the
-  implementation" is not an acceptable answer, and the staff-engineer review checks it.
-- **Build, RED** — the failure is **recorded**, not claimed: pasted into the PR body, or committed
-  separately so `git show` proves it. A test never observed failing is not known to be a test. This
-  is deliberately not a CI check — a check for the presence of a section cannot read what it checks,
-  which is the decorative-assertion pattern this repository has already had to fix once.
-- **Build, threat model** — for each threat on a *Sensitive path*, ask whether it is expressible as
-  a planted hole. If it is, author it as a committed fixture alongside `backend/tests/mutants.ts`.
-  Never generate these at CI time: a gate whose mutant population changes between two runs of the
-  same commit is not a gate.
-- **Review** — three questions, every time: where did this expected value come from; did any
-  existing assertion change in this PR; is anything mocked that is not a process boundary.
+| Phase | What it adds |
+| --- | --- |
+| **Spec** | Success criteria written as observable behaviour. "The quota resets at the window boundary" is an oracle; "the quota works correctly" is not |
+| **Plan** | Every task that writes a test names the oracle it asserts. "Matches the implementation" is not an acceptable answer |
+| **Build — RED** | The failure is recorded in the PR body, not claimed |
+| **Build — threat model** | For each threat on a *Sensitive path*, ask whether it is expressible as a planted hole; if so, author it as a committed fixture alongside `backend/tests/mutants.ts` |
+| **Review** | The three questions in `CLAUDE.md`'s *Review process* |
+| **After a defect reaches `main`** | Append a row to [`escaped-defects.md`](escaped-defects.md) naming the gate that missed it |
+
+**The last row is the one that gets skipped**, because it happens after the work feels finished.
+It is also the only one that produces evidence over time: without it ADR 0006's calibration loop
+never runs, and the log stays at its four seeded entries forever.
+
+**Two things are deliberately not enforced by CI.** RED-recording, because a check for the presence
+of a PR-body section cannot read what it checks. And the named-oracle requirement in Plan: the
+staff-engineer reviewer prompt is carried from `acb` and says nothing about oracles, so **this is a
+convention the human review upholds, not a gate** — do not write it up as one until the prompt is
+proposed upstream.
 
 ## The audit flags, and why they are written out
 
