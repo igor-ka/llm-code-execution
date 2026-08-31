@@ -103,10 +103,14 @@ What is specific to this repository:
 is also the only one that produces evidence over time: without it ADR 0006's calibration loop never
 runs, and the log stays at its four seeded entries forever.
 
-**One thing the upstream rule asks for is not a gate here.** "Name the oracle" in Plan is a
-convention the human review upholds — the staff-engineer reviewer prompt is carried from `acb` and
-says nothing about oracles. Do not write it up as enforced until that prompt is proposed upstream
-too.
+**None of the upstream rule is a gate here.** `./verify.sh mutation` enforces *sensitivity* —
+whether a test can fail at all — which is the half the rule itself says a tool can check. The half
+it cannot check has nothing behind it. "Name the oracle" in Plan is upheld by the human review: the
+staff-engineer reviewer prompt is carried from `acb` and says nothing about oracles, so do not write
+it up as enforced until that prompt is proposed upstream too. The same goes for RED-recording,
+"never edit an existing test to make it pass", "mock only at process boundaries" and the three
+review questions — [`../CLAUDE.md`](../CLAUDE.md) gives the reason the first cannot be a check, and
+that reason generalises. **A green build is not evidence that any of them held.**
 
 ## The audit flags, and why they are written out
 
