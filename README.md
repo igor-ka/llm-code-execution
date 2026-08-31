@@ -61,7 +61,8 @@ infra/                       Terraform root for the GCP environment (Phase 1 fou
 docs/sdlc.md                 the shared development process (carried from igor-ka/acb)
 docs/sdlc-local.md           this repository's half of it — and what the SDLC docs gate enforces
 docs/sdlc-example.md         the seven phases walked end to end on one real feature
-docs/testing-notes.md        the self-skip trap and the contract-suite pattern
+docs/testing-notes.md        testing traps, and where a test's oracle may legitimately come from
+docs/escaped-defects.md      every defect that reached main, and the gate that should have caught it
 docker-compose.yml           local dev topology: backend + frontend + postgres + redis + one-shot sandbox-image build
 Dockerfile                   PRODUCTION image: SPA + API in one container, one origin, non-root, no Docker socket
 .dockerignore                build context for the production image (the repo root is that context)

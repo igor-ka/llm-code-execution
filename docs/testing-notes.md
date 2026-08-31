@@ -2,8 +2,8 @@
 
 What the `test-driven-development` skill's *This repository's commands* section used to say, kept
 here because that skill is now carried from [`igor-ka/acb`](https://github.com/igor-ka/acb) and is
-stack-agnostic. [`../CLAUDE.md`](../CLAUDE.md) holds the command table; this holds the two traps
-that need more than a table row.
+stack-agnostic. [`../CLAUDE.md`](../CLAUDE.md) holds the command table; this holds what needs more
+than a table row — the traps, and where a test's oracle may legitimately come from.
 
 ## The service-backed suites self-skip, and a green `test` is not evidence they ran
 
