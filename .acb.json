@@ -36,7 +36,9 @@
         "build",
         "migrate",
         "test:integration",
-        "package"
+        "package",
+        "mutation",
+        "mutation:selftest"
       ]
     },
     {
