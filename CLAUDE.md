@@ -18,9 +18,9 @@ uses it, so it is never edited here. [`docs/sdlc-local.md`](docs/sdlc-local.md) 
 repository's half of it, and [`docs/sdlc-example.md`](docs/sdlc-example.md) walks one real feature
 through all seven phases.
 
-**`docs/sdlc-local.md` is a contract:** if you change `.claude/skills/**`, any component's
-`verify.sh`, `infra/tests/**`, `.github/workflows/**`, or anything in `scripts/`, update it in the
-same PR. The watched list is `process.watched` in [`.acb.json`](.acb.json), read at run time. The
+**`docs/sdlc-local.md` is a contract:** if you change `.claude/skills/**`,
+`.claude/commands/**`, any component's `verify.sh`, `infra/tests/**`, `.github/workflows/**`, or
+anything in `scripts/`, update it in the same PR. The watched list is `process.watched` in [`.acb.json`](.acb.json), read at run time. The
 `SDLC docs` CI job enforces this; `[skip-sdlc-sync]` in the PR title is the escape hatch for a
 genuine no-op.
 

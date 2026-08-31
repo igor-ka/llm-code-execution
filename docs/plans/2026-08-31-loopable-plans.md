@@ -266,7 +266,7 @@ git commit -m "feat(writing-plans): mandatory Definition of done, conditional Hu
 - [ ] **Step 2: Verify the indentation matches its neighbours**
 
 ```bash
-grep -n '^    | \(PR boundaries\|Definition of done\|Human dependencies\) |' \
+grep -n '^    | \(PR boundaries\|Criteria coverage\|Human dependencies\) |' \
   carried/.claude/skills/writing-plans/planning-reviewer-prompt.md
 ```
 
@@ -566,7 +566,7 @@ nothing.
 
 ```bash
 git add carried/.claude/commands/loop-plan.md
-git commit -m "feat(commands): /loop-plan works a plan to its Definition of done"
+git commit -m "feat(commands): /loop-plan works a plan to the criteria it claims"
 ```
 
 ## Task 9: The MANIFEST line
@@ -1080,32 +1080,12 @@ cd - && git worktree remove .claude/worktrees/adopt-loop-plan && git branch -D f
 
 ---
 
-## Criteria coverage
-
-| Spec criterion | How this plan satisfies it |
-| --- | --- |
-| 1 ★ | Task 1 — the `## Criteria coverage` section in the carried plan template; Task 14 pulls it here |
-| 2 ★ | Task 14 Step 4 and Task 18 Step 3 — `acb status` reports `behind: 0`, `ahead: 0`, `drift: none`; every carried edit was made in `acb` (D1) |
-| 3 | Task 6 — the modified reviewer prompt run against a fixture plan with the section deleted, and the finding observed rather than assumed |
-| 4 | Task 2 Step 1 — the field's own text requires omission when empty; Task 6 Step 3 confirms the reviewer stays silent on a fixture that needs nobody |
-| 5 | Task 8 — `/loop-plan <plan path>` takes one argument; scope, criteria, blockers and PR boundaries all come from the plan |
-| 6 | Task 9 — the `MANIFEST` line, proven necessary by running `carried-purity` before adding it; Task 13 Step 1 re-runs the suite |
-| 7 ★ | Task 8 Step 2 — the Merging section read back bullet by bullet against the preconditions requirement, and D7's phrasing test |
-| 8 | Task 11 — the carried `check-sdlc-sync` fixture gains the pattern and an assertion, proven by adding the assertion first and watching it fail; Task 12 Step 1 makes every scaffolded repository watch it; Task 15 declares it here, and Task 18 Step 2 shows the gate failing without the process-document change |
-| 9 | Tasks 1 and 4 — the same requirement stated in `writing-plans/SKILL.md` and `docs/sdlc.md` §2, both upstream, both in PR 0 |
-| 10 | Task 16 (`docs/sdlc-local.md`, in the same PR as the watched-path change) and Task 17 (`CLAUDE.md`). `README.md` deliberately untouched: it documents neither skills nor commands, so no reader following it is misled |
-| 11 | Task 5 — the `NOTICE.md` bullet recording the divergence from the pinned upstream |
-
-**Not claimed:** none. This plan claims all eleven criteria in the spec.
-
----
-
 ## Verification summary
 
 | What | Command | Expected |
 | --- | --- | --- |
 | Fence nesting survived | `awk '/^```/ {n++} END {print n}' carried/.claude/skills/writing-plans/SKILL.md` | an even number |
-| Reviewer rows aligned | `grep -n '^    \| \(PR boundaries\|Definition of done\|Human dependencies\) \|' …` | three consecutive lines |
+| Reviewer rows aligned | `grep -n '^    \| \(PR boundaries\|Criteria coverage\|Human dependencies\) \|' …` | three consecutive lines |
 | No identifier in a carried file | `grep -rInEi 'igor-ka\|llm-code-execution\|llm-sandbox' carried/` | no output |
 | Reviewer catches a missing section | Task 6, the fixture plan | a mechanical finding naming `## Criteria coverage` |
 | MANIFEST necessary, then sufficient | `./tests/carried-purity.test.sh` before and after Task 9 | FAIL, then `3 passed, 0 failed` |
@@ -1136,6 +1116,26 @@ cd - && git worktree remove .claude/worktrees/adopt-loop-plan && git branch -D f
   Step 3's "exactly six paths" is wrong: the pull touches ten.
 - **Three Medium defects in the command's tick accounting are filed as `igor-ka/acb#19`**, not
   fixed here. Four of five review rounds found a defect introduced by the previous round's fix.
+
+## Criteria coverage
+
+| Spec criterion | How this plan satisfies it |
+| --- | --- |
+| 1 ★ | Task 1 — the `## Criteria coverage` section in the carried plan template; Task 14 pulls it here |
+| 2 ★ | Task 14 Step 4 and Task 18 Step 3 — `acb status` reports `behind: 0`, `ahead: 0`, `drift: none`; every carried edit was made in `acb` (D1) |
+| 3 | Task 6 — the modified reviewer prompt run against a fixture plan with the section deleted, and the finding observed rather than assumed |
+| 4 | Task 2 Step 1 — the field's own text requires omission when empty; Task 6 Step 3 confirms the reviewer stays silent on a fixture that needs nobody |
+| 5 | Task 8 — `/loop-plan <plan path>` takes one argument; scope, criteria, blockers and PR boundaries all come from the plan |
+| 6 | Task 9 — the `MANIFEST` line, proven necessary by running `carried-purity` before adding it; Task 13 Step 1 re-runs the suite |
+| 7 ★ | Task 8 Step 2 — the Merging section read back bullet by bullet against the preconditions requirement, and D7's phrasing test |
+| 8 | Task 11 — the carried `check-sdlc-sync` fixture gains the pattern and an assertion, proven by adding the assertion first and watching it fail; Task 12 Step 1 makes every scaffolded repository watch it; Task 15 declares it here, and Task 18 Step 2 shows the gate failing without the process-document change |
+| 9 | Tasks 1 and 4 — the same requirement stated in `writing-plans/SKILL.md` and `docs/sdlc.md` §2, both upstream, both in PR 0 |
+| 10 | Task 16 (`docs/sdlc-local.md`, in the same PR as the watched-path change) and Task 17 (`CLAUDE.md`). `README.md` deliberately untouched: it documents neither skills nor commands, so no reader following it is misled |
+| 11 | Task 5 — the `NOTICE.md` bullet recording the divergence from the pinned upstream |
+
+**Not claimed:** none. This plan claims all eleven criteria in the spec.
+
+---
 
 ## Plan review log
 

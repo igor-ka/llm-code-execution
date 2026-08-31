@@ -43,7 +43,7 @@ transcripts on 2026-08-31.
    0 of 16 plans do. This matches [`docs/sdlc.md`](../sdlc.md) — the spec phase "produces
    objective, boundaries, success criteria, and open questions."
 
-4. **Scope lives in the plan, inconsistently.** 5 of 16 plans carry a `## Criteria coverage`
+4. **Scope lives in the plan, inconsistently.** 5 of 16 plans carry a `## Definition of done`
    section, and it is a coverage table, not a copy: *spec criterion → the task that discharges it*,
    plus an explicit **Not claimed** line. `2026-08-16-deploy-to-gcp-phase2.md` claims 7 of the
    spec's 12 criteria and disowns 5. The two most recent plans — `2026-08-29-adopt-acb.md` and
