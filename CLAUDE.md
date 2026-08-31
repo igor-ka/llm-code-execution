@@ -140,6 +140,48 @@ commits, the local modifications, and what was deliberately left out. Treat a ch
 as a code change — prompts are behaviour. `code-review` and `security-review` are built-in
 skills, not vendored.
 
+## Testing standards — keep the oracle out of the implementation
+
+A test's **oracle** is whatever decides pass from fail, usually the expected value in the assertion.
+These rules exist because most tests here are model-written, and a model asked to test existing code
+reads the implementation and writes tests describing it — so a bug becomes the expected value. Such
+a suite scores 100% on coverage *and* 100% on mutation testing. See
+[ADR 0006](docs/adr/0006-trusting-ai-written-tests.md); the three legal oracle sources and the
+reasoning are in [`docs/testing-notes.md`](docs/testing-notes.md).
+
+**The test:** if the implementation were deleted, could you still write this assertion? If no, the
+oracle came from the code and the test is worth close to nothing.
+
+1. **Never ask for tests after the code.** "Write the implementation, now add tests" guarantees an
+   implementation-derived oracle, because there is nowhere else to get one. Write the test first,
+   run it, and see it fail.
+2. **An oracle has exactly three legal sources** — written first, a document, or a second
+   implementation. `docs/testing-notes.md` names them and points at the examples already in this
+   repository.
+3. **Never edit an existing test to make it pass.** Two legal moves when a test fails: fix the code,
+   or state why the expectation was wrong and get sign-off. Silently adjusting an expected value is
+   how a generated suite rots into a transcript of whatever the code currently does, and it is
+   invisible in review because the diff looks like ordinary test churn.
+4. **Mock only at process boundaries** — the Docker socket, Postgres, Redis, the Anthropic API, the
+   Auth0 JWKS endpoint. Never mock the unit under test. A test that mocks its subject and asserts
+   the mock was called proves wiring and nothing else.
+
+**RED is recorded, not claimed.** Paste the failing output into the PR body, or commit RED
+separately so `git show` proves it. This is deliberately not a CI check: a check for the presence of
+a section cannot read what it checks, and a gate that cannot inspect what it gates is the
+decorative-assertion pattern this repo has already had to fix once.
+
+**Three questions every review asks:**
+- Where did this expected value come from?
+- Did any existing assertion change in this PR?
+- Is anything mocked that is not a process boundary?
+
+**Semantic mutants** — hand-authored holes expressing a threat, as in `backend/tests/mutants.ts` and
+`backend/tests/history/historyMutants.ts` — are committed fixtures asserted by ordinary tests, and
+are **never generated at CI time**. Authoring them belongs in the `security-and-hardening`
+threat-model pass the **Sensitive paths** above already require: for each threat, ask whether it is
+expressible as a planted hole.
+
 ## Don't assume — surface it
 
 If anything about a request is ambiguous, don't guess. State your assumptions and check with me
