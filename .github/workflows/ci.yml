@@ -53,6 +53,11 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The mutation gate diffs against origin/main to find the changed lines, and the default
+          # shallow clone has no merge base. scripts/mutation-scope.sh hard-fails rather than
+          # reporting an empty scope, so a missing history is loud — but this is what makes it work.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -80,6 +85,23 @@ jobs:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
           REDIS_URL: redis://localhost:6379
         run: ./verify.sh test:integration
+      # The diff-scoped mutation gate. PRs only — it needs a merge base, and a push to main has
+      # nothing to diff against. MUTATION_REQUIRE_FULL=1 means a missing service container is a
+      # hard failure rather than a silently partial run: without it, a Postgres that failed to
+      # start would report every mutant in pgStore.ts as a survivor.
+      - name: Mutation test
+        if: github.event_name == 'pull_request'
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          REDIS_URL: redis://localhost:6379
+          MUTATION_REQUIRE_FULL: "1"
+          MUTATION_BASE_REF: origin/${{ github.base_ref }}
+        run: ./verify.sh mutation
+      # The proof that the gate can fail, kept out of the inner loop but never out of CI. Without
+      # it the whole target could be a no-op and every check would stay green.
+      - name: Mutation gate self-test
+        if: github.event_name == 'pull_request'
+        run: ./verify.sh mutation:selftest
       # Build the images on PRs only — keeps pushes to main fast.
       - name: Package
         if: github.event_name == 'pull_request'
