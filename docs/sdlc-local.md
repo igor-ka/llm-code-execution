@@ -180,6 +180,15 @@ proving a negative about the whole coverage graph, and getting it wrong fails op
 and `scripts/mutation-scope.sh` hard-fails rather than reporting an empty scope — the likeliest way
 this gate would silently check nothing.
 
+**The self-test resolves Stryker by path, and that is not a style choice.** It runs
+`backend/node_modules/.bin/stryker` explicitly and refuses to start if that file is missing. The
+obvious `npx --prefix backend stryker run` does **not** fail when the local install is stale or
+absent — npx downloads the deprecated standalone `stryker` package from the registry and runs
+*that*, which dies with `MODULE_NOT_FOUND` and writes no report. Observed on a worktree whose
+`node_modules` predated the merge that added Stryker. A gate self-test that can be satisfied by a
+different program than the one under test is worse than no self-test at all, so it fails loudly and
+tells you to run `npm ci`.
+
 `mutation:selftest` is a separate target because it runs Stryker twice against a deliberately weak
 fixture to prove the gate can still fail. That belongs before a push and in CI, not in the inner
 loop. Neither target is in `all`: both need a merge base that a detached checkout may not have.
