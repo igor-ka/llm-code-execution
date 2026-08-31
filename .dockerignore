@@ -23,3 +23,8 @@ scripts
 **/.env
 **/.env.*
 !**/.env.example
+
+# Mutation testing output — the Mutation test step runs before Package
+**/reports
+**/.stryker-tmp
+**/.mutation-selftest-strong

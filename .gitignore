@@ -12,6 +12,11 @@ dist/
 .vite/
 *.tsbuildinfo
 
+# Mutation testing (Stryker)
+.stryker-tmp/
+reports/
+.mutation-selftest-strong/
+
 # Env & secrets
 .env
 .env.local
