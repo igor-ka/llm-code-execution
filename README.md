@@ -43,7 +43,7 @@ backend/
       dto.ts / types.ts      Zod DTOs + domain types; pool.ts / migrate.ts (SQL runner)
   migrations/                ordered SQL, applied on boot (001_history.sql)
   sandbox-image/Dockerfile   the minimal, non-root EXECUTION image (Python — unchanged)
-  tests/                     Vitest suites; history/ = contract + router + persist + isolation battery
+  tests/                     Vitest suites; history/ = contract + router + persist + isolation battery + generated properties
   verify.sh                  checks (eslint + prettier + vitest + tsc + package + npm audit); +test:integration (Postgres, Redis), +mutation
 frontend/                    React + Vite UI
   src/                       App.tsx, api.ts, history.ts, components/ (HistorySidebar, SessionView, RunResult)
@@ -62,7 +62,7 @@ infra/                       Terraform root for the GCP environment (Phase 1 fou
 docs/sdlc.md                 the shared development process (carried from igor-ka/acb)
 docs/sdlc-local.md           this repository's half of it — and what the SDLC docs gate enforces
 docs/sdlc-example.md         the seven phases walked end to end on one real feature
-docs/testing-notes.md        testing traps, and where a test's oracle may legitimately come from
+docs/testing-notes.md        testing traps, where an oracle may come from, and the pinned fast-check seed
 docs/escaped-defects.md      every defect that reached main, and the gate that should have caught it
 docker-compose.yml           local dev topology: backend + frontend + postgres + redis + one-shot sandbox-image build
 Dockerfile                   PRODUCTION image: SPA + API in one container, one origin, non-root, no Docker socket

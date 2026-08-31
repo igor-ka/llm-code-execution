@@ -88,3 +88,49 @@ gate whose mutant population changes between two runs of the same commit can pas
 nothing changed, which is not a gate. Authoring them belongs in the `security-and-hardening`
 threat-model pass that the *Sensitive paths* in [`../CLAUDE.md`](../CLAUDE.md) already require —
 for each threat, ask whether it is expressible as a planted hole.
+
+## Property-based tests, and why the seed is pinned
+
+`isolation.test.ts` asserts INV-1..8 over cases a human or a model chose. That is the weakness:
+whoever picked the cases picked them from the same understanding that produced the code, so a
+shared misunderstanding survives every one of them.
+
+`isolation.property.test.ts` inverts it. You state the rule and `fast-check` generates hundreds of
+operation sequences trying to break it, then **shrinks** any failure to the smallest input that
+still fails. Dropping the owner filter from `memoryStore.listSessions` reduces a random 25-operation
+sequence to `[{ kind: "append", owner: A, prompt: " " }]` in three shrinks.
+
+**Assert both directions, or the property is half a test.** The first version of these properties
+only walked the returned sessions checking that none belonged to the other owner — which a
+`listSessions` returning *nothing at all* also satisfies, vacuously. Review caught it and it was
+verified: destroying the listing entirely made both properties pass. They now compare the sorted id
+sets, so "shows me everything of mine" and "shows me nothing of theirs" are one assertion that
+neither a leak nor a wholesale deletion survives. A one-sided assertion is the decorative-test shape
+this whole section is about, and it is easy to write by accident when the invariant is phrased as a
+prohibition.
+
+The generator does not share the model's misunderstanding — it is not reasoning, it is trying
+things — which is the uncorrelated evidence hand-picked examples cannot provide.
+
+**The seed is pinned in [`../backend/tests/fc.ts`](../backend/tests/fc.ts), and that is deliberate.**
+fast-check defaults to a fresh seed per run, so a property can pass ninety-nine times and fail on
+the hundredth. That failure is real — a counterexample, not a flake — but a gate that fails for a
+reason unrelated to the change under review is the one thing that gets a gate ignored. It is worse
+here than elsewhere: the mutation gate reads a test failure as a **kill**, so an unrelated failure
+makes *that* gate pass for the wrong reason.
+
+So CI is a deterministic regression suite over a fixed seed, and the search happens locally:
+
+```bash
+cd backend && FC_SEED=$RANDOM npm run test
+```
+
+A counterexample found that way is a bug to fix, and the seed that found it is worth pinning in
+`fc.ts` alongside the original.
+
+**One long-lived server per owner, not one per assertion.** Handing supertest an app makes it create
+and tear down an ephemeral server per request; at `numRuns: 200` these two properties would make
+roughly 2,000 of them in a single worker, which fails on socket churn rather than on logic. The
+servers are created once in `beforeAll` on port 0, and the store stays fresh per run behind a
+delegating proxy whose target is swapped — resetting with `clearAll()` would use the very method
+INV-5 tests to set up INV-5.
