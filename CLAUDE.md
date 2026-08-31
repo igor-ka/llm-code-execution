@@ -41,6 +41,12 @@ Which skill when — all vendored in `.claude/skills/`, loaded on demand:
 The standing bar every change clears before it counts as done is
 `.claude/skills/references/definition-of-done.md`.
 
+One command ships alongside the skills, carried the same way: **`/loop-plan <plan path>`** works a
+plan to the criteria its `## Criteria coverage` table claims. It reads scope from the plan and
+progress from the tracker, never edits the plan, and merges nothing unless you say so in that run —
+a word about one pull request does not carry to the next. It stops when the criteria pass with
+evidence, when a `Human dependencies` entry blocks, or at its tick ceiling.
+
 ## Sensitive paths
 
 A change to any of these gets the `security-and-hardening` threat-model pass **before**

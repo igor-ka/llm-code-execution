@@ -43,7 +43,7 @@ transcripts on 2026-08-31.
    0 of 16 plans do. This matches [`docs/sdlc.md`](../sdlc.md) — the spec phase "produces
    objective, boundaries, success criteria, and open questions."
 
-4. **Scope lives in the plan, inconsistently.** 5 of 16 plans carry a `## Definition of done`
+4. **Scope lives in the plan, inconsistently.** 5 of 16 plans carry a `## Criteria coverage`
    section, and it is a coverage table, not a copy: *spec criterion → the task that discharges it*,
    plus an explicit **Not claimed** line. `2026-08-16-deploy-to-gcp-phase2.md` claims 7 of the
    spec's 12 criteria and disowns 5. The two most recent plans — `2026-08-29-adopt-acb.md` and
@@ -87,7 +87,7 @@ transcripts on 2026-08-31.
 
 **In scope**
 
-- **A plan-shape contract in `writing-plans/SKILL.md`**: a mandatory `## Definition of done`
+- **A plan-shape contract in `writing-plans/SKILL.md`**: a mandatory `## Criteria coverage`
   coverage table, and a `**Human dependencies:**` header field required only when non-empty.
 - **The matching prose in `docs/sdlc.md` §2**, where the argument for `PR boundaries` living in
   the header already sits (D9).
@@ -119,7 +119,9 @@ and nothing about the phases, the gates or the tracker changes.
 
 ## Success criteria
 
-1. **★ `writing-plans/SKILL.md` requires a `## Definition of done` table** mapping each claimed
+1. **★ `writing-plans/SKILL.md` requires a `## Criteria coverage` table** (renamed from
+   `## Definition of done` during the PR 0 review — the carried bucket already owns that name for
+   the standing bar in `references/definition-of-done.md`, which is its opposite) mapping each claimed
    spec criterion to the task or step that discharges it, with an explicit **Not claimed** line.
    This is the criterion the whole change exists for: it is what makes a plan a single lookup.
 2. **★ Every file changed here is changed in `acb` and arrives by `acb pull`.** After it lands,

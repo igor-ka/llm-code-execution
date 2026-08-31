@@ -26,7 +26,10 @@ Task tool (general-purpose):
     | Completeness | TODOs, placeholders, "TBD", incomplete tasks, missing steps |
     | Spec Alignment | Plan covers the requirements, no major scope creep |
     | Task Decomposition | Tasks have clear boundaries, steps are actionable |
+    | Test oracles | Does every task that writes a test name the oracle it asserts — written first, a document (a success criterion, a named invariant, a threat), or a second implementation? "Matches the implementation" is not an oracle: a test whose expected value was read off the code passes whatever the code does |
     | PR boundaries | Does the header name the PRs this plan produces, one child issue each? Does that split match the task graph and its dependency order? Where two children are merged into one PR, is the reason stated and does it hold? |
+    | Criteria coverage | Does the plan carry a `## Criteria coverage` table, after its last task, mapping each spec criterion it claims to the task that discharges it, plus a `Not claimed` line accounting for every criterion the table omits? A missing section is a finding. So is a table that restates criteria instead of naming tasks, and so is a `Not claimed` line that does not add up. |
+    | Human dependencies | If the plan needs a credential, account, approval or by-hand operation from a person, does the header name it and the task it blocks? The field is correctly absent when there are none — but a plan that plainly needs one and does not say so is a finding. |
     | Buildability | Could an engineer follow this plan without getting stuck? |
     | Blast radius | What is the worst case of this change, and how many systems/people does it touch? |
     | Reversibility | If this is wrong, how cheaply can it be undone? Prefer reversible steps. |
@@ -55,6 +58,8 @@ Task tool (general-purpose):
       handling", "write tests for the above")
     - A missing verification step on a task that plainly needs one
     - A missing test for behaviour the plan already commits to
+    - A test task that names no oracle, where the plan states the invariant or
+      success criterion elsewhere and the correction is simply to cite it
 
     A MECHANICAL finding **must state the exact correction** — the path, the
     name, the step, the test. If you cannot write the correction down, the
@@ -65,6 +70,10 @@ Task tool (general-purpose):
     - Anything that changes **cost, risk posture, or architecture**
     - Anything touching the security invariants (auth, isolation, sandbox)
     - Anything where you disagree with a choice the plan states deliberately
+    - A test task whose oracle would have to be **invented** — no success
+      criterion, no named invariant, no second implementation to compare
+      against. Do not guess one: an oracle chosen by the reviewer is as
+      implementation-derived as one chosen by the author
     - Anything you are not certain about
 
     **Tie-break: when in doubt, JUDGMENT.** A wrong JUDGMENT costs a human a few

@@ -5,8 +5,8 @@ uses it, byte-identical. This file is the other half: what *this* repository doe
 document deliberately does not know about.
 
 **It is the contract the `SDLC docs` gate enforces.** A pull request that changes
-`.claude/skills/**`, any component's `verify.sh`, `infra/tests/**`, `.github/workflows/**` or
-anything in `scripts/` must update this file in the same pull request. The watched list is
+`.claude/skills/**`, `.claude/commands/**`, any component's `verify.sh`, `infra/tests/**`,
+`.github/workflows/**` or anything in `scripts/` must update this file in the same pull request. The watched list is
 `process.watched` in [`.acb.json`](../.acb.json), read at run time.
 
 Why this file and not `sdlc.md`: `sdlc.md` is a **carried** file, byte-identical in every consumer
@@ -19,6 +19,10 @@ shared half is not the document a change to `backend/verify.sh` invalidates; thi
 **The rule:** a PR that touches any of
 
 - `.claude/skills/**`
+- `.claude/commands/**` — carried, like the skills. `/loop-plan` is the only entry today: it works
+  a plan to the criteria its `## Criteria coverage` table claims, reads progress from the tracker
+  rather than the plan, and merges nothing unless you say so in that run. `acb status` reports a
+  carried tree that is missing from the list below, which is how this entry came to exist.
 - `.acb.json` — it holds the watched list, both escape hatches, the process-document path and
   every component's check name. Those semantics used to live in `scripts/`, which is why that
   directory is watched; they moved here, so this is watched too.

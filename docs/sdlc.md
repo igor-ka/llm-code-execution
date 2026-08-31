@@ -3,8 +3,8 @@
 How a change gets from an idea to `main` in this repository, and which skill governs each step.
 
 This document is a **contract**. If you change the development process — the skills in
-`.claude/skills/`, any component's `verify.sh`, anything in `scripts/`, or a workflow in
-`.github/workflows/` — update **the document `process.doc` names in `.acb.json`** in the same
+`.claude/skills/`, the commands in `.claude/commands/`, any component's `verify.sh`, anything in
+`scripts/`, or a workflow in `.github/workflows/` — update **the document `process.doc` names in `.acb.json`** in the same
 change. That is usually this file; where a repository keeps its own process specifics separate, it
 is that companion instead. The `SDLC docs` CI job enforces it, and `CLAUDE.md` points at both.
 See [Changing this SDLC](#changing-this-sdlc).
@@ -20,6 +20,7 @@ is allocated to the weakest layer that can still hold it.
 | --- | --- | --- |
 | **Enforced** | `verify.sh`, `.github/workflows/ci.yml`, the "Protect main" ruleset | Deterministic. Cannot be talked out of, forgotten, or skipped under deadline pressure. |
 | **Procedural** | `.claude/skills/*` | Loaded on demand, only when relevant. Keeps long procedure out of always-on context. |
+| **Invoked** | `.claude/commands/*` | Run deliberately, by name, with an argument. `/loop-plan <plan path>` works a plan to the criteria its `## Criteria coverage` claims, and stops when they pass with evidence, when a `Human dependencies` entry blocks, or at its tick ceiling. |
 | **Always-on** | `CLAUDE.md` | Policy and routing only. Every line competes for attention, so it stays small. |
 
 If something *must* happen, it belongs in the enforced layer. `CLAUDE.md` explains the gates;
@@ -158,6 +159,25 @@ splitting is free: once a branch is finished, the choices are re-slicing complet
 reaching for an escape hatch. The staff-engineer review checks the boundaries against the task
 graph, so a human sees "seven PRs" before a line is written. The `PR shape` job enforces the same
 rule at merge time, but it is a backstop, not the decision point.
+
+**Every plan carries a `## Criteria coverage`, after its last task** — a table mapping each spec criterion the plan
+claims to the task that discharges it, and a `Not claimed` line accounting for the rest. It is a
+map, never a copy: criteria are named by identifier and never restated, for the same reason an
+epic links rather than pastes.
+
+A spec's criteria define done for the whole problem; a plan is usually one phase of it. One phase
+of a four-phase spec claimed seven of twelve criteria and disowned five — and without that line
+nothing states *which* five, so the boundary is reconstructed from context by every reviewer,
+every later reader, and any unattended process working the plan. The staff-engineer review checks
+that the section exists and that it accounts for every criterion. There is deliberately no
+merge-time backstop: a plan is read long before it is merged, and the review is where a missing
+boundary still costs nothing to fix.
+
+**A plan that needs something from a person says so in its header.** `Human dependencies` names
+the credentials, accounts, approvals and by-hand operations the plan cannot supply itself, and the
+task each one blocks. Unlike `PR boundaries` the field is **omitted when there are none** — a line
+reading "none" in every plan in every repository is ceremony. Where it does appear it is what
+separates a plan that stops at a known boundary from one that discovers the boundary mid-run.
 
 **The mandatory gate:** every plan gets a **staff-engineer review by a fresh subagent** using
 `planning-reviewer-prompt.md`, and the review is **surfaced to the human before implementation
@@ -527,6 +547,7 @@ sometimes a local companion to it, for the reason set out below.
 **The rule:** a PR that touches any of
 
 - `.claude/skills/**`
+- `.claude/commands/**`
 - any component's `verify.sh`, and the self-tests it runs first
 - `.github/workflows/**`
 - `scripts/**`

@@ -35,7 +35,7 @@ cat > "$CFGDIR/.acb.json" <<'JSON'
     "doc": "docs/sdlc.md",
     "sdlcSyncHatch": "[skip-sdlc-sync]",
     "watched": [
-      "^\\.claude/skills/", "^\\.github/workflows/", "^scripts/",
+      "^\\.claude/skills/", "^\\.claude/commands/", "^\\.github/workflows/", "^scripts/",
       "^backend/verify\\.sh$", "^frontend/verify\\.sh$", "^infra/verify\\.sh$",
       "^infra/tests/"
     ]
@@ -153,6 +153,7 @@ watched   "infra/verify.sh is watched"          "infra/verify.sh"
 watched   "infra/tests/ is watched"             "infra/tests/gates.test.sh"
 watched   "workflows are watched"               ".github/workflows/terraform.yml"
 watched   "scripts/ is watched"                 "scripts/check-sdlc-sync.sh"
+watched   "commands are watched"              ".claude/commands/loop-plan.md"
 
 # The Terraform CONFIG is not a process change. Watching all of infra/ would force a docs/sdlc.md
 # edit on every resource added for the rest of the project's life, and a contract that fires on
