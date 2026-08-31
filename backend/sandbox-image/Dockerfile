@@ -1,7 +1,7 @@
 # The EXECUTION image: minimal, non-root environment that AI-generated code runs in.
 # Kept intentionally small and dependency-light. This same OCI image is what would run
 # under Cloud Run Jobs / GKE+gVisor in the GCP future — only the launch mechanism changes.
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # A handful of common, pure-ish libraries so generated code is useful out of the box.
 # Add cautiously: every package is attack surface inside the sandbox.
