@@ -24,6 +24,8 @@ shared half is not the document a change to `backend/verify.sh` invalidates; thi
   directory is watched; they moved here, so this is watched too.
 - `.github/ruleset.json` — the required-check names in prose below are enumerated by hand, and
   nothing else would notice them going stale
+- `.mutation-scope.json` — it declares which files the mutation gate covers; narrowing it narrows
+  the gate, and nothing else would notice
 - `backend/verify.sh`, `frontend/verify.sh` or `infra/verify.sh`
 - `infra/tests/**` — the self-tests `infra/verify.sh` runs first: the gates, and `bootstrap.sh`
   against a fake `gcloud` (a live run proves the script worked that day, not that the next edit is safe)
@@ -134,6 +136,49 @@ proposed upstream.
 - **Postgres and Redis run as service containers**, and only the `Integration test` step sets
   `DATABASE_URL` / `REDIS_URL` — which is exactly why the service-free `Test` step still skips
   those suites.
+
+## The mutation gate
+
+`./verify.sh mutation` mutates only the lines the branch changes against `origin/main` and **fails
+on any mutant that survived or that no test covered**. The second half is why it also catches "this
+PR added a line nothing executes". Run it at the REFACTOR step: survivors are the assertions you
+have not written yet, and they cost two minutes while the code is still in your head. CI runs the
+identical target as a backstop, so if the workflow is working CI never finds a survivor.
+
+The eligible set is declared in [`../.mutation-scope.json`](../.mutation-scope.json) — not counted
+here, because a line count in prose goes stale the first time a file is added. That file is watched
+by the `SDLC docs` gate for the same reason `.acb.json` is: narrowing it narrows the gate.
+
+**The gate blocks everywhere, and the first PR into a weak file pays the tax.** A spike on
+2026-08-31 measured the datastore-free half of the eligible set at **52%** — `dockerBackend.ts` at
+11%, with 73 of its 133 mutants uncovered. Narrowing the set to the files that already sustain the
+gate was considered and rejected: it would exempt exactly the code that most needs it. Kill the
+mutants, or suppress with a stated reason.
+
+An unkillable mutant — an **equivalent mutant**, whose edit cannot change observable behaviour — is
+suppressed inline with `// Stryker disable next-line <mutator>: <reason>`. The reason is mandatory
+and `scripts/mutation-suppressions.sh` rejects a bare one, on the same principle as the dated
+exception the audit flags demand.
+
+**It requires both datastores, and in CI it cannot run without them.** `MUTATION_REQUIRE_FULL=1`
+makes a missing `DATABASE_URL` or `REDIS_URL` a hard failure rather than a partial run: the suites
+covering `pgStore.ts`, `migrate.ts` and `redisQuota.ts` self-skip without those variables — see
+[`testing-notes.md`](testing-notes.md) — so a DB-free run would report every mutant in them as a
+survivor. That is not incomplete output, it is wrong output.
+
+**Concurrency is chosen from the scope, by an allowlist.** Stryker forks N vitest processes against
+the one CI Postgres, and the Postgres suites share a schema, so a collision produces a spurious
+failure — which *kills* a mutant and makes the gate pass for the wrong reason. Anything not provably
+datastore-free (`auth.ts`, `schemas.ts`, `sandbox/`) runs single-worker. An allowlist rather than a
+denylist because a denylist fails open on the next file nobody thought about.
+
+**The backend job checks out with `fetch-depth: 0`.** Without a merge base there is nothing to diff,
+and `scripts/mutation-scope.sh` hard-fails rather than reporting an empty scope — the likeliest way
+this gate would silently check nothing.
+
+`mutation:selftest` is a separate target because it runs Stryker twice against a deliberately weak
+fixture to prove the gate can still fail. That belongs before a push and in CI, not in the inner
+loop. Neither target is in `all`: both need a merge base that a detached checkout may not have.
 
 ## The deployment scripts
 
