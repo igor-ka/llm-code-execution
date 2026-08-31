@@ -16,17 +16,20 @@ sequences.
 **Tech Stack:** `@stryker-mutator/core` 10.0.0 + `@stryker-mutator/vitest-runner` 10.0.0 (peer
 `vitest >=2.0.0`; backend is on 3.2.6), `fast-check` (new), Node 22, bash, GitHub Actions.
 
-**PR boundaries:** three PRs, one child issue each. Task 0 creates the epic and the three children
-and records the assigned numbers in this header before PR 1 is opened.
+**PR boundaries:** three PRs, one child issue each, under epic
+[#227](https://github.com/igor-ka/llm-code-execution/issues/227). Filed 2026-08-31 by Task 0.
 
-- **PR 1 — the rules, docs only.** Spec + ADR + `docs/escaped-defects.md` + `CLAUDE.md` testing
-  standards + `docs/testing-notes.md` reasoning + `docs/sdlc-local.md` process edits. No code, no
-  CI change. Closes child 1.
-- **PR 2 — the diff-scoped mutation gate.** `scripts/mutation-scope.sh`,
-  `scripts/mutation-decide.mjs`, three self-tests, `backend/stryker.conf.mjs`,
-  `backend/verify.sh mutation`, the `Mutation test` CI step, docs. Closes child 2.
+- **PR 0 — the design artifacts.** Spec + ADR + this plan. Docs only, closes no issue.
+  **Landed as [#226](https://github.com/igor-ka/llm-code-execution/pull/226)**, split out of Task 5
+  so the plan could be reviewed before anything was built.
+- **PR 1 — the rules, docs only.** `docs/escaped-defects.md` + `CLAUDE.md` testing standards +
+  `docs/testing-notes.md` reasoning + `docs/sdlc-local.md` process edits + `docs/README.md` index.
+  No code, no CI change. **Closes #228.**
+- **PR 2 — the diff-scoped mutation gate.** `.mutation-scope.json`, `scripts/mutation-scope.sh`,
+  `scripts/mutation-decide.mjs`, `scripts/mutation-suppressions.sh`, four self-tests,
+  `backend/stryker.conf.mjs`, the two `verify.sh` targets, the CI steps, docs. **Closes #229.**
 - **PR 3 — property-based invariants.** `fast-check`, INV-1 and INV-5 as generated operation
-  sequences, pinned seed. Closes child 3.
+  sequences, pinned seed. **Closes #230.**
 
 PR 2 depends on PR 1 only for the written rationale; nothing in it imports from PR 1. PR 3 is
 independent of both and could land first — it is ordered last because it is the least urgent.
@@ -207,7 +210,13 @@ either: it is written repo-agnostic from the start so acb can carry it unchanged
 
 ---
 
-## Task 0: Create the epic and its three children
+## Task 0: Create the epic and its three children — **DONE 2026-08-31**
+
+Epic [#227](https://github.com/igor-ka/llm-code-execution/issues/227); children
+[#228](https://github.com/igor-ka/llm-code-execution/issues/228) (rules),
+[#229](https://github.com/igor-ka/llm-code-execution/issues/229) (gate),
+[#230](https://github.com/igor-ka/llm-code-execution/issues/230) (properties). The commands below
+are kept for the record.
 
 **Files:** none — GitHub only.
 

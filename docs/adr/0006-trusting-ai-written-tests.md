@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-29
-- **Tracking:** not yet filed. Decided (2026-08-31): **one epic with three children**, one per PR — the rules, the mutation gate, the property-based invariants. The plan's Task 0 files them and records the numbers.
+- **Tracking:** epic [#227](https://github.com/igor-ka/llm-code-execution/issues/227), children [#228](https://github.com/igor-ka/llm-code-execution/issues/228)–[#230](https://github.com/igor-ka/llm-code-execution/issues/230) — one per PR: the rules, the mutation gate, the property-based invariants.
 - **Related:** spec [2026-08-28-trusting-ai-written-tests](../specs/2026-08-28-trusting-ai-written-tests.md); ADR [0002](0002-agentic-auth-security-testing.md) (whose retained artifact is the mutation-covered auth battery); [`sdlc.md`](../sdlc.md) phases 3–5 and [`sdlc-local.md`](../sdlc-local.md)
 
 ## Context
