@@ -212,5 +212,6 @@ its name stable, or update the ruleset in the same PR.
 
 `SDLC docs`, `PR shape` and `Deploy scripts` (PRs only, each in its own workflow) are the
 deliberate exceptions to the `verify.sh` mirroring rule above: the first diffs a PR against its
-base, the second reads the PR body, and the third runs the unit tests for two deployment scripts
-that no `verify.sh` owns. None has a single-working-tree equivalent as a CI check.
+base, the second reads the PR body, and the third runs the unit tests for the repo-root `scripts/`
+that no component's `verify.sh` owns — the two deploy scripts, the ruleset apply script, and the
+mutation gate's tooling. None has a single-working-tree equivalent as a CI check.
