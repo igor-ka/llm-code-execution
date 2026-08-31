@@ -77,21 +77,21 @@ function appFor(userId: string) {
   });
 }
 
-let serverA: Server;
-let serverB: Server;
+/** One server per owner, keyed by user id — the single binding, so the two cannot drift. */
 const servers: Record<string, Server> = {};
+const serverFor = (o: Owner) => servers[o.userId];
 
 beforeAll(() => {
   // Port 0 lets the OS pick a free port — two of these, for the whole file.
-  serverA = appFor(A.userId).listen(0);
-  serverB = appFor(B.userId).listen(0);
-  servers[A.userId] = serverA;
-  servers[B.userId] = serverB;
+  for (const owner of [A, B]) servers[owner.userId] = appFor(owner.userId).listen(0);
 });
 
 afterAll(async () => {
-  await new Promise<void>((r) => serverA.close(() => r()));
-  await new Promise<void>((r) => serverB.close(() => r()));
+  // Iterate what actually got created: if the second listen() throws, an unguarded `serverB.close()`
+  // reports "Cannot read properties of undefined" and masks the real bind failure.
+  for (const server of Object.values(servers)) {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
   await inner.close();
 });
 
@@ -126,19 +126,28 @@ describe("INV-1 as a property: a listing never contains another owner's session"
             });
             createdBy.set(session.id, op.owner.userId);
           } else {
-            await request(servers[op.owner.userId]).delete("/api/sessions");
+            const del = await request(serverFor(op.owner)).delete("/api/sessions");
+            expect(del.status).toBe(200);
             for (const [id, uid] of createdBy) if (uid === op.owner.userId) createdBy.delete(id);
           }
         }
 
+        // BOTH DIRECTIONS, and this is the whole assertion. An earlier version only walked the
+        // returned sessions checking none belonged to the other owner — which a listSessions that
+        // returns NOTHING also satisfies, vacuously. Verified: destroying the listing entirely made
+        // that version pass. Comparing the sorted id sets makes "shows me everything of mine" and
+        // "shows me nothing of theirs" a single check that neither an owner-filter leak nor a
+        // wholesale deletion can survive.
         for (const owner of [A, B]) {
-          const res = await request(servers[owner.userId])
-            .get("/api/sessions")
-            .query({ limit: 100 });
+          const res = await request(serverFor(owner)).get("/api/sessions").query({ limit: 100 });
           expect(res.status).toBe(200);
-          for (const session of res.body.sessions) {
-            expect(createdBy.get(session.id)).toBe(owner.userId);
-          }
+          const returned = res.body.sessions.map((x: { id: string }) => x.id).sort();
+          const expected = [...createdBy.entries()]
+            .filter(([, uid]) => uid === owner.userId)
+            .map(([id]) => id)
+            .sort();
+          expect(returned).toEqual(expected);
+          expect(res.body.total).toBe(expected.length);
         }
       }),
     );
@@ -151,6 +160,20 @@ describe("INV-5 as a property: clear-all deletes only the caller's data", () => 
       fc.asyncProperty(opsArb, async (ops) => {
         inner = new MemoryHistoryStore();
 
+        // Seed one session per owner BEFORE the generated sequence, so the final assertions are
+        // never vacuous. Without it, measured over the pinned seed, a quarter of runs generated no
+        // B append — `before` was [] and "B's data survived" reduced to expect([]).toEqual([]).
+        // A pinned seed makes that dilution permanent and invisible, so it is fixed structurally
+        // rather than with fc.pre, which would just discard those runs.
+        for (const owner of [A, B]) {
+          await inner.appendRun(owner, null, { kind: "message", prompt: "seed", message: "ok" });
+        }
+
+        // EVERY generated op is applied, appends and clears alike. An earlier version had no `else`
+        // branch, so all clears were silently dropped — and 91% of generated sequences contain one.
+        // The prior state was therefore always append-only, and clear-then-append, two consecutive
+        // clears, and B-clears-before-A were all unreachable by a test whose name promises "any
+        // prior sequence".
         for (const op of ops) {
           if (op.kind === "append") {
             await inner.appendRun(op.owner, null, {
@@ -158,20 +181,43 @@ describe("INV-5 as a property: clear-all deletes only the caller's data", () => 
               prompt: op.prompt,
               message: "ok",
             });
+          } else {
+            const del = await request(serverFor(op.owner)).delete("/api/sessions");
+            expect(del.status).toBe(200);
+            // Re-seed the owner that just cleared, so both owners always hold data at the moment
+            // of the final clear — which is the only moment this property is about.
+            await inner.appendRun(op.owner, null, {
+              kind: "message",
+              prompt: "reseed",
+              message: "ok",
+            });
           }
         }
 
-        const listB = async () =>
-          (await request(serverB).get("/api/sessions").query({ limit: 100 })).body.sessions.map(
-            (x: { id: string }) => x.id,
-          );
+        // id AND run_count: runs are data too, and `clearAll` deletes them in an inner loop keyed
+        // on sessionId. Mapping to ids alone would let a clear-all that wipes EVERY owner's runs
+        // while deleting only the caller's sessions pass — B's ids unchanged, B's run_count
+        // silently zero.
+        const listB = async () => {
+          const res = await request(serverFor(B)).get("/api/sessions").query({ limit: 100 });
+          expect(res.status).toBe(200);
+          return res.body.sessions
+            .map((x: { id: string; run_count: number }) => ({ id: x.id, run_count: x.run_count }))
+            .sort((l: { id: string }, r: { id: string }) => l.id.localeCompare(r.id));
+        };
 
         const before = await listB();
-        await request(serverA).delete("/api/sessions");
+        expect(before.length).toBeGreaterThan(0); // the seeding above guarantees this
+
+        const del = await request(serverFor(A)).delete("/api/sessions");
+        expect(del.status).toBe(200);
+        expect(del.body.deleted).toBeGreaterThan(0);
+
         expect(await listB()).toEqual(before);
-        expect((await request(serverA).get("/api/sessions").query({ limit: 100 })).body.total).toBe(
-          0,
-        );
+        const afterA = await request(serverFor(A)).get("/api/sessions").query({ limit: 100 });
+        expect(afterA.status).toBe(200);
+        expect(afterA.body.total).toBe(0);
+        expect(afterA.body.sessions).toEqual([]);
       }),
     );
   });

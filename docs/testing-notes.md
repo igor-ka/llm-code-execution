@@ -67,7 +67,16 @@ shared misunderstanding survives every one of them.
 `isolation.property.test.ts` inverts it. You state the rule and `fast-check` generates hundreds of
 operation sequences trying to break it, then **shrinks** any failure to the smallest input that
 still fails. Dropping the owner filter from `memoryStore.listSessions` reduces a random 25-operation
-sequence to `[{ kind: "append", owner: A, prompt: " " }]` in three shrinks. The generator does not
+sequence to `[{ kind: "append", owner: A, prompt: " " }]` in three shrinks.
+
+**Assert both directions, or the property is half a test.** The first version of these properties
+only walked the returned sessions checking that none belonged to the other owner — which a
+`listSessions` returning *nothing at all* also satisfies, vacuously. Review caught it and it was
+verified: destroying the listing entirely made both properties pass. They now compare the sorted id
+sets, so "shows me everything of mine" and "shows me nothing of theirs" are one assertion that
+neither a leak nor a wholesale deletion survives. A one-sided assertion is the decorative-test shape
+this whole section is about, and it is easy to write by accident when the invariant is phrased as a
+prohibition. The generator does not
 share the model's misunderstanding — it is not reasoning, it is trying things — which is the
 uncorrelated evidence hand-picked examples cannot provide.
 
