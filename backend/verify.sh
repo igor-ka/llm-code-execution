@@ -15,6 +15,8 @@
 #   test:integration contract suites against a real Postgres and Redis (require DATABASE_URL
 #                    and REDIS_URL respectively; each self-skips when its variable is unset)
 #   package          build the backend, sandbox and production images, and assert against them
+#   mutation         diff-scoped mutation gate (blocks on survivors AND uncovered changed lines)
+#   mutation:selftest  proves the gate can fail — Stryker against a deliberately weak fixture
 #
 # CI invokes the individual targets as separate named steps (Audit / Install / Lint / Format /
 # Test / Build / Integration test / Package) so each gets its own pass/fail and timing
@@ -37,7 +39,7 @@ CHECKOUT_ROOT="$(cd .. && pwd)"
 # list instead because the conformance check plants a `false` in the FIRST declared target, and a
 # target that exits before doing anything is what keeps that probe free. Do not "fix" the order to
 # match `all()`: that would put `audit` first and make every conformance run a real `npm audit`.
-TARGETS="install audit lint format test build migrate test:integration package"
+TARGETS="install audit lint format test build migrate test:integration package mutation mutation:selftest"
 
 run() {
   echo
@@ -95,6 +97,106 @@ integration() {
   [[ -n "${REDIS_URL:-}" ]]    || echo "==> note: REDIS_URL unset — Redis quota suite will self-skip"
   run npm run test:integration
 }
+# The diff-scoped mutation gate. See docs/adr/0006-trusting-ai-written-tests.md.
+#
+# THE LOCAL RUN IS THE FIRST SIGNAL AND CI IS THE BACKSTOP. Run this at the REFACTOR step on the
+# lines you just touched — survivors are the assertions you have not written yet, and they are a
+# two-minute fix while the code is still in your head. If the workflow is working, CI never finds
+# a survivor.
+mutation() {
+  # The datastore precondition FIRST, before any work: it is the cheapest check here and the one
+  # most likely to fail, and paying a Stryker run before reaching it wastes minutes.
+  #
+  # CI must not be able to take the partial branch. The suites covering pgStore.ts, migrate.ts and
+  # redisQuota.ts SELF-SKIP without these variables — so a DB-free run does not skip those files,
+  # it reports every mutant in them as SURVIVED. That is not incomplete output, it is wrong output,
+  # and it would fail the build for the wrong reason.
+  if [[ "${MUTATION_REQUIRE_FULL:-}" == "1" ]]; then
+    [[ -n "${DATABASE_URL:-}" ]] || { echo "MUTATION_REQUIRE_FULL=1 but DATABASE_URL is unset" >&2; exit 1; }
+    [[ -n "${REDIS_URL:-}" ]]    || { echo "MUTATION_REQUIRE_FULL=1 but REDIS_URL is unset" >&2; exit 1; }
+  else
+    [[ -n "${DATABASE_URL:-}" ]] || echo "==> note: DATABASE_URL unset — mutants in pgStore.ts and migrate.ts would all read as survivors"
+    [[ -n "${REDIS_URL:-}" ]]    || echo "==> note: REDIS_URL unset — mutants in redisQuota.ts would all read as survivors"
+  fi
+
+  # The three UNIT suites run every time: they cost milliseconds and they are what stops the
+  # decision logic rotting. The end-to-end proof lives in `mutation:selftest` — it runs Stryker
+  # twice against a fixture, which is right before a push and wrong in the inner loop.
+  run ../scripts/tests/mutation-scope.test.sh
+  run ../scripts/tests/mutation-decide.test.sh
+  run ../scripts/tests/mutation-suppressions.test.sh
+  run ../scripts/mutation-suppressions.sh src
+
+  local scope
+  scope="$(../scripts/mutation-scope.sh)"
+  if [[ -z "$scope" ]]; then
+    echo
+    echo "==> no mutable lines in this change — the eligible file set was not touched"
+    echo "    (this is a pass, not a skip: there is nothing to mutate)"
+    return 0
+  fi
+
+  echo
+  echo "==> mutating $(printf '%s\n' "$scope" | wc -l | tr -d ' ') changed range(s):"
+  printf '      %s\n' $scope
+
+  # CONCURRENCY IS CHOSEN FROM THE SCOPE, and this is a correctness control, not a tuning knob.
+  #
+  # Stryker forks N worker processes, each running its own vitest. CI provides ONE Postgres and ONE
+  # Redis, and the Postgres suites share a single schema — which is exactly why vitest.config.ts
+  # sets fileParallelism:false. That setting serializes files WITHIN one vitest process; it does
+  # nothing about two Stryker workers running two vitest processes at once. Two workers colliding
+  # is worse than slow: a spurious failure KILLS a mutant, so the collision makes the gate pass for
+  # the wrong reason and nobody can tell that from a real kill.
+  #
+  # AN ALLOWLIST, NOT A DENYLIST, and the direction is the point. Listing the files that DO touch a
+  # datastore fails OPEN: one added where the pattern does not anticipate runs in parallel against
+  # the shared schema, silently. Listing the ones that provably DO NOT fails CLOSED: anything
+  # unrecognised — every future file included — serializes until someone adds it here deliberately.
+  #
+  # The three entries are the whole eligible set outside history/ and limits/, and none of their
+  # suites opens a connection: auth.ts is jose against an in-memory keypair, schemas.ts is zod, and
+  # sandbox/** is dockerode and a spawned CLI, both faked.
+  #
+  # NOT `grep -qv`. frontend/verify.sh already carries the warning — "-qv inverts per LINE" — and
+  # the same trap applies to the exit code: the question is whether ANY line is off the allowlist,
+  # which is a test on the OUTPUT.
+  local offlist stryker_args=()
+  offlist="$(printf '%s\n' "$scope" | grep -vE '^src/(auth\.ts|schemas\.ts|sandbox/)' || true)"
+  if [[ -n "$offlist" ]]; then
+    echo "    scope is not provably datastore-free — running single-worker to protect the shared schema"
+    stryker_args+=(--concurrency 1)
+  fi
+
+  # Stryker's exit code is captured rather than left to `set -e` so the decision script always runs
+  # and always explains WHY. It is not swallowed: a non-zero Stryker exit with no offending mutant
+  # is treated as a crash below.
+  #
+  # `${a[@]+"${a[@]}"}` and NOT a bare `"${stryker_args[@]}"`. macOS ships bash 3.2.57, where
+  # expanding an EMPTY array under `set -u` aborts with "unbound variable" — and empty is the common
+  # case, so the plain form would kill the gate on every developer laptop while passing on CI's
+  # bash 5. Exactly the local/CI split this single-verify.sh design exists to prevent.
+  local stryker_status=0
+  npx stryker run ${stryker_args[@]+"${stryker_args[@]}"} \
+    --mutate "$(printf '%s\n' "$scope" | paste -sd, -)" || stryker_status=$?
+
+  if ! node ../scripts/mutation-decide.mjs reports/mutation/mutation.json; then
+    exit 1
+  fi
+  if [[ "$stryker_status" -ne 0 ]]; then
+    echo "stryker exited ${stryker_status} but the report names no unkilled mutant — treating as a crash" >&2
+    exit 1
+  fi
+}
+
+# The end-to-end proof that the gate can fail: Stryker really runs, really writes a report, and a
+# test that cannot detect a bug really is rejected. Two full Stryker runs against a tiny fixture.
+#
+# SEPARATE FROM `mutation` deliberately. It is the difference between a proven gate and a decorative
+# one, so it must run before every push and in CI — but the inner-loop REFACTOR run is supposed to
+# cost seconds, and paying two fixture runs there is how a target stops being used.
+mutation_selftest() { run ../scripts/tests/mutation-gate.test.sh; }
+
 # Image tags are daemon-wide, and this target BUILDS a tag and then RUNS it. Two worktrees
 # verifying at the same moment would otherwise share `…:verify`, so one tree's assertions can
 # execute the other tree's image and report a pass or fail that belongs to a different branch.
@@ -232,6 +334,9 @@ package_() {
   echo "    rejected as expected, by the guard"
 }
 
+# `mutation` and `mutation:selftest` are deliberately absent from `all`. The first needs a
+# resolvable merge base against origin/main, which a detached checkout or a fresh clone may not
+# have, and `all` must stay runnable anywhere. Run them explicitly: ./verify.sh mutation
 all() {
   # FIRST, before install: `npm ci` runs dependency lifecycle scripts, so auditing afterwards
   # lets a package with a known install-time vulnerability execute before the gate can reject it.
@@ -263,6 +368,8 @@ case "$target" in
   migrate)          migrate ;;
   test:integration) integration ;;
   package)          package_ ;;
+  mutation)         mutation ;;
+  mutation:selftest) mutation_selftest ;;
   *)                # 64, not 2 — see infra/verify.sh for the full reason.
                     echo "unknown target: $target (expected: all|$TARGETS)" >&2; exit 64 ;;
 esac
