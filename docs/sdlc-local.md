@@ -82,31 +82,31 @@ not skip.
 > better than none, but it is not full coverage.
 
 
-## Tests: the oracle must not come from the implementation
+## Tests: what the oracle rule adds here
 
-The rules are in [`../CLAUDE.md`](../CLAUDE.md) under *Testing standards*; the reasoning and the
-three legal oracle sources are in [`testing-notes.md`](testing-notes.md). Neither is restated here —
-this section is only **where they bind in the process**, which is the part specific to this
-repository.
+The rule itself now lives **upstream**, in the carried [`sdlc.md`](sdlc.md) under *The oracle must
+not come from the implementation* — the three legal oracle sources, the four rules, RED-is-recorded,
+assert-both-directions, and the three review questions. It was proposed from this repository
+(`acb propose docs/sdlc.md`) once it had been proven here, so every consumer gets it. Nothing generic
+is restated below.
 
-| Phase | What it adds |
+What is specific to this repository:
+
+| Phase | What it adds here |
 | --- | --- |
-| **Spec** | Success criteria written as observable behaviour. "The quota resets at the window boundary" is an oracle; "the quota works correctly" is not |
-| **Plan** | Every task that writes a test names the oracle it asserts. "Matches the implementation" is not an acceptable answer |
-| **Build — RED** | The failure is recorded in the PR body, not claimed |
-| **Build — threat model** | For each threat on a *Sensitive path*, ask whether it is expressible as a planted hole; if so, author it as a committed fixture alongside `backend/tests/mutants.ts` |
-| **Review** | The three questions in `CLAUDE.md`'s *Review process* |
+| **Build — threat model** | For each threat on a *Sensitive path*, ask whether it is expressible as a planted hole; if so, author it as a committed fixture alongside `backend/tests/mutants.ts` and `historyMutants.ts` |
+| **Build — REFACTOR** | `./verify.sh mutation` on the lines just touched; survivors are the assertions not yet written |
+| **Review** | The three questions apply to `frontend/src/**` too, where the process boundary is `fetch` and the Auth0 SDK rather than a socket |
 | **After a defect reaches `main`** | Append a row to [`escaped-defects.md`](escaped-defects.md) naming the gate that missed it |
 
-**The last row is the one that gets skipped**, because it happens after the work feels finished.
-It is also the only one that produces evidence over time: without it ADR 0006's calibration loop
-never runs, and the log stays at its four seeded entries forever.
+**The last row is the one that gets skipped**, because it happens after the work feels finished. It
+is also the only one that produces evidence over time: without it ADR 0006's calibration loop never
+runs, and the log stays at its four seeded entries forever.
 
-**Two things are deliberately not enforced by CI.** RED-recording, because a check for the presence
-of a PR-body section cannot read what it checks. And the named-oracle requirement in Plan: the
-staff-engineer reviewer prompt is carried from `acb` and says nothing about oracles, so **this is a
-convention the human review upholds, not a gate** — do not write it up as one until the prompt is
-proposed upstream.
+**One thing the upstream rule asks for is not a gate here.** "Name the oracle" in Plan is a
+convention the human review upholds — the staff-engineer reviewer prompt is carried from `acb` and
+says nothing about oracles. Do not write it up as enforced until that prompt is proposed upstream
+too.
 
 ## The audit flags, and why they are written out
 
