@@ -259,10 +259,57 @@ Four rules follow, and the first prevents the problem rather than detecting it:
    subject and asserts the mock was called proves wiring and nothing else. Each repository names its
    own boundaries.
 
+#### From a success criterion to an invariant to a generated test
+
+The Spec phase already asks for success criteria as observable behaviour. This is the rest of that
+chain — the part that turns one into tests that can catch what you did not think of.
+
+A **property** is a rule that must hold across many inputs rather than for one chosen example. An
+**invariant** is the subset that constrains the system's *state*: it must hold at every moment,
+whatever happened before. The distinction decides what you generate — random **inputs** for a
+property, random **sequences of operations** for an invariant.
+
+```
+"users must not see each other's data"          ← a requirement
+"a listing returns exactly the caller's rows"   ← a success criterion (observable)
+INV-1: for any two users and any interleaving   ← an invariant (holds over state)
+        of operations, neither sees the other's
+```
+
+Name and number your invariants. A numbered invariant is a document, and a document is one of the
+three legal oracle sources — which is what makes a test asserting `INV-1` independent of the code.
+
+**Then let a generator attack them.** Hand-picked examples share their author's blind spot: whoever
+chose the cases chose them from the same understanding that produced the code, so a shared
+misunderstanding survives every one. **Property-based testing** inverts that — you state the rule
+and a library generates hundreds of cases trying to break it, then **shrinks** any failure to the
+smallest input that still fails. Every ecosystem has one (QuickCheck, Hypothesis, fast-check,
+jqwik); the shrinking is what makes a counterexample usable rather than a wall of random data.
+
+This is not a mandate. Most invariants are served fine by a handful of examples, and a rule nobody
+follows erodes the ones that matter. Reach for a generator when an invariant is about *state over
+time*, when the operation space is bigger than you can enumerate, or when the tests were written by
+something that also wrote the code.
+
+**Three traps, each of which makes a generated test look stronger than it is:**
+
 **Assert both directions.** An invariant phrased as a prohibition — "never shows another user's
 data" — invites a one-sided test that passes when the system returns *nothing at all*. Check that
 what should be absent is absent **and** that what should be present is present, or half the failures
-are invisible.
+are invisible. This one is easy to write by accident and hard to spot in review, because the test
+reads exactly like the requirement.
+
+**Pin the seed wherever a red build is a hard stop.** These libraries default to a fresh seed per
+run, so a property can pass ninety-nine times and fail on the hundredth. That failure is real — a
+counterexample, not a flake — but a gate that fails for a reason unrelated to the change under
+review is the one thing that gets a gate ignored. Pin it in CI and let the search run locally; when
+a local run finds a counterexample, fix it and pin that seed too. If the repository also runs
+mutation testing, this matters more than it looks: a mutation gate reads *any* test failure as a
+kill, so an unrelated failure makes that gate pass for the wrong reason.
+
+**Check that every generated operation is actually applied.** A sequence generator whose handler
+silently drops one kind of operation still reports the same number of passing runs — while the
+states that operation would have reached are never visited.
 
 ### 4. Verify — *the deterministic gate*
 

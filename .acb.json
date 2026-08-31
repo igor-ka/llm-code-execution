@@ -1,7 +1,7 @@
 {
   "template": {
     "repo": "igor-ka/acb",
-    "commit": "00474656f9e07e9787925909d2be245a0d22f910"
+    "commit": "c9a356b4faf56ddacafb93420b8c2e356a1dbbc4"
   },
   "process": {
     "doc": "docs/sdlc-local.md",

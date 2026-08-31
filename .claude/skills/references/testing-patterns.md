@@ -20,6 +20,7 @@ Quick reference of JavaScript/TypeScript testing patterns — Jest, React Testin
 - [React/Component Testing](#reactcomponent-testing)
 - [API / Integration Testing](#api--integration-testing)
 - [E2E Testing (Playwright)](#e2e-testing-playwright)
+- [Property-Based Testing (fast-check)](#property-based-testing-fast-check)
 - [Test Anti-Patterns](#test-anti-patterns)
 
 ## Test Structure (Arrange-Act-Assert)
@@ -229,6 +230,111 @@ test('user can create and complete a task', async ({ page }) => {
   await expect(task).toHaveCSS('text-decoration-line', 'line-through');
 });
 ```
+
+## Property-Based Testing (fast-check)
+
+For **invariants** — rules that must hold for every input, not just chosen examples. See the
+`sdlc.md` section *From a success criterion to an invariant to a generated test* for when to reach
+for this; the mechanics are here. `npm i -D fast-check`.
+
+### Generating values (a property)
+
+```ts
+import fc from "fast-check";
+
+it("round-trips any payload", () => {
+  fc.assert(
+    fc.property(fc.record({ id: fc.uuid(), tags: fc.array(fc.string()) }), (input) => {
+      expect(parse(serialize(input))).toEqual(input);
+    }),
+  );
+});
+```
+
+### Generating operation sequences (an invariant)
+
+State invariants need a *history*, not a value. Generate the operations, apply them, and keep an
+independent model of what should be true:
+
+```ts
+type Op = { kind: "add"; item: string } | { kind: "clear" };
+
+const opArb: fc.Arbitrary<Op> = fc.oneof(
+  fc.record({ kind: fc.constant("add" as const), item: fc.string({ minLength: 1 }) }),
+  fc.record({ kind: fc.constant("clear" as const) }),
+);
+
+it("holds for any interleaving", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.array(opArb, { maxLength: 25 }), async (ops) => {
+      const system = fresh();
+      const model = new Set<string>();          // maintained independently of the system
+      for (const op of ops) {
+        if (op.kind === "add") { await system.add(op.item); model.add(op.item); }
+        else { await system.clear(); model.clear(); }   // NEVER leave an op unhandled
+      }
+      // BOTH directions: nothing extra, nothing missing.
+      expect([...(await system.list())].sort()).toEqual([...model].sort());
+    }),
+  );
+});
+```
+
+`fc.commands` does the same thing with more ceremony and better shrinking; the hand-rolled loop
+above is easier to read until the operation set grows.
+
+### Pin the seed in one module
+
+```ts
+// tests/fc.ts — the ONLY place fast-check is imported from.
+import fc from "fast-check";
+
+const raw = process.env.FC_SEED;                 // NOT `raw ? … : …`
+let seed = 20260101;
+if (raw !== undefined) {
+  // `$RANDOM` is a bash/zsh builtin; under sh or `env -i` it expands EMPTY, and a truthiness
+  // test would silently fall back to the pinned seed — you believe you explored and did not.
+  if (raw.trim() === "") throw new Error("FC_SEED is set but empty");
+  seed = Number(raw);
+  if (!Number.isInteger(seed) || seed < 0) throw new Error(`FC_SEED must be a non-negative integer: ${raw}`);
+}
+fc.configureGlobal({ seed, numRuns: 200 });
+export { fc };
+```
+
+Make it enforceable rather than aspirational — a direct `import fc from "fast-check"` elsewhere
+silently gets a fresh seed per run. Whatever linter the repository uses, forbid importing the
+library anywhere but that one module.
+
+<!-- portability-exempt: a lint rule cannot be written without naming a linter; the principle above
+     is the portable part, and this is one instantiation of it. -->
+
+```js
+// eslint.config.js
+{
+  files: ["tests/**/*.ts"],
+  ignores: ["tests/fc.ts"],
+  rules: {
+    "no-restricted-imports": [
+      "error",
+      { paths: [{ name: "fast-check", message: "Import { fc } from tests/fc.js — it pins the seed." }] },
+    ],
+  },
+}
+```
+
+<!-- /portability-exempt -->
+
+### Gotchas
+
+- **A one-sided property is half a test.** `for (const row of returned) expect(row.owner).toBe(me)`
+  passes when `returned` is empty. Compare whole sets.
+- **Do not create a server per assertion.** `request(app)` spins up an ephemeral server per call; at
+  `numRuns: 200` that is thousands per file and fails on socket churn, not logic. Hoist
+  `app.listen(0)` into `beforeAll` and pass the server. Keep per-run state fresh behind a delegating
+  proxy rather than resetting with the very method under test.
+- **Every generated op must be handled.** A missing `else` silently drops that operation — the run
+  count is unchanged and the states it would reach are never visited.
 
 ## Test Anti-Patterns
 
