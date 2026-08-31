@@ -10,6 +10,7 @@
       "^\\.github/workflows/",
       "^scripts/",
       "^\\.acb\\.json$",
+      "^\\.mutation-scope\\.json$",
       "^\\.github/ruleset\\.json$",
       "^backend/verify\\.sh$",
       "^frontend/verify\\.sh$",
