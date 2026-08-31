@@ -80,6 +80,30 @@ not skip.
 > better than none, but it is not full coverage.
 
 
+## Tests: the oracle must not come from the implementation
+
+Most tests here are model-written. A test's **oracle** — whatever decides pass from fail — is the
+half no tool can check, because a tool has nothing to compare it against except the code it is
+supposed to be independent of. The three legal sources are in
+[`testing-notes.md`](testing-notes.md); the rules themselves are in [`../CLAUDE.md`](../CLAUDE.md)
+under *Testing standards*. What belongs here is where they bind in the process:
+
+- **Spec** — success criteria are written as observable behaviour, because they are the oracle every
+  downstream test copies from. "The quota resets at the window boundary" is an oracle; "the quota
+  works correctly" is not.
+- **Plan** — every task that writes a test names the oracle that test asserts. "Matches the
+  implementation" is not an acceptable answer, and the staff-engineer review checks it.
+- **Build, RED** — the failure is **recorded**, not claimed: pasted into the PR body, or committed
+  separately so `git show` proves it. A test never observed failing is not known to be a test. This
+  is deliberately not a CI check — a check for the presence of a section cannot read what it checks,
+  which is the decorative-assertion pattern this repository has already had to fix once.
+- **Build, threat model** — for each threat on a *Sensitive path*, ask whether it is expressible as
+  a planted hole. If it is, author it as a committed fixture alongside `backend/tests/mutants.ts`.
+  Never generate these at CI time: a gate whose mutant population changes between two runs of the
+  same commit is not a gate.
+- **Review** — three questions, every time: where did this expected value come from; did any
+  existing assertion change in this PR; is anything mocked that is not a process boundary.
+
 ## The audit flags, and why they are written out
 
 - **The `Audit` step fails on high and critical advisories only.** `npm audit --audit-level=high`,
