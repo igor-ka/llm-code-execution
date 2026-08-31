@@ -128,6 +128,23 @@ cd backend && FC_SEED=$RANDOM npm run test
 A counterexample found that way is a bug to fix, and the seed that found it is worth pinning in
 `fc.ts` alongside the original.
 
+**Run them against every implementation, not just the fast one.** The properties are parameterised
+over `makeStore` exactly as `runIsolationBattery` is, so they exercise the real SQL when
+`DATABASE_URL` is set. A memory-only property proves the model, not the system — and the owner
+filter that matters most is the one in the `WHERE` clause.
+
+**A model-based property is only as good as its model.** These keep an independent `Model` of who
+owns what, and assert the store's listing *equals* it. Twice that model was wrong and the property
+found it: once keeping a deleted run's prompt searchable, and once bounding the search result by
+"no more than the owner has" instead of comparing it — which let an unescaped SQL `LIKE` wildcard
+widen the match *within* the owner's own rows and pass. Bounds are not oracles.
+
+**Aim the generator at the branch you care about.** A random query string almost never reaches the
+prompt-matching half of search, because `titleFromPrompt` seeds the title from the first prompt —
+so a session matching on its prompt usually matches on its title too. The suite weights the query
+alphabet toward LIKE metacharacters *and* issues a second query drawn from live data, which is what
+reaches that branch. Both were added after a planted hole survived without them.
+
 **One long-lived server per owner, not one per assertion.** Handing supertest an app makes it create
 and tear down an ephemeral server per request; at `numRuns: 200` these two properties would make
 roughly 2,000 of them in a single worker, which fails on socket churn rather than on logic. The
