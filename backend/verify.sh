@@ -119,14 +119,14 @@ mutation() {
     [[ -n "${REDIS_URL:-}" ]]    || echo "==> note: REDIS_URL unset — mutants in redisQuota.ts would all read as survivors"
   fi
 
-  # The three UNIT suites run every time: they cost milliseconds and they are what stops the
-  # decision logic rotting. The end-to-end proof lives in `mutation:selftest` — it runs Stryker
-  # twice against a fixture, which is right before a push and wrong in the inner loop.
-  run ../scripts/tests/mutation-scope.test.sh
-  run ../scripts/tests/mutation-decide.test.sh
-  run ../scripts/tests/mutation-suppressions.test.sh
-  # No argument: the script reads the same declaration mutation-scope.sh does, so the eligible set
-  # lives in exactly one place.
+  # The unit tests for the three mutation scripts are NOT run here. They live in the `Deploy
+  # scripts` workflow with the other repo-root script tests: this is a backend-component target, and
+  # reaching repo-root tooling through it meant a change to scripts/mutation-scope.sh landing on
+  # `main` was never re-tested — this target is outside `all` and gated on pull_request in ci.yml.
+  #
+  # The suppression SCAN stays, because it inspects this component's own source. No argument: the
+  # script reads the same declaration mutation-scope.sh does, so the eligible set lives in exactly
+  # one place.
   run ../scripts/mutation-suppressions.sh
 
   local scope

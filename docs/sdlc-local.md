@@ -286,6 +286,19 @@ lodge in the `SDLC docs` job. The carried copy of that workflow does not host th
 because it knows nothing about Cloud Run — so they get their own workflow and their own required
 check.
 
+**Read the name as "repo-root script tests".** The job has outgrown it: it also runs
+`apply-ruleset.test.sh` (branch protection) and the three mutation-gate suites
+(`mutation-scope`, `mutation-decide`, `mutation-suppressions`), none of which is a deploy. The name
+is a ruleset contract, so it stays; what unites the job is *scripts in `scripts/` that no
+component's `verify.sh` owns and no other workflow runs*.
+
+The mutation suites were briefly reached only through `backend/verify.sh mutation`, which was the
+wrong owner twice over: it coupled a backend-component gate to repo-root tooling, and because that
+target sits outside `all` and is gated on `pull_request`, a change to `scripts/mutation-scope.sh`
+landing on `main` was never re-tested. `mutation-gate.test.sh` stays behind in
+`./verify.sh mutation:selftest` — it drives a real Stryker and needs `backend/node_modules`, which
+this job does not install.
+
 Required, not merely present: `SDLC docs` **is** a required check, so hosting these in a job that
 was not would silently downgrade gating that already existed. The ruleset entry is added *the
 moment this job lands on `main`* and not in the pull request that creates it — a required check
@@ -295,8 +308,8 @@ than a third home.
 
 **No `paths:` filter, deliberately.** A workflow-level path filter on a required check makes it
 never report at all, which hangs every merge forever — the same trap `.github/workflows/terraform.yml`
-carries a comment about. Both suites drive fakes on `PATH` and run in seconds; they run on
-everything.
+carries a comment about. Every suite in the job drives fakes on `PATH` or a throwaway git
+repository and runs in seconds; they run on everything.
 
 ## Branch protection is a document
 
