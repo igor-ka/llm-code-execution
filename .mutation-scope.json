@@ -1,0 +1,15 @@
+{
+  "root": "backend",
+  "include": [
+    "src/auth.ts",
+    "src/schemas.ts",
+    "src/history/",
+    "src/limits/",
+    "src/sandbox/"
+  ],
+  "exclude": [
+    "src/history/types.ts",
+    "src/sandbox/base.ts",
+    "src/history/cli-migrate.ts"
+  ]
+}
