@@ -4,7 +4,12 @@ import globals from "globals";
 import prettier from "eslint-config-prettier";
 
 export default tseslint.config(
-  { ignores: ["dist", "node_modules", ".venv"] },
+  // `reports`, `.stryker-tmp` and `.mutation-selftest-strong` are mutation-testing output, and they
+  // must be listed here as well as in .prettierignore — ESLint flat config does not skip
+  // dot-directories on its own. `.stryker-tmp` is a full copy of src/ and tests/, so without this a
+  // Stryker run interrupted before `cleanTempDir` leaves the next `./verify.sh lint` double-
+  // reporting every real file.
+  { ignores: ["dist", "node_modules", ".venv", "reports", ".stryker-tmp", ".mutation-selftest-strong"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
