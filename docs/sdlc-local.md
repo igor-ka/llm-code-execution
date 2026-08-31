@@ -166,11 +166,15 @@ covering `pgStore.ts`, `migrate.ts` and `redisQuota.ts` self-skip without those 
 [`testing-notes.md`](testing-notes.md) — so a DB-free run would report every mutant in them as a
 survivor. That is not incomplete output, it is wrong output.
 
-**Concurrency is chosen from the scope, by an allowlist.** Stryker forks N vitest processes against
+**It runs single-worker whenever a datastore is configured.** Stryker forks N vitest processes at
 the one CI Postgres, and the Postgres suites share a schema, so a collision produces a spurious
-failure — which *kills* a mutant and makes the gate pass for the wrong reason. Anything not provably
-datastore-free (`auth.ts`, `schemas.ts`, `sandbox/`) runs single-worker. An allowlist rather than a
-denylist because a denylist fails open on the next file nobody thought about.
+failure — which *kills* a mutant and makes the gate pass for the wrong reason, indistinguishable
+from a real kill. An earlier version allowlisted `auth.ts`, `schemas.ts` and `sandbox/` as provably
+datastore-free; review showed that was a category error, because the allowlist named *source* files
+while the hazard is which *tests* run — `schemas.ts` is imported by `server.ts`, which
+`isolation.test.ts` drives while holding a real Postgres pool. Proving a file datastore-free means
+proving a negative about the whole coverage graph, and getting it wrong fails open. Serializing cost
+8 seconds on a measured two-line change, so the trade is not close.
 
 **The backend job checks out with `fetch-depth: 0`.** Without a merge base there is nothing to diff,
 and `scripts/mutation-scope.sh` hard-fails rather than reporting an empty scope — the likeliest way
