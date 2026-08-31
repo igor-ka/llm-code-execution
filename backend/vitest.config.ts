@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { defineConfig, configDefaults } from "vitest/config";
 
 /**
  * Pin the datastore variables to whatever the SHELL provides — nothing more.
@@ -51,6 +51,12 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    // tests/fixtures/mutation-selftest holds a DELIBERATELY WEAK test — it asserts only a return
+    // type, so mutating `>` to `>=` cannot fail it. That is the point: the mutation gate's own
+    // self-test runs Stryker against it and asserts the gate REJECTS it. It must never run as part
+    // of the real suite. Spreading configDefaults.exclude is load-bearing: setting `exclude`
+    // REPLACES the defaults rather than adding to them.
+    exclude: [...configDefaults.exclude, "tests/fixtures/**"],
     env: fromShell,
     fileParallelism: !datastoreInPlay,
   },
