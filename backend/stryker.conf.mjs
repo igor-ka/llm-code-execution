@@ -1,6 +1,6 @@
 /**
- * Stryker configuration for the diff-scoped mutation gate. See ADR 0006 and
- * scripts/mutation-scope.sh.
+ * Stryker configuration for the diff-scoped mutation gate. See scripts/mutation-scope.sh, and
+ * ADR 0006 ("Trusting AI-written tests") for why there is no mutation score.
  *
  * THERE IS DELIBERATELY NO `mutate` KEY. A CLI `--mutate` COMPLETELY REPLACES the config value
  * rather than merging with it, and the gate always passes `--mutate` from

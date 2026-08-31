@@ -37,11 +37,13 @@ try {
 
 const offenders = [];
 const unknown = [];
+const byStatus = new Map();
 let total = 0;
 
 for (const [file, entry] of Object.entries(report.files ?? {})) {
   for (const mutant of entry.mutants ?? []) {
     total += 1;
+    byStatus.set(mutant.status, (byStatus.get(mutant.status) ?? 0) + 1);
     const line = mutant.location?.start?.line ?? "?";
     if (BLOCKING.has(mutant.status)) {
       offenders.push(`  ${file}:${line}  ${mutant.mutatorName}  (${mutant.status})`);
@@ -51,12 +53,14 @@ for (const [file, entry] of Object.entries(report.files ?? {})) {
   }
 }
 
-// Zero mutants here means Stryker ran and generated nothing, which is not the same as "the change
-// touched no eligible file" — that case is handled by the caller BEFORE Stryker runs. Reaching this
-// branch means the scope was non-empty and produced nothing, which is a wiring fault.
+// Zero mutants from a NON-EMPTY scope is routine, not a fault: a changed line can be a comment, an
+// import, a blank line or a type-only declaration, none of which Stryker can mutate. An earlier
+// version treated this as a wiring fault and exited 1 — which blocked any PR whose only edit to an
+// eligible file was a doc comment, with no escape, because there is no mutant to suppress. The
+// wiring is proven by mutation:selftest, which is where that assurance belongs.
 if (total === 0) {
-  console.error("mutation-decide: the report contains no mutants, but the scope was not empty.");
-  process.exit(1);
+  console.log("mutation-decide: the changed lines contain nothing mutable (comments, imports, types).");
+  process.exit(0);
 }
 
 if (unknown.length > 0) {
@@ -76,4 +80,17 @@ if (offenders.length > 0) {
   process.exit(1);
 }
 
-console.log(`mutation-decide: ${total} mutant(s), all killed.`);
+// Report the BREAKDOWN, not just a total. `Ignored` means a suppression was honoured and
+// `RuntimeError` means Stryker could not build the mutant — neither is a kill, and rolling them
+// into "all killed" hides exactly what review is supposed to see.
+const breakdown = [...byStatus.entries()]
+  .sort((a, b) => b[1] - a[1])
+  .map(([status, n]) => `${n} ${status}`)
+  .join(", ");
+console.log(`mutation-decide: ${total} mutant(s) — ${breakdown}. Nothing survived.`);
+if (byStatus.has("Ignored")) {
+  console.log(`  ${byStatus.get("Ignored")} suppressed by a // Stryker disable comment — review the reasons.`);
+}
+if (byStatus.has("RuntimeError") || byStatus.has("CompileError")) {
+  console.log("  Some mutants could not be built or run; that is Stryker's failure, not the tests'.");
+}

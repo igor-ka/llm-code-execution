@@ -12,9 +12,16 @@ pass=0; fail=0
 ok()  { pass=$((pass + 1)); printf '  ✓ %s\n' "$1"; }
 bad() { fail=$((fail + 1)); printf '  ✗ %s — %s\n' "$1" "$2"; }
 
+# Every make_repo call is recorded so the trap can remove them all: the two sibling suites clean up
+# after themselves, and this target is the documented inner-loop check, so leaking a throwaway
+# repository per case adds up fast.
+repos=()
+trap 'rm -rf ${repos[@]+"${repos[@]}"}' EXIT
+
 make_repo() {
   local dir
   dir="$(mktemp -d)"
+  repos+=("$dir")
   git -C "$dir" init -q -b main
   git -C "$dir" config user.email t@example.com
   git -C "$dir" config user.name t
@@ -96,6 +103,24 @@ git -C "$repo" commit -qam change
 if run_in "$repo" >/dev/null 2>&1; then
   bad "a missing scope declaration exits non-zero" "it exited 0"
 else ok "a missing scope declaration exits non-zero"; fi
+
+# 10. An EMPTY `exclude` must work. Under bash 3.2 (macOS) a bare "${EXCLUDE[@]}" on an empty array
+#     aborts with "unbound variable" — and an empty exclude is the natural starting config.
+repo="$(make_repo)"
+cat > "$repo/.mutation-scope.json" <<'JSON'
+{ "root": "backend", "include": ["src/limits/"], "exclude": [] }
+JSON
+printf 'const a = 1;\nconst b = 99;\nconst c = 3;\n' > "$repo/backend/src/limits/quota.ts"
+git -C "$repo" commit -qam change
+expect "an empty exclude list is handled" "src/limits/quota.ts:2-2" "$(run_in "$repo")"
+
+# 11. An UNTRACKED eligible file is a hard failure, not an empty scope: git diff cannot see it, so
+#     the gate would otherwise report a green on a brand-new file with no tests at all.
+repo="$(make_repo)"
+printf 'export const f = () => 1;\n' > "$repo/backend/src/limits/untracked.ts"
+if run_in "$repo" >/dev/null 2>&1; then
+  bad "an untracked eligible file exits non-zero" "it exited 0 — a new untested file would pass"
+else ok "an untracked eligible file exits non-zero"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

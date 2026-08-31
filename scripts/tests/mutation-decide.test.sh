@@ -39,8 +39,13 @@ if node "$SCRIPT" "$tmp/absent.json" >/dev/null 2>&1; then
   bad "missing report → exit non-zero" "it exited 0"
 else ok "missing report → exit non-zero"; fi
 
+# A non-empty scope that yields NO mutants is routine, not a fault: a changed line can be a comment,
+# an import, a blank line or a type-only declaration. An earlier version exited 1 here, which would
+# have blocked any PR whose only edit to an eligible file was a doc comment — with no escape, since
+# there is no mutant to suppress. The wiring assurance lives in mutation-gate.test.sh instead.
 report '{"files":{}}'
-if passes; then bad "zero mutants → exit non-zero" "it exited 0"; else ok "zero mutants → exit non-zero"; fi
+if passes; then ok "zero mutants → exit 0 (comments and imports are not mutable)"
+else bad "zero mutants → exit 0" "it exited non-zero — a comment-only change would block"; fi
 
 # The message must NAME the offender — an exit code alone is not actionable.
 report "$(mutant Survived)"

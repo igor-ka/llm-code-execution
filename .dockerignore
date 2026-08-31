@@ -24,7 +24,10 @@ scripts
 **/.env.*
 !**/.env.example
 
-# Mutation testing output — the Mutation test step runs before Package
+# Mutation testing output — the Mutation test step runs before Package, so without this it enters
+# the build context. Covers the two repo-root-context builds only: the backend image is built with
+# `backend/` as its context and there is no backend/.dockerignore. That build is unaffected in
+# practice because backend/Dockerfile uses explicit `COPY src` / `COPY migrations`, never `COPY . .`
 **/reports
 **/.stryker-tmp
 **/.mutation-selftest-strong

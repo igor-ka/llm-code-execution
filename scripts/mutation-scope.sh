@@ -62,9 +62,13 @@ while IFS= read -r line; do [[ -n "$line" ]] && EXCLUDE+=("$line"); done <<< "$(
 # the kind of blunt instrument that quietly removes a directory from the gate. If one is ever
 # needed, add the case here rather than assuming `exclude: ["src/history/"]` does anything: today
 # it silently matches nothing.
+# `${a[@]+"${a[@]}"}` on EXCLUDE, not a bare `"${EXCLUDE[@]}"`. macOS ships bash 3.2.57, where
+# expanding an EMPTY array under `set -u` aborts with "unbound variable" — and an empty or absent
+# `exclude` is a legitimate declaration, and the natural starting value for any repository adopting
+# this script. INCLUDE needs no guard: it is checked non-empty above.
 eligible() {
   local path="$1" pat
-  for pat in "${EXCLUDE[@]}"; do [[ "$path" == "$ROOT/$pat" ]] && return 1; done
+  for pat in ${EXCLUDE[@]+"${EXCLUDE[@]}"}; do [[ "$path" == "$ROOT/$pat" ]] && return 1; done
   for pat in "${INCLUDE[@]}"; do
     case "$pat" in
       */) [[ "$path" == "$ROOT/$pat"* ]] && return 0 ;;
@@ -80,6 +84,19 @@ eligible() {
 if ! merge_base="$(git merge-base "$BASE_REF" HEAD 2>/dev/null)"; then
   echo "mutation-scope: cannot resolve a merge base between '${BASE_REF}' and HEAD." >&2
   echo "  In CI this usually means actions/checkout needs fetch-depth: 0." >&2
+  exit 1
+fi
+
+# UNTRACKED FILES ARE A HARD FAILURE, not an empty scope. `git diff` only sees tracked files, so a
+# brand-new source file that has not been `git add`ed contributes nothing — and the REFACTOR step,
+# where this target is meant to run, is exactly when a new file is most likely still untracked. A
+# green gate on a file with no tests at all is the worst outcome this design can produce, so it
+# refuses to run instead. Same fail-loud posture as a missing merge base and a missing declaration.
+untracked="$(git ls-files --others --exclude-standard -- ":(top)${ROOT}")"
+if [[ -n "$untracked" ]]; then
+  echo "mutation-scope: untracked file(s) under ${ROOT} — git diff cannot see them:" >&2
+  printf '  %s\n' $untracked >&2
+  echo "  git add them (or remove them) so the gate can measure the change it is gating." >&2
   exit 1
 fi
 
