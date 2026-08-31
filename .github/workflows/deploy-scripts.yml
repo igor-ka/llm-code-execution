@@ -18,6 +18,21 @@ name: Deploy scripts
 # never report at all, which hangs every merge forever. .github/workflows/terraform.yml carries a
 # comment about the same trap. Both suites drive fakes on PATH and run in seconds.
 #
+# WHAT THIS JOB IS FOR, now that it holds more than two deploy scripts: the unit tests for
+# repo-root `scripts/` that no component's `verify.sh` owns and no other workflow runs. The name is
+# a ruleset contract and stays, but read it as "repo-root script tests" — `apply-ruleset.test.sh` is
+# about branch protection and the four mutation suites are about the mutation gate, neither of which
+# is a deploy.
+#
+# The mutation suites were briefly reached only through `backend/verify.sh mutation`. That was the
+# wrong owner twice over: it coupled the backend component's gate to repo-root tooling, and because
+# that target is outside `all` and gated on `pull_request` in ci.yml, a change to
+# `scripts/mutation-scope.sh` landing on `main` was never re-tested. They need no npm install —
+# plain bash, git and node — so they belong here, where they also run in seconds.
+#
+# `mutation-gate.test.sh` deliberately stays behind in `./verify.sh mutation:selftest`: it drives a
+# real Stryker against a fixture and needs `backend/node_modules`, which this job does not install.
+#
 # The job `name:` is a contract like the others. See docs/sdlc.md.
 
 on:
@@ -53,3 +68,11 @@ jobs:
       # about this one. Driven by a fake `gh` on PATH; applies nothing.
       - name: Test the ruleset apply script
         run: ./scripts/tests/apply-ruleset.test.sh
+      # The mutation gate's own tooling. These decide whether a mutant blocks a merge, so a gate
+      # whose decision logic is untested is a gate that reads as coverage and provides none.
+      - name: Test the mutation scope script
+        run: ./scripts/tests/mutation-scope.test.sh
+      - name: Test the mutation decision script
+        run: ./scripts/tests/mutation-decide.test.sh
+      - name: Test the mutation suppression rule
+        run: ./scripts/tests/mutation-suppressions.test.sh

@@ -2,8 +2,8 @@
 
 What the `test-driven-development` skill's *This repository's commands* section used to say, kept
 here because that skill is now carried from [`igor-ka/acb`](https://github.com/igor-ka/acb) and is
-stack-agnostic. [`../CLAUDE.md`](../CLAUDE.md) holds the command table; this holds the two traps
-that need more than a table row.
+stack-agnostic. [`../CLAUDE.md`](../CLAUDE.md) holds the command table; this holds what needs more
+than a table row — the traps, and where a test's oracle may legitimately come from.
 
 ## The service-backed suites self-skip, and a green `test` is not evidence they ran
 
@@ -58,6 +58,37 @@ There is no `chrome-devtools` MCP server here, so an agent has no in-browser ins
 Frontend behaviour is covered by Vitest; verify UI changes manually against the running app
 (`npm run dev`, or the Compose stack).
 
+## Where an oracle may come from
+
+A test's **oracle** is whatever decides pass from fail — usually the expected value in the
+assertion. Most tests here are model-written, and a model asked to test existing code reads the
+implementation and writes tests describing it, so a bug becomes the expected value. That suite
+scores 100% on coverage *and* 100% on mutation testing: the tests are precisely sensitive to a
+behaviour that is wrong. Mutation testing measures **sensitivity** — whether a test can fail at
+all — and no tool can measure whether it fails at the *right* thing.
+
+**The test: if the implementation were deleted, could you still write this assertion?**
+
+Three legal sources, all three already in use here:
+
+| Source | The oracle is | Where |
+| --- | --- | --- |
+| Written first | A test that failed before the code existed cannot have been copied from it | The RED step; the Prove-It pattern for bugs |
+| A document | A spec success criterion, a named invariant, a threat | INV-1..8 in [`../backend/tests/history/isolation.test.ts`](../backend/tests/history/isolation.test.ts) |
+| A second implementation | Two implementations must agree, so neither defines the answer | The contract suites above — and this is why `memoryStore` is a fake, not a mock |
+
+**Semantic mutants** are the third source sharpened to a point.
+[`../backend/tests/mutants.ts`](../backend/tests/mutants.ts) plants four holes in the auth check —
+expiry unverified, scope matched by substring, audience unverified, gate off — and
+[`historyMutants.ts`](../backend/tests/history/historyMutants.ts) drops one owner filter per method,
+asserted as INV-7. Their oracle is the threat model; nothing about the implementation is consulted.
+
+They are committed fixtures asserted by ordinary tests, and are **never generated at CI time**: a
+gate whose mutant population changes between two runs of the same commit can pass and then fail with
+nothing changed, which is not a gate. Authoring them belongs in the `security-and-hardening`
+threat-model pass that the *Sensitive paths* in [`../CLAUDE.md`](../CLAUDE.md) already require —
+for each threat, ask whether it is expressible as a planted hole.
+
 ## Property-based tests, and why the seed is pinned
 
 `isolation.test.ts` asserts INV-1..8 over cases a human or a model chose. That is the weakness:
@@ -76,9 +107,10 @@ verified: destroying the listing entirely made both properties pass. They now co
 sets, so "shows me everything of mine" and "shows me nothing of theirs" are one assertion that
 neither a leak nor a wholesale deletion survives. A one-sided assertion is the decorative-test shape
 this whole section is about, and it is easy to write by accident when the invariant is phrased as a
-prohibition. The generator does not
-share the model's misunderstanding — it is not reasoning, it is trying things — which is the
-uncorrelated evidence hand-picked examples cannot provide.
+prohibition.
+
+The generator does not share the model's misunderstanding — it is not reasoning, it is trying
+things — which is the uncorrelated evidence hand-picked examples cannot provide.
 
 **The seed is pinned in [`../backend/tests/fc.ts`](../backend/tests/fc.ts), and that is deliberate.**
 fast-check defaults to a fresh seed per run, so a property can pass ninety-nine times and fail on

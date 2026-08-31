@@ -24,6 +24,8 @@ shared half is not the document a change to `backend/verify.sh` invalidates; thi
   directory is watched; they moved here, so this is watched too.
 - `.github/ruleset.json` — the required-check names in prose below are enumerated by hand, and
   nothing else would notice them going stale
+- `.mutation-scope.json` — it declares which files the mutation gate covers; narrowing it narrows
+  the gate, and nothing else would notice
 - `backend/verify.sh`, `frontend/verify.sh` or `infra/verify.sh`
 - `infra/tests/**` — the self-tests `infra/verify.sh` runs first: the gates, and `bootstrap.sh`
   against a fake `gcloud` (a live run proves the script worked that day, not that the next edit is safe)
@@ -80,6 +82,32 @@ not skip.
 > better than none, but it is not full coverage.
 
 
+## Tests: the oracle must not come from the implementation
+
+The rules are in [`../CLAUDE.md`](../CLAUDE.md) under *Testing standards*; the reasoning and the
+three legal oracle sources are in [`testing-notes.md`](testing-notes.md). Neither is restated here —
+this section is only **where they bind in the process**, which is the part specific to this
+repository.
+
+| Phase | What it adds |
+| --- | --- |
+| **Spec** | Success criteria written as observable behaviour. "The quota resets at the window boundary" is an oracle; "the quota works correctly" is not |
+| **Plan** | Every task that writes a test names the oracle it asserts. "Matches the implementation" is not an acceptable answer |
+| **Build — RED** | The failure is recorded in the PR body, not claimed |
+| **Build — threat model** | For each threat on a *Sensitive path*, ask whether it is expressible as a planted hole; if so, author it as a committed fixture alongside `backend/tests/mutants.ts` |
+| **Review** | The three questions in `CLAUDE.md`'s *Review process* |
+| **After a defect reaches `main`** | Append a row to [`escaped-defects.md`](escaped-defects.md) naming the gate that missed it |
+
+**The last row is the one that gets skipped**, because it happens after the work feels finished.
+It is also the only one that produces evidence over time: without it ADR 0006's calibration loop
+never runs, and the log stays at its four seeded entries forever.
+
+**Two things are deliberately not enforced by CI.** RED-recording, because a check for the presence
+of a PR-body section cannot read what it checks. And the named-oracle requirement in Plan: the
+staff-engineer reviewer prompt is carried from `acb` and says nothing about oracles, so **this is a
+convention the human review upholds, not a gate** — do not write it up as one until the prompt is
+proposed upstream.
+
 ## The audit flags, and why they are written out
 
 - **The `Audit` step fails on high and critical advisories only.** `npm audit --audit-level=high`,
@@ -108,6 +136,53 @@ not skip.
 - **Postgres and Redis run as service containers**, and only the `Integration test` step sets
   `DATABASE_URL` / `REDIS_URL` — which is exactly why the service-free `Test` step still skips
   those suites.
+
+## The mutation gate
+
+`./verify.sh mutation` mutates only the lines the branch changes against `origin/main` and **fails
+on any mutant that survived or that no test covered**. The second half is why it also catches "this
+PR added a line nothing executes". Run it at the REFACTOR step: survivors are the assertions you
+have not written yet, and they cost two minutes while the code is still in your head. CI runs the
+identical target as a backstop, so if the workflow is working CI never finds a survivor.
+
+The eligible set is declared in [`../.mutation-scope.json`](../.mutation-scope.json) — not counted
+here, because a line count in prose goes stale the first time a file is added. That file is watched
+by the `SDLC docs` gate for the same reason `.acb.json` is: narrowing it narrows the gate.
+
+**The gate blocks everywhere, and the first PR into a weak file pays the tax.** A spike on
+2026-08-31 measured the datastore-free half of the eligible set at **52%** — `dockerBackend.ts` at
+11%, with 73 of its 133 mutants uncovered. Narrowing the set to the files that already sustain the
+gate was considered and rejected: it would exempt exactly the code that most needs it. Kill the
+mutants, or suppress with a stated reason.
+
+An unkillable mutant — an **equivalent mutant**, whose edit cannot change observable behaviour — is
+suppressed inline with `// Stryker disable next-line <mutator>: <reason>`. The reason is mandatory
+and `scripts/mutation-suppressions.sh` rejects a bare one, on the same principle as the dated
+exception the audit flags demand.
+
+**It requires both datastores, and in CI it cannot run without them.** `MUTATION_REQUIRE_FULL=1`
+makes a missing `DATABASE_URL` or `REDIS_URL` a hard failure rather than a partial run: the suites
+covering `pgStore.ts`, `migrate.ts` and `redisQuota.ts` self-skip without those variables — see
+[`testing-notes.md`](testing-notes.md) — so a DB-free run would report every mutant in them as a
+survivor. That is not incomplete output, it is wrong output.
+
+**It runs single-worker whenever a datastore is configured.** Stryker forks N vitest processes at
+the one CI Postgres, and the Postgres suites share a schema, so a collision produces a spurious
+failure — which *kills* a mutant and makes the gate pass for the wrong reason, indistinguishable
+from a real kill. An earlier version allowlisted `auth.ts`, `schemas.ts` and `sandbox/` as provably
+datastore-free; review showed that was a category error, because the allowlist named *source* files
+while the hazard is which *tests* run — `schemas.ts` is imported by `server.ts`, which
+`isolation.test.ts` drives while holding a real Postgres pool. Proving a file datastore-free means
+proving a negative about the whole coverage graph, and getting it wrong fails open. Serializing cost
+8 seconds on a measured two-line change, so the trade is not close.
+
+**The backend job checks out with `fetch-depth: 0`.** Without a merge base there is nothing to diff,
+and `scripts/mutation-scope.sh` hard-fails rather than reporting an empty scope — the likeliest way
+this gate would silently check nothing.
+
+`mutation:selftest` is a separate target because it runs Stryker twice against a deliberately weak
+fixture to prove the gate can still fail. That belongs before a push and in CI, not in the inner
+loop. Neither target is in `all`: both need a merge base that a detached checkout may not have.
 
 ## The deployment scripts
 
@@ -211,6 +286,19 @@ lodge in the `SDLC docs` job. The carried copy of that workflow does not host th
 because it knows nothing about Cloud Run — so they get their own workflow and their own required
 check.
 
+**Read the name as "repo-root script tests".** The job has outgrown it: it also runs
+`apply-ruleset.test.sh` (branch protection) and the three mutation-gate suites
+(`mutation-scope`, `mutation-decide`, `mutation-suppressions`), none of which is a deploy. The name
+is a ruleset contract, so it stays; what unites the job is *scripts in `scripts/` that no
+component's `verify.sh` owns and no other workflow runs*.
+
+The mutation suites were briefly reached only through `backend/verify.sh mutation`, which was the
+wrong owner twice over: it coupled a backend-component gate to repo-root tooling, and because that
+target sits outside `all` and is gated on `pull_request`, a change to `scripts/mutation-scope.sh`
+landing on `main` was never re-tested. `mutation-gate.test.sh` stays behind in
+`./verify.sh mutation:selftest` — it drives a real Stryker and needs `backend/node_modules`, which
+this job does not install.
+
 Required, not merely present: `SDLC docs` **is** a required check, so hosting these in a job that
 was not would silently downgrade gating that already existed. The ruleset entry is added *the
 moment this job lands on `main`* and not in the pull request that creates it — a required check
@@ -220,8 +308,8 @@ than a third home.
 
 **No `paths:` filter, deliberately.** A workflow-level path filter on a required check makes it
 never report at all, which hangs every merge forever — the same trap `.github/workflows/terraform.yml`
-carries a comment about. Both suites drive fakes on `PATH` and run in seconds; they run on
-everything.
+carries a comment about. Every suite in the job drives fakes on `PATH` or a throwaway git
+repository and runs in seconds; they run on everything.
 
 ## Branch protection is a document
 

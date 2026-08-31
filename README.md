@@ -44,7 +44,7 @@ backend/
   migrations/                ordered SQL, applied on boot (001_history.sql)
   sandbox-image/Dockerfile   the minimal, non-root EXECUTION image (Python — unchanged)
   tests/                     Vitest suites; history/ = contract + router + persist + isolation battery + generated properties
-  verify.sh                  checks (eslint + prettier + vitest + tsc + package + npm audit); +test:integration (Postgres, Redis)
+  verify.sh                  checks (eslint + prettier + vitest + tsc + package + npm audit); +test:integration (Postgres, Redis), +mutation
 frontend/                    React + Vite UI
   src/                       App.tsx, api.ts, history.ts, components/ (HistorySidebar, SessionView, RunResult)
   verify.sh                  one-command checks (lint + format + vitest + build + package + npm audit)
@@ -57,11 +57,13 @@ infra/                       Terraform root for the GCP environment (Phase 1 fou
   verify.sh                  selftest + format + install -backend=false + lint + gates (no credentials)
   bootstrap.sh               creates the state bucket — the one resource Terraform does not own
 .acb.json                    the acb declaration: components, check names, targets, watched paths
+.mutation-scope.json         which files the diff-scoped mutation gate covers
 .github/ruleset.json         the "Protect main" ruleset as a document; GITHUB_REPOSITORY=owner/name ./scripts/apply-ruleset.sh --apply
 docs/sdlc.md                 the shared development process (carried from igor-ka/acb)
 docs/sdlc-local.md           this repository's half of it — and what the SDLC docs gate enforces
 docs/sdlc-example.md         the seven phases walked end to end on one real feature
 docs/testing-notes.md        testing traps, where an oracle may come from, and the pinned fast-check seed
+docs/escaped-defects.md      every defect that reached main, and the gate that should have caught it
 docker-compose.yml           local dev topology: backend + frontend + postgres + redis + one-shot sandbox-image build
 Dockerfile                   PRODUCTION image: SPA + API in one container, one origin, non-root, no Docker socket
 .dockerignore                build context for the production image (the repo root is that context)
@@ -411,6 +413,13 @@ drift (CI invokes the same scripts). There are three: backend, frontend, and `in
   image, and the repo-root production image — then asserts inside that image that the production
   CSP shipped, that the policy names no plaintext origin, and that the runtime user is not root.
   It begins with `npm audit`, which **fails on high and critical advisories**.
+
+  Two backend targets sit deliberately outside `all`, because both need a merge base against
+  `origin/main` that a detached checkout may not have. `./verify.sh mutation` is the **diff-scoped
+  mutation gate**: it mutates only the lines the branch changes and fails on any mutant that
+  survived or that no test covered. `./verify.sh mutation:selftest` proves that gate can still fail,
+  by running it against a deliberately weak fixture. See
+  [`docs/sdlc-local.md`](docs/sdlc-local.md).
 - **Frontend:** `cd frontend && ./verify.sh` — installs deps, runs ESLint + Prettier +
   Vitest, type-checks/builds, builds the frontend Docker image; the same
   `npm audit` gate runs first.
