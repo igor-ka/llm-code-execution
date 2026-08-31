@@ -20,11 +20,22 @@ bad() { fail=$((fail + 1)); printf '  ✗ %s — %s\n' "$1" "$2"; }
 cleanup() { rm -rf "$strong" "$fixture/reports" "$fixture/.stryker-tmp"; }
 trap cleanup EXIT
 
+# THE LOCAL BINARY, BY PATH — not `npx --prefix`. When backend/node_modules is stale or absent,
+# npx does not fail: it silently downloads the deprecated standalone `stryker` package from the
+# registry and runs THAT, which dies with MODULE_NOT_FOUND and writes no report. Observed here.
+# A gate self-test that can be satisfied by a different program than the one under test is worse
+# than no self-test, so resolve it explicitly and say so when it is missing.
+stryker_bin="$root/backend/node_modules/.bin/stryker"
+if [[ ! -x "$stryker_bin" ]]; then
+  echo "mutation-gate: $stryker_bin is missing — run 'npm ci' in backend/ first." >&2
+  exit 1
+fi
+
 # Clear any stale report FIRST: if this run dies without writing, the assertions below would
 # otherwise be made against a previous run's file.
 rm -rf "$fixture/reports" "$fixture/.stryker-tmp"
 echo "==> Stryker against the deliberately-weak fixture"
-( cd "$fixture" && npx --prefix "$root/backend" stryker run ) >/dev/null 2>&1
+( cd "$fixture" && "$stryker_bin" run ) >/dev/null 2>&1
 
 report="$fixture/reports/mutation/mutation.json"
 if [[ ! -f "$report" ]]; then
@@ -60,7 +71,7 @@ it("is false at the boundary and true above it", () => {
   expect(overLimit(3, 2)).toBe(true);
 });
 TS
-( cd "$strong" && npx --prefix "$root/backend" stryker run ) >/dev/null 2>&1
+( cd "$strong" && "$stryker_bin" run ) >/dev/null 2>&1
 
 if [[ ! -f "$strong/reports/mutation/mutation.json" ]]; then
   bad "the strengthened fixture produces a report" "no report written"

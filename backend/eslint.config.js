@@ -9,7 +9,16 @@ export default tseslint.config(
   // dot-directories on its own. `.stryker-tmp` is a full copy of src/ and tests/, so without this a
   // Stryker run interrupted before `cleanTempDir` leaves the next `./verify.sh lint` double-
   // reporting every real file.
-  { ignores: ["dist", "node_modules", ".venv", "reports", ".stryker-tmp", ".mutation-selftest-strong"] },
+  {
+    ignores: [
+      "dist",
+      "node_modules",
+      ".venv",
+      "reports",
+      ".stryker-tmp",
+      ".mutation-selftest-strong",
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
