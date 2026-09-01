@@ -25,14 +25,14 @@ shared half is not the document a change to `backend/verify.sh` invalidates; thi
   `acb status` reports a carried tree that is missing from the list below, which is how this entry
   came to exist.
 
-  **Do not run it under `/loop` here yet.** Its tick record — the six-tick ceiling, which the
-  command itself calls the only external stop the loop has — lives in a comment on a public issue,
-  and [`igor-ka/acb#19`](https://github.com/igor-ka/acb/issues/19) is open on exactly that. Six
-  review rounds have hardened the reads; none has moved the state somewhere a commenter cannot
-  write it. That matters here specifically because `Protect main` sets
-  `required_approving_review_count: 0`, so one authorising sentence can cover every pull request a
-  plan produces and the ceiling is the only thing bounding it. Merge one pull request at a time
-  until that issue closes.
+  **What bounds it here.** `Protect main` sets `required_approving_review_count: 0`, so GitHub
+  requires no human approval to land on `main` and the bound has to come from the command. It does:
+  a merge authorisation covering a set reaches only the pull requests the plan's `PR boundaries`
+  header names, and that header is in a file a human approved at the review gate. There is no tick
+  counter and no ceiling — [`igor-ka/acb#19`](https://github.com/igor-ka/acb/issues/19) was closed
+  by deleting the record rather than hardening it, because six review rounds of prose asking an
+  agent to notice tampering in a public comment produced a new defect four times. A loop that stops
+  making progress stops instead: one pass that moved nothing with nothing running.
 - `.acb.json` — it holds the watched list, both escape hatches, the process-document path and
   every component's check name. Those semantics used to live in `scripts/`, which is why that
   directory is watched; they moved here, so this is watched too.
