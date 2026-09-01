@@ -766,12 +766,21 @@ are hour-lived and narrowed at mint, and that it is not tied to an individual wh
 are sufficient; "no standing credential" is not true of either. The gap in `main`'s push-side history before
 this change is real and stays in the record.
 
-**What it is not.** It does not weaken any gate. Native auto-merge waits for all four required
-checks *and* for every review thread to be resolved. Copilot reviews every PR including
-Dependabot's, so a single inline comment parks the merge until someone answers it. That is the
-intended behaviour and was chosen deliberately over dropping
-`required_review_thread_resolution` (issue #94): the feature is "auto-merge when nothing
-objects", not "unattended merges". A parked PR is a correct outcome, not a bug to design around.
+**What it is not.** It does not weaken any gate: native auto-merge waits for **every** required
+check *and* for every review thread to be resolved. `required_review_thread_resolution` is what
+*would* make "auto-merge when nothing objects" different from "unattended merges" — **provided
+something opens a thread**. That was the reason it was kept rather than dropped (issue #94).
+
+**But a thread only parks a merge if something opens one.** An automated reviewer is the usual
+candidate and it is not guaranteed: GitHub's Copilot code review is entitlement-gated, so it can
+stop reviewing without notice and without any check turning red — and in at least one repository it
+never reviewed Dependabot's pull requests even while it was working. **Confirm what actually
+reviews these pull requests in your repository, and confirm it by looking at a merged one rather
+than at the ruleset.** Where nothing does, auto-merge on an allowed ecosystem is unattended by
+definition, and the honest choices are to narrow the allow-list, require a human merge, raise
+`required_approving_review_count` above the `0` this toolkit scaffolds, or accept it deliberately
+and write that down. Only once something does open threads is a parked pull request a correct
+outcome rather than a bug to design around.
 
 **Why it does not update stale branches.** `strict_required_status_checks_policy` is on, so a
 merge to `main` leaves every other open PR out of date, and auto-merge will not update a branch
