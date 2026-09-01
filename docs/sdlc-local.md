@@ -21,8 +21,18 @@ shared half is not the document a change to `backend/verify.sh` invalidates; thi
 - `.claude/skills/**`
 - `.claude/commands/**` — carried, like the skills. `/loop-plan` is the only entry today: it works
   a plan to the criteria its `## Criteria coverage` table claims, reads progress from the tracker
-  rather than the plan, and merges nothing unless you say so in that run. `acb status` reports a
-  carried tree that is missing from the list below, which is how this entry came to exist.
+  rather than the plan, and merges nothing unless you say so in that run, about that pull request.
+  `acb status` reports a carried tree that is missing from the list below, which is how this entry
+  came to exist.
+
+  **Do not run it under `/loop` here yet.** Its tick record — the six-tick ceiling, which the
+  command itself calls the only external stop the loop has — lives in a comment on a public issue,
+  and [`igor-ka/acb#19`](https://github.com/igor-ka/acb/issues/19) is open on exactly that. Six
+  review rounds have hardened the reads; none has moved the state somewhere a commenter cannot
+  write it. That matters here specifically because `Protect main` sets
+  `required_approving_review_count: 0`, so one authorising sentence can cover every pull request a
+  plan produces and the ceiling is the only thing bounding it. Merge one pull request at a time
+  until that issue closes.
 - `.acb.json` — it holds the watched list, both escape hatches, the process-document path and
   every component's check name. Those semantics used to live in `scripts/`, which is why that
   directory is watched; they moved here, so this is watched too.
