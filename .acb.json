@@ -1,12 +1,13 @@
 {
   "template": {
     "repo": "igor-ka/acb",
-    "commit": "c9a356b4faf56ddacafb93420b8c2e356a1dbbc4"
+    "commit": "7b161a049d213a381d2526a59180cc8119805828"
   },
   "process": {
     "doc": "docs/sdlc-local.md",
     "watched": [
       "^\\.claude/skills/",
+      "^\\.claude/commands/",
       "^\\.github/workflows/",
       "^scripts/",
       "^\\.acb\\.json$",

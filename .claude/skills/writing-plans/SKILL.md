@@ -73,6 +73,11 @@ changes that make sense independently.
 
 **Tech Stack:** [Key technologies/libraries]
 
+**Human dependencies:** [Credentials, accounts, approvals and by-hand operations this plan needs
+from a person — one line each, naming what is needed and which task blocks on it. **Omit this
+field entirely when there are none.** A plan carrying it in every repository, reading "none"
+forever, is the ceremony this process exists to cut.]
+
 **PR boundaries:** [The pull requests this plan produces — one line each, naming the child
 issue each one closes. "PR 1: quota seam + in-memory store — closes #64". One child per PR.
 Where two children genuinely cannot be separated, say so here and say why.]
@@ -87,6 +92,58 @@ Naming the PRs here puts the decision in front of a human at the plan review, be
 exists. The `PR shape` CI check enforces the same rule at merge time, but it is a backstop; this
 is the control.
 
+**Why `Human dependencies` is conditional and `PR boundaries` is not.** Every plan produces pull
+requests; not every plan needs something a person alone can supply. Where the field applies it is
+load-bearing — it is the difference between a plan that stops at a known boundary and one that
+discovers the boundary mid-run — and where it does not, a line reading "none" is noise in every
+plan in every repository that ever uses this template.
+
+## Criteria coverage
+
+**Every plan MUST carry a `## Criteria coverage` section, placed after the last task.** Only
+`## Plan review log` may follow it. It is a coverage map, not a copy of the criteria:
+
+```markdown
+## Criteria coverage
+
+| Spec criterion | How this plan satisfies it |
+| --- | --- |
+| S1 | Task 4 Step 5 — the end-to-end run, against the real integration rather than a fixture. |
+| S3 | Task 7 Steps 1-5. |
+| S7 | Structural: the launcher flag is set in the same resource, so a default apply cannot strip it. |
+
+**Not claimed:** S2, S4-S6 closed by an earlier plan. S8 is a launch-day measurement.
+```
+
+Two rules make it a map rather than a second copy:
+
+- **Never restate a criterion.** Name it by its identifier and point at the task that discharges
+  it. A pasted criterion is a second copy that goes stale, and the stale copy is the one people
+  read. Where a spec's criteria are not numbered, number them **in the spec** first: an identifier
+  that exists only in the plan cannot be checked against anything, which is the one thing this
+  table is for.
+- **The `Not claimed` line is mandatory**, and it must account for every criterion in the spec the
+  table omits. "The spec has eight, this plan claims three" is a complete sentence only when the
+  other five are named. When it omits nothing, write `**Not claimed:** none — this plan claims all
+  of them.` Unlike `Human dependencies` this line is never dropped: its absence and "nothing left
+  over" are not distinguishable to a reader.
+
+**Why this belongs in the plan and not in the reader's head.** A spec's criteria define done for
+the *whole* problem; a plan is usually one phase of it. Without this table nothing states which
+criteria a given implementation run must reach, so the boundary gets reconstructed from context
+every time — by the reviewer, by a reader six months later, and by any unattended process working
+the plan. Naming the split once turns "is this done?" into a lookup.
+
+**When there is no separate spec** — the process document says a plan absorbs the spec when
+requirements are clear — the left column is the plan's own Goal, decomposed into checkable
+statements. The section is never omitted.
+
+**This is not the Definition of Done.** `../references/definition-of-done.md` is the standing bar
+every increment clears, the same every time, answering *"is this finished to our standard?"*. This
+section is the opposite column of that file's own table: acceptance criteria, specific to this
+plan, answering *"did we build the right thing?"*. A task is done when both hold, so do not read
+one as the other.
+
 ## Task Structure
 
 ````markdown
@@ -97,13 +154,18 @@ is the control.
 - Modify: `exact/path/to/existing.py:123-145`
 - Test: `tests/exact/path/to/test.py`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing test** — *oracle: <where the expected value comes from>*
 
 ```python
 def test_specific_behavior():
     result = function(input)
     assert result == expected
 ```
+
+Name the **oracle** on the step: written first, a document (a success criterion, a named invariant,
+a threat), or a second implementation. Not "matches the implementation" — a test whose expected
+value was read off the code passes whatever the code does, including the bug. If no oracle exists
+yet, that is a gap in the spec, not something to invent while writing the step.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -152,8 +214,9 @@ failures** — never write them:
 After writing the complete plan, look at the requirements with fresh eyes and check
 the plan against them. This is a checklist you run yourself — not a subagent dispatch.
 
-**1. Requirement coverage:** Skim each requirement. Can you point to a task that
-implements it? List any gaps.
+**1. Requirement coverage:** Build the `## Criteria coverage` table. A criterion with no task
+is a **gap** — add the task. Move one to `Not claimed` only when it is deliberately outside this
+plan's phase, never to make the table balance.
 
 **2. Placeholder scan:** Search your plan for the red flags from "No Placeholders". Fix them.
 

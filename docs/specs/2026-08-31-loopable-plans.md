@@ -87,7 +87,7 @@ transcripts on 2026-08-31.
 
 **In scope**
 
-- **A plan-shape contract in `writing-plans/SKILL.md`**: a mandatory `## Definition of done`
+- **A plan-shape contract in `writing-plans/SKILL.md`**: a mandatory `## Criteria coverage`
   coverage table, and a `**Human dependencies:**` header field required only when non-empty.
 - **The matching prose in `docs/sdlc.md` §2**, where the argument for `PR boundaries` living in
   the header already sits (D9).
@@ -119,7 +119,9 @@ and nothing about the phases, the gates or the tracker changes.
 
 ## Success criteria
 
-1. **★ `writing-plans/SKILL.md` requires a `## Definition of done` table** mapping each claimed
+1. **★ `writing-plans/SKILL.md` requires a `## Criteria coverage` table** (renamed from
+   `## Definition of done` during the PR 0 review — the carried bucket already owns that name for
+   the standing bar in `references/definition-of-done.md`, which is its opposite) mapping each claimed
    spec criterion to the task or step that discharges it, with an explicit **Not claimed** line.
    This is the criterion the whole change exists for: it is what makes a plan a single lookup.
 2. **★ Every file changed here is changed in `acb` and arrives by `acb pull`.** After it lands,

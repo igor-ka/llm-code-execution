@@ -1,7 +1,8 @@
 name: SDLC docs
 
 # docs/sdlc.md is a contract: a PR that changes the development process — the skills in
-# .claude/skills/, either verify.sh, the workflows, or the check script itself — must update
+# .claude/skills/, the commands in .claude/commands/, either verify.sh, the workflows, or the
+# check script itself — must update
 # it in the same PR. See "Changing this SDLC" in docs/sdlc.md.
 #
 # Why this is a separate workflow from ci.yml:

@@ -5,7 +5,7 @@ must it not, and what will it need a person for" — so an unattended loop can d
 from files rather than from a conversation that may have been summarised away.
 
 **Architecture:** Three moves, in order, and the first two are in a different repository. First
-the **contract**: `writing-plans/SKILL.md` gains a mandatory `## Definition of done` coverage
+the **contract**: `writing-plans/SKILL.md` gains a mandatory `## Criteria coverage` coverage
 table and a conditional `Human dependencies` header field, `docs/sdlc.md` §2 gains the matching
 process prose, and `planning-reviewer-prompt.md` gains the two rows that catch a plan missing
 either. Then the **command**: a carried `/loop-plan <plan path>` whose scope, criteria and
@@ -30,15 +30,15 @@ green checks alone.
 
 **PR boundaries:** Three, and the first two are in a different repository.
 
-- **PR 0 (in `igor-ka/acb`): the plan-shape contract** — the `## Definition of done` requirement
+- **PR 0 (in `igor-ka/acb`): the plan-shape contract** — closes #238 — the `## Criteria coverage` requirement
   and the `Human dependencies` field in the plan template, the process prose that argues for them,
   the two reviewer rows that enforce them, and the attribution entry. Closes the child *the
   plan-shape contract*.
-- **PR 1 (in `igor-ka/acb`): the carried loop command** — `carried/.claude/commands/loop-plan.md`,
+- **PR 1 (in `igor-ka/acb`): the carried loop command** — closes #239 — `carried/.claude/commands/loop-plan.md`,
   its `MANIFEST` line, the portability scan and the carried `check-sdlc-sync` fixture both learning
   that `.claude/commands` exists, and `acb init` scaffolding a repository that watches it. Closes
   the child *the carried loop command*.
-- **PR 2 (here): pull, declare, document** — `acb pull` brings all five carried files,
+- **PR 2 (here): pull, declare, document** — closes #240 — `acb pull` brings all five carried files,
   `.acb.json` declares `^\.claude/commands/` watched, and `docs/sdlc-local.md` and `CLAUDE.md`
   record it. Closes the child *adopt the plan-shape contract and the loop command*.
 
@@ -47,6 +47,8 @@ a PR boundary, and issues filed before that review would have to be renumbered o
 They are filed on approval, in Task 0. PRs 0 and 1 land in `acb`, so they close their children with
 the cross-repository form `Closes igor-ka/llm-code-execution#N` — the same form the toolkit and
 adoption plans used.
+
+Epic [#237](https://github.com/igor-ka/llm-code-execution/issues/237).
 
 **Spec:** [`docs/specs/2026-08-31-loopable-plans.md`](../specs/2026-08-31-loopable-plans.md) —
 decisions D1–D11 and criteria 1–11 are referenced by name throughout. **Read it first.**
@@ -82,7 +84,7 @@ belong to this repository, and editing them locally is correct.
 
 | File | Change | Why |
 | --- | --- | --- |
-| `carried/.claude/skills/writing-plans/SKILL.md` | modify | The template an author reads; gains the `Human dependencies` field and a `## Definition of done` section |
+| `carried/.claude/skills/writing-plans/SKILL.md` | modify | The template an author reads; gains the `Human dependencies` field and a `## Criteria coverage` section |
 | `carried/.claude/skills/writing-plans/planning-reviewer-prompt.md` | modify | Two rows in the review table — the gate that catches a plan missing either (D8) |
 | `carried/docs/sdlc.md` | modify | Where the process is argued; §2 gains the prose for both (D9) |
 | `carried/.claude/skills/NOTICE.md` | modify | `writing-plans` is vendored; an unrecorded divergence makes the next upstream sync unreviewable |
@@ -157,7 +159,7 @@ git checkout main && git pull
 git checkout -b feat/plan-shape-contract
 ```
 
-## Task 1: The `## Definition of done` requirement
+## Task 1: The `## Criteria coverage` requirement
 
 **Files:**
 - Modify: `carried/.claude/skills/writing-plans/SKILL.md`
@@ -167,13 +169,13 @@ git checkout -b feat/plan-shape-contract
   `## Task Structure`:
 
 ````markdown
-## Definition of done
+## Criteria coverage
 
-**Every plan MUST end with a `## Definition of done` section.** It is a coverage map, not a copy
+**Every plan MUST end with a `## Criteria coverage` section.** It is a coverage map, not a copy
 of the criteria:
 
 ```markdown
-## Definition of done
+## Criteria coverage
 
 | Spec criterion | How this plan satisfies it |
 | --- | --- |
@@ -257,14 +259,14 @@ git commit -m "feat(writing-plans): mandatory Definition of done, conditional Hu
   table sits inside a fenced prompt block and losing the indent breaks the fence:
 
 ```
-    | Definition of done | Does the plan end with a `## Definition of done` table mapping each spec criterion it claims to the task that discharges it, plus a `Not claimed` line accounting for every criterion the table omits? A missing section is a finding. So is a table that restates criteria instead of naming tasks, and so is a `Not claimed` line that does not add up. |
+    | Criteria coverage | Does the plan carry a `## Criteria coverage` table, after its last task, mapping each spec criterion it claims to the task that discharges it, plus a `Not claimed` line accounting for every criterion the table omits? A missing section is a finding. So is a table that restates criteria instead of naming tasks, and so is a `Not claimed` line that does not add up. |
     | Human dependencies | If the plan needs a credential, account, approval or by-hand operation from a person, does the header name it and the task it blocks? The field is correctly absent when there are none — but a plan that plainly needs one and does not say so is a finding. |
 ```
 
 - [ ] **Step 2: Verify the indentation matches its neighbours**
 
 ```bash
-grep -n '^    | \(PR boundaries\|Definition of done\|Human dependencies\) |' \
+grep -n '^    | \(PR boundaries\|Criteria coverage\|Human dependencies\) |' \
   carried/.claude/skills/writing-plans/planning-reviewer-prompt.md
 ```
 
@@ -286,7 +288,7 @@ git commit -m "feat(writing-plans): the reviewer checks both new plan sections"
   before `**The mandatory gate:**`:
 
 ```markdown
-**Every plan ends with a `## Definition of done`** — a table mapping each spec criterion the plan
+**Every plan ends with a `## Criteria coverage`** — a table mapping each spec criterion the plan
 claims to the task that discharges it, and a `Not claimed` line accounting for the rest. It is a
 map, never a copy: criteria are named by identifier and never restated, for the same reason an
 epic links rather than pastes.
@@ -330,7 +332,7 @@ git commit -m "docs(sdlc): a plan states which criteria it claims, and what it n
   Append to the end of that bullet, keeping its two-space continuation indent:
 
 ```markdown
-  It later gained a mandatory `## Definition of done` section — a table mapping each spec criterion
+  It later gained a mandatory `## Criteria coverage` section — a table mapping each spec criterion
   the plan claims to the task that discharges it, plus a `Not claimed` line for the rest — and a
   conditional `Human dependencies` header field, present only when the plan needs a credential,
   account, approval or by-hand operation a person must supply. `planning-reviewer-prompt.md`
@@ -390,7 +392,7 @@ C3 a cache miss is indistinguishable from no cache.
   above as `[SPEC_OR_REQUIREMENTS]`. Use the **modified** prompt from Task 3, not the copy
   installed in this repository.
 
-- [ ] **Step 3: Read the verdict.** Expected: a finding naming the missing `## Definition of done`
+- [ ] **Step 3: Read the verdict.** Expected: a finding naming the missing `## Criteria coverage`
   section, **in either bucket**. Spec criterion 3 asks that the reviewer reject the plan, not that
   it file the rejection under a particular heading — and the prompt's own tie-break is "when in
   doubt, JUDGMENT", so a reviewer treating "which criteria does this plan claim?" as a scope
@@ -423,7 +425,7 @@ git push -u origin feat/plan-shape-contract
 gh pr create --title "feat(process): a plan states the criteria it claims and what it needs a person for" --body "$(cat <<'BODY'
 Adds two requirements to the carried plan template and the prose that argues for them.
 
-- `## Definition of done` — mandatory. A table mapping each spec criterion the plan claims to the
+- `## Criteria coverage` — mandatory. A table mapping each spec criterion the plan claims to the
   task that discharges it, plus a `Not claimed` line accounting for the rest. A map, never a copy.
 - `Human dependencies` — a header field, present only when the plan needs a credential, account,
   approval or by-hand operation from a person.
@@ -466,7 +468,7 @@ mkdir -p carried/.claude/commands
   consumer, so nothing in it may name a repository, an owner, a component, or a check.
 
 ````markdown
-# /loop-plan — work a plan to its Definition of done
+# /loop-plan — work a plan to the criteria it claims
 
 **Argument:** the path to a plan document — `/loop-plan docs/plans/2026-01-05-widget.md`.
 With no path, or a path that does not exist, say so and stop.
@@ -478,7 +480,7 @@ standalone; the exits below are the same either way.
 
 **Read the plan.** Four parts of it govern this run:
 
-- **`## Definition of done`** — the spec criteria this plan claims, and the task discharging each.
+- **`## Criteria coverage`** — the spec criteria this plan claims, and the task discharging each.
   **These, and only these, are the target.** Every criterion on the `Not claimed` line is out of
   scope; working one is scope creep, not diligence. If the plan has no such section, say so and
   ask for the scope rather than inferring it — that inference is the failure this section exists
@@ -564,7 +566,7 @@ nothing.
 
 ```bash
 git add carried/.claude/commands/loop-plan.md
-git commit -m "feat(commands): /loop-plan works a plan to its Definition of done"
+git commit -m "feat(commands): /loop-plan works a plan to the criteria it claims"
 ```
 
 ## Task 9: The MANIFEST line
@@ -768,7 +770,7 @@ same change.
 
 ```markdown
 One command ships alongside them: **`/loop-plan <plan path>`** works a plan to the criteria its
-`## Definition of done` claims, stops when they pass with evidence or when a `Human dependencies`
+`## Criteria coverage` claims, stops when they pass with evidence or when a `Human dependencies`
 entry blocks, and never edits the plan. It is carried, like the skills.
 ```
 
@@ -815,7 +817,7 @@ the case never arises there. The observation is **Task 14 Step 3**, where
 ```bash
 git push -u origin feat/loop-plan-command
 gh pr create --title "feat(commands): carry /loop-plan" --body "$(cat <<'BODY'
-A carried slash command that works a plan to the criteria its `## Definition of done` claims.
+A carried slash command that works a plan to the criteria its `## Criteria coverage` claims.
 
 Scope, criteria, blockers and PR boundaries all come from the plan it is pointed at, so the
 command takes one argument and nothing else. Its merge clause is written as **preconditions** —
@@ -936,7 +938,7 @@ Expected: **eleven** entries, with `^\.claude/commands/` second. The list gained
 
 ```markdown
 - `.claude/commands/**` — carried, like the skills. `/loop-plan` is the only entry today; it works
-  a plan to the criteria its `## Definition of done` claims and stops when they pass with evidence,
+  a plan to the criteria its `## Criteria coverage` claims and stops when they pass with evidence,
   when a `Human dependencies` entry blocks, or at six ticks.
 ```
 
@@ -979,7 +981,7 @@ this is a reading aid, not a gate. Every pattern in `.acb.json` must be findable
 
 ```markdown
 One command ships alongside the skills, carried the same way: **`/loop-plan <plan path>`** works a
-plan to the criteria its `## Definition of done` claims. It reads scope from the plan and progress
+plan to the criteria its `## Criteria coverage` claims. It reads scope from the plan and progress
 from the tracker, never edits the plan, and stops when the criteria pass with evidence, when a
 `Human dependencies` entry blocks, or at six ticks. Under `/loop` it re-enters on each tick.
 ```
@@ -1046,7 +1048,7 @@ Expected: `behind: 0`, `ahead: 0`, `drift: none`.
 git push -u origin feat/adopt-loop-plan
 gh pr create --title "feat: adopt the plan-shape contract and the carried loop command" --body "$(cat <<'BODY'
 `acb pull` brings five carried files at the toolkit's HEAD: the plan template's new
-`## Definition of done` requirement and `Human dependencies` field, the two reviewer rows, the
+`## Criteria coverage` requirement and `Human dependencies` field, the two reviewer rows, the
 process prose, the attribution entry, and `/loop-plan`.
 
 Locally: `^\\.claude/commands/` joins `process.watched`, and `docs/sdlc-local.md` and `CLAUDE.md`
@@ -1078,11 +1080,48 @@ cd - && git worktree remove .claude/worktrees/adopt-loop-plan && git branch -D f
 
 ---
 
-## Definition of done
+## Verification summary
+
+| What | Command | Expected |
+| --- | --- | --- |
+| Fence nesting survived | `awk '/^```/ {n++} END {print n}' carried/.claude/skills/writing-plans/SKILL.md` | an even number |
+| Reviewer rows aligned | `grep -n '^    \| \(PR boundaries\|Criteria coverage\|Human dependencies\) \|' …` | three consecutive lines |
+| No identifier in a carried file | `grep -rInEi 'igor-ka\|llm-code-execution\|llm-sandbox' carried/` | no output |
+| Reviewer catches a missing section | Task 6, the fixture plan | a mechanical finding naming `## Criteria coverage` |
+| MANIFEST necessary, then sufficient | `./tests/carried-purity.test.sh` before and after Task 9 | FAIL, then `3 passed, 0 failed` |
+| Portability scan covers commands | Task 10, plant a violation | PASS before, FAIL after, PASS once removed |
+| Watched pattern proven upstream | `./carried/scripts/tests/check-sdlc-sync.test.sh` before and after Task 11 Step 2 | FAIL, then PASS |
+| Scaffolded config still parses | `./tests/render.test.sh` after Task 12 Step 1 | PASS |
+| Toolkit green | `cd ~/Workspaces/Claude/acb && ./verify.sh` | lint clean, every suite passing |
+| Pull shape | `git status --porcelain` after `acb pull` | exactly six paths |
+| Carried property preserved | `acb status` | `behind: 0`, `ahead: 0`, `drift: none` |
+| `SDLC docs` sees the new path | `./scripts/check-sdlc-sync.sh` with `docs/sdlc-local.md` stashed | non-zero, then zero once restored |
+| Components green | `./verify.sh` in `backend`, `frontend`, `infra` | all three pass |
+
+---
+
+## Amendments after review
+
+- **`## Definition of done` → `## Criteria coverage`**, throughout, during PR 0's review. The
+  carried bucket already ships `references/definition-of-done.md`, which defines that name as the
+  *opposite* thing — a standing bar that is the same every time, not a per-plan map — and
+  `templates/CLAUDE.md.tmpl` points every adopter's always-loaded `CLAUDE.md` at it. Spec criterion
+  1 records the same. Task 0's issue titles and the commit subjects quoted in the task bodies keep
+  the old name: they are the record of what was actually filed and committed, not a description of
+  what exists.
+- **PR 0 and PR 1 both grew during review.** PR 0 gained `spec-driven-development/SKILL.md`
+  (success criteria are numbered now, because "name it by its identifier" had no legal move
+  otherwise). PR 1 gained `lib/sync.sh`, `tests/sync.test.sh`, `tests/render.test.sh`,
+  `carried/.github/workflows/sdlc-docs.yml` and `references/definition-of-done.md`. So Task 14
+  Step 3's "exactly six paths" is wrong: the pull touches ten.
+- **Three Medium defects in the command's tick accounting are filed as `igor-ka/acb#19`**, not
+  fixed here. Four of five review rounds found a defect introduced by the previous round's fix.
+
+## Criteria coverage
 
 | Spec criterion | How this plan satisfies it |
 | --- | --- |
-| 1 ★ | Task 1 — the `## Definition of done` section in the carried plan template; Task 14 pulls it here |
+| 1 ★ | Task 1 — the `## Criteria coverage` section in the carried plan template; Task 14 pulls it here |
 | 2 ★ | Task 14 Step 4 and Task 18 Step 3 — `acb status` reports `behind: 0`, `ahead: 0`, `drift: none`; every carried edit was made in `acb` (D1) |
 | 3 | Task 6 — the modified reviewer prompt run against a fixture plan with the section deleted, and the finding observed rather than assumed |
 | 4 | Task 2 Step 1 — the field's own text requires omission when empty; Task 6 Step 3 confirms the reviewer stays silent on a fixture that needs nobody |
@@ -1095,26 +1134,6 @@ cd - && git worktree remove .claude/worktrees/adopt-loop-plan && git branch -D f
 | 11 | Task 5 — the `NOTICE.md` bullet recording the divergence from the pinned upstream |
 
 **Not claimed:** none. This plan claims all eleven criteria in the spec.
-
----
-
-## Verification summary
-
-| What | Command | Expected |
-| --- | --- | --- |
-| Fence nesting survived | `awk '/^```/ {n++} END {print n}' carried/.claude/skills/writing-plans/SKILL.md` | an even number |
-| Reviewer rows aligned | `grep -n '^    \| \(PR boundaries\|Definition of done\|Human dependencies\) \|' …` | three consecutive lines |
-| No identifier in a carried file | `grep -rInEi 'igor-ka\|llm-code-execution\|llm-sandbox' carried/` | no output |
-| Reviewer catches a missing section | Task 6, the fixture plan | a mechanical finding naming `## Definition of done` |
-| MANIFEST necessary, then sufficient | `./tests/carried-purity.test.sh` before and after Task 9 | FAIL, then `3 passed, 0 failed` |
-| Portability scan covers commands | Task 10, plant a violation | PASS before, FAIL after, PASS once removed |
-| Watched pattern proven upstream | `./carried/scripts/tests/check-sdlc-sync.test.sh` before and after Task 11 Step 2 | FAIL, then PASS |
-| Scaffolded config still parses | `./tests/render.test.sh` after Task 12 Step 1 | PASS |
-| Toolkit green | `cd ~/Workspaces/Claude/acb && ./verify.sh` | lint clean, every suite passing |
-| Pull shape | `git status --porcelain` after `acb pull` | exactly six paths |
-| Carried property preserved | `acb status` | `behind: 0`, `ahead: 0`, `drift: none` |
-| `SDLC docs` sees the new path | `./scripts/check-sdlc-sync.sh` with `docs/sdlc-local.md` stashed | non-zero, then zero once restored |
-| Components green | `./verify.sh` in `backend`, `frontend`, `infra` | all three pass |
 
 ---
 

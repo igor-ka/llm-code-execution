@@ -113,7 +113,8 @@ Don't silently fill in ambiguous requirements. The spec's entire purpose is to s
 - Never: [...]
 
 ## Success Criteria
-[How we'll know this is done — specific, testable conditions]
+[Numbered, specific, testable conditions — S1, S2, … A plan's `## Criteria coverage` table references them
+by number, so the numbering lives here, not in the plan.]
 
 ## Open Questions
 [Anything unresolved that needs human input]
@@ -206,6 +207,6 @@ Before proceeding to implementation, confirm:
 
 - [ ] The spec covers all six core areas
 - [ ] The human has reviewed and approved the spec
-- [ ] Success criteria are specific and testable
+- [ ] Success criteria are numbered, specific and testable
 - [ ] Boundaries (Always/Ask First/Never) are defined
 - [ ] The spec is saved to `docs/specs/YYYY-MM-DD-<name>.md` (see `docs/README.md`)

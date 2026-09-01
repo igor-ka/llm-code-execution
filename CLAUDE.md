@@ -18,9 +18,9 @@ uses it, so it is never edited here. [`docs/sdlc-local.md`](docs/sdlc-local.md) 
 repository's half of it, and [`docs/sdlc-example.md`](docs/sdlc-example.md) walks one real feature
 through all seven phases.
 
-**`docs/sdlc-local.md` is a contract:** if you change `.claude/skills/**`, any component's
-`verify.sh`, `infra/tests/**`, `.github/workflows/**`, or anything in `scripts/`, update it in the
-same PR. The watched list is `process.watched` in [`.acb.json`](.acb.json), read at run time. The
+**`docs/sdlc-local.md` is a contract:** if you change `.claude/skills/**`,
+`.claude/commands/**`, any component's `verify.sh`, `infra/tests/**`, `.github/workflows/**`, or
+anything in `scripts/`, update it in the same PR. The watched list is `process.watched` in [`.acb.json`](.acb.json), read at run time. The
 `SDLC docs` CI job enforces this; `[skip-sdlc-sync]` in the PR title is the escape hatch for a
 genuine no-op.
 
@@ -40,6 +40,12 @@ Which skill when — all vendored in `.claude/skills/`, loaded on demand:
 
 The standing bar every change clears before it counts as done is
 `.claude/skills/references/definition-of-done.md`.
+
+One command ships alongside the skills, carried the same way: **`/loop-plan <plan path>`** works a
+plan to the criteria its `## Criteria coverage` table claims. It reads scope from the plan and
+progress from the tracker, never edits the plan, and merges nothing unless you say so in that run —
+a word about one pull request does not carry to the next. It stops when the criteria pass with
+evidence, when a `Human dependencies` entry blocks, or at its tick ceiling.
 
 ## Sensitive paths
 
