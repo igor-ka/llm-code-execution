@@ -62,9 +62,15 @@ below attack what goes *in* a plan; length falls out of that.
   names the behaviour and the signature and stops.
 - "Repeat the code rather than cross-reference" is replaced by: cross-reference freely within one
   plan; never cross-reference out of it.
-- Every prohibition on vagueness stays exactly as it is — "TBD", "add appropriate error handling",
-  "handle edge cases", "write tests for the above", a step that names no verification. This change
-  narrows what must be *shown*; it licenses nothing to go *unsaid*.
+- Every prohibition on vagueness stays — "TBD", "add appropriate error handling", "handle edge
+  cases", a step that names no verification. This change narrows what must be *shown*; it licenses
+  nothing to go *unsaid*.
+- **Two of those prohibitions carry a transcription rule in their parenthetical, and the
+  parenthetical is what changes.** `"Write tests for the above" (without actual test code)` becomes
+  `(without naming the behaviour asserted and where its oracle comes from)`; `Steps that describe
+  what to do without showing how (code blocks required for code steps)` becomes `(a step must say
+  how it is verified)`. Without this the rewritten rules contradict the prohibitions they sit
+  beside, and an implementer has to guess which wins.
 - The `## Task Structure` template is trimmed to match, because it is the shape authors copy.
 
 **Enforcement.** The staff-engineer plan reviewer reports a code block that transcribes an
@@ -112,9 +118,12 @@ out test pollution, the one-contract-suite-two-implementations pattern, where te
 covers the frontend, and the pinned `fast-check` seed — into `docs/sdlc-local.md` under its existing
 *Tests* section. Delete what carried `sdlc.md` now states. Delete the file.
 
-**Referrers that must move in the same PR:** `README.md:65`, `CLAUDE.md` (3 references),
-`docs/README.md` (index row), `docs/sdlc-local.md:166`,
-`backend/tests/history/isolation.property.test.ts:23`, `docs/adr/0006-trusting-ai-written-tests.md`.
+**Referrers that must move in the same PR** — verified against `58da06b`, not carried forward:
+`README.md:65`, `CLAUDE.md` (109, 159, 169), `docs/README.md:8` (the index row; the "Which one am I
+writing?" block does not reference the file), `docs/sdlc-local.md:184`, and
+`backend/tests/history/isolation.property.test.ts:22`. **`docs/adr/0006-trusting-ai-written-tests.md`
+is not one** — `grep -n testing-notes` returns nothing there. It never referenced the file, and an
+ADR is superseded rather than rewritten in any case.
 
 **Files:** all local. Nothing goes upstream — `acb` has no `testing-notes.md` and the generic
 content already landed there via PR #235.
