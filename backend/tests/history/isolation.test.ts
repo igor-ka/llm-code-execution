@@ -139,9 +139,20 @@ function runIsolationBattery(name: string, makeStore: () => Promise<HistoryStore
 
     it("INV-6 anonymous: history routes 404, execute persists nothing", async () => {
       const { session } = await seedA();
-      expect((await request(appAnon).get("/api/sessions")).status).toBe(404);
-      expect((await request(appAnon).get(`/api/sessions/${session.id}`)).status).toBe(404);
-      expect((await request(appAnon).delete("/api/sessions")).status).toBe(404);
+      // Seen failing as 401 rather than 404, rarely and only under the full parallel run (#244).
+      // A 401 cannot originate in this app — `appAnon` injects `fakePrincipal(null)`, which never
+      // throws, so `makeRequirePrincipal` is never constructed — which is why the response itself,
+      // not the status, is what identifies the source. Nine consecutive runs could not reproduce
+      // it, so the next occurrence has to explain itself rather than be guessed at again.
+      const why = (r: request.Response) =>
+        `expected 404. got ${r.status}; body=${JSON.stringify(r.body)}; ` +
+        `www-authenticate=${r.headers["www-authenticate"] ?? "(none)"}`;
+      const list = await request(appAnon).get("/api/sessions");
+      expect(list.status, why(list)).toBe(404);
+      const one = await request(appAnon).get(`/api/sessions/${session.id}`);
+      expect(one.status, why(one)).toBe(404);
+      const del = await request(appAnon).delete("/api/sessions");
+      expect(del.status, why(del)).toBe(404);
       const exec = await request(appAnon).post("/api/execute").send({ prompt: "hi" });
       expect(exec.status).toBe(200);
       expect(exec.body.session_id).toBeUndefined();
