@@ -66,11 +66,14 @@ below attack what goes *in* a plan; length falls out of that.
   cases", a step that names no verification. This change narrows what must be *shown*; it licenses
   nothing to go *unsaid*.
 - **Two of those prohibitions carry a transcription rule in their parenthetical, and the
-  parenthetical is what changes.** `"Write tests for the above" (without actual test code)` becomes
-  `(without naming the behaviour asserted and where its oracle comes from)`; `Steps that describe
-  what to do without showing how (code blocks required for code steps)` becomes `(a step must say
-  how it is verified)`. Without this the rewritten rules contradict the prohibitions they sit
-  beside, and an implementer has to guess which wins.
+  parenthetical is what changes.**
+  - `"Write tests for the above" (without actual test code)`
+    becomes `(without naming the behaviour asserted and where its oracle comes from)`.
+  - `Steps that describe what to do without showing how (code blocks required for code steps)`
+    becomes `(a step must say how it is verified)`.
+
+  Without this the rewritten rules contradict the prohibitions they sit beside, and an implementer
+  has to guess which wins.
 - The `## Task Structure` template is trimmed to match, because it is the shape authors copy.
 
 **Enforcement.** The staff-engineer plan reviewer reports a code block that transcribes an
@@ -216,21 +219,25 @@ already state.
 
 ## Success criteria
 
-S1. `.claude/skills/writing-plans/SKILL.md` says the same thing in all four places — `## Overview`,
-   `## No Placeholders`, `## Remember` and the `## Task Structure` template. No rule remains that
-   asks for code a task has already specified in prose, and no prohibition on vagueness was lost.
-S2. `planning-reviewer-prompt.md` lists transcribed implementation code as a mechanical finding.
-S3. `docs/sdlc.md` Phase 2's "real code" is replaced by the narrowed rule, and does not contradict
-   the skill.
-S4. All three are merged in `igor-ka/acb` and pulled back here, with `acb status` reporting
-   `behind: 0` and `ahead: 0`.
-S5. `acb`'s `./verify.sh` passes, `carried-purity` and `skills-portability` included.
-S6. A PR that touches only `scripts/tests/**` passes `SDLC docs` without touching
-   `docs/sdlc-local.md` and without `[skip-sdlc-sync]`.
-S7. A PR that touches `scripts/mutation-scope.sh` still fails `SDLC docs` until the doc is updated.
-S8. `docs/testing-notes.md` no longer exists; no reference to it remains outside `docs/plans/` and
-   `docs/specs/`; every fact it held is either in `docs/sdlc-local.md` or in carried `docs/sdlc.md`.
-S9. Backend, frontend and infra `verify.sh` all pass; the six required checks are green.
+- **S1.** `.claude/skills/writing-plans/SKILL.md` says the same thing in all four places —
+  `## Overview`, `## No Placeholders`, `## Remember` and the `## Task Structure` template. No rule
+  remains that asks for code a task has already specified in prose, and no prohibition on vagueness
+  was lost.
+- **S2.** `planning-reviewer-prompt.md` lists transcribed implementation code as a mechanical
+  finding.
+- **S3.** `docs/sdlc.md` Phase 2's "real code" is replaced by the narrowed rule, and does not
+  contradict the skill.
+- **S4.** All three are merged in `igor-ka/acb` and pulled back here, with `acb status` reporting
+  `behind: 0` and `ahead: 0`.
+- **S5.** `acb`'s `./verify.sh` passes, `carried-purity` and `skills-portability` included.
+- **S6.** A PR that touches only `scripts/tests/**` passes `SDLC docs` without touching
+  `docs/sdlc-local.md` and without `[skip-sdlc-sync]`.
+- **S7.** A PR that touches `scripts/mutation-scope.sh` still fails `SDLC docs` until the doc is
+  updated.
+- **S8.** `docs/testing-notes.md` no longer exists; no reference to it remains outside
+  `docs/plans/` and `docs/specs/`; every fact it held is either in `docs/sdlc-local.md` or in
+  carried `docs/sdlc.md`.
+- **S9.** Backend, frontend and infra `verify.sh` all pass; the six required checks are green.
 
 ## Dependencies and collisions
 

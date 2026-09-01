@@ -129,11 +129,11 @@ template demonstrates a code block per step, which is the shape authors copy.
       with no verification: all stay untouched. But two entries are prohibitions on vagueness whose
       *parenthetical* is a code-transcription rule, and they contradict Step 2 unless reworded:
 
-  - line 199, `"Write tests for the above" (without actual test code)` → **`(without naming the
-    behaviour asserted and where its oracle comes from)`**. The failure is a step that names no
-    behaviour, not one that omits a code block.
-  - line 203, `Steps that describe what to do without showing how (code blocks required for code
-    steps)` → **`(a step must say how it is verified)`**.
+  - **line 199** — `"Write tests for the above" (without actual test code)`
+    becomes `(without naming the behaviour asserted and where its oracle comes from)`.
+    The failure is a step that names no behaviour, not one that omits a code block.
+  - **line 203** — `Steps that describe what to do without showing how (code blocks required for code steps)`
+    becomes `(a step must say how it is verified)`.
 
   The prohibitions survive; what they demand as the remedy changes from bytes to a named behaviour
   and a verification. This change narrows what must be *shown*; it licenses nothing to go unsaid.
@@ -551,9 +551,9 @@ three references are at 109 / 159 / 169, the property test's comment is at 22, a
 `**Human dependencies:**` header field was added — the plan needs four issues opened and two
 upstream merges, which is exactly what the field is for and what `/loop-plan` stops on.
 
-**Rebased 2026-08-31 against `acb` `10fc136`** — Task 1's rebase note corrected (`## Criteria
-coverage`, not "Definition of done"), Task 2 Step 0 rewritten against the reviewer prompt's actual
-rows, the `e3117ae` oracle annotation flagged as must-keep when Step 4 trims the template, and a
+**Rebased 2026-08-31 against `acb` `10fc136`** — Task 1's rebase note corrected to
+`## Criteria coverage`, not "Definition of done"; Task 2 Step 0 rewritten against the reviewer
+prompt's actual rows; the `e3117ae` oracle annotation flagged as must-keep when Step 4 trims the template, and a
 `## Criteria coverage` section added to this plan under the rule it is rebasing onto. The spec's
 success criteria were renumbered `S1`–`S9` so the table can name them.
 
