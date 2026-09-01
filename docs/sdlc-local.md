@@ -348,6 +348,21 @@ process checks plus one per component, so regenerating this file would produce a
 document and silently stop gating the sixth. A generated file is the consumer's own precisely
 because the generator cannot know everything about it.
 
+**`copilot_code_review` was removed on 2026-09-01, because it had stopped being a check.** The
+rule was in the ruleset from the start and Copilot reviewed every pull request up to #203 on
+2026-08-18. It has reviewed none since: the entitlement came with an organisation membership that
+lapsed on 2026-08-17, and Copilot Free covers completions and chat but not pull request review. The
+rule stayed `active` with `review_on_push: true`, so every merge after that date was a manual
+override of a gate that never ran — GitHub refused the merge, a human clicked through, and nothing
+recorded that a required review had not happened.
+
+That is the decorative-gate shape [`escaped-defects.md`](escaped-defects.md) exists to catch,
+sitting in the branch protection itself. A required check nobody can satisfy does not fail safe: it
+trains the operator to bypass their own protection on every change, which is worse than not
+declaring it. Restore the rule if the entitlement comes back — and if it does, verify a review
+actually appears before relying on it, because the rule being present is what made this invisible
+for two weeks.
+
 **Which is why `--apply` is opt-in and the diff is the default.** Running
 `scripts/apply-ruleset.sh` with no arguments prints live-versus-document and writes nothing.
 `scripts/tests/apply-ruleset.test.sh` covers it, hosted by the `Deploy scripts` job.
