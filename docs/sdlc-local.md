@@ -348,6 +348,45 @@ process checks plus one per component, so regenerating this file would produce a
 document and silently stop gating the sixth. A generated file is the consumer's own precisely
 because the generator cannot know everything about it.
 
+**`copilot_code_review` was removed on 2026-09-01, at the repository owner's decision, because it
+advertised a review that had stopped happening.** The rule was added 2026-08-09 and removed
+2026-09-01 — 22 days, not the life of the ruleset, which was created 2026-05-29 with four rules.
+Copilot reviewed human-authored pull requests between #71 and #203; its last review anywhere was
+submitted 2026-08-17T19:22Z. Every pull request from #204 onward has none, unbroken. The stated
+cause is a lapsed organisation membership carrying the entitlement; that is the owner's account,
+not something this repository can verify.
+
+**What it was, and was not.** It requested a Copilot review automatically; it was not a merge gate.
+GitHub does not evaluate it in the ruleset's rule suites — #234's merge, made while the rule was
+live, records five rule evaluations and not this one. `bypass_actors` has been empty and
+`current_user_can_bypass` `never` in all eight versions of the ruleset, and no bypass has ever been
+recorded. Dependabot pull requests #116 and #146 were auto-merged by `app/github-actions` with the
+rule live and no Copilot review at all, which an app could not have done through a block. So the
+earlier claim in this file — that merges after 08-17 were manual overrides — was wrong, and is
+withdrawn.
+
+**One observation that does not fit, recorded rather than explained.** On 2026-09-01,
+`gh pr merge 243 --squash` was refused with *"the base branch policy prohibits the merge"* while all
+six required checks were green; removing this rule was the only change made, and the merge then
+succeeded. Why that pull request was blocked when #204–#241 were not is unexplained. Do not read
+the removal as the fix for a block: it was removed because it promised a review nobody was
+receiving.
+
+**What actually lapsed is a real control, and it was already narrower than the carried document
+says.** `required_review_thread_resolution` is `true`, so unresolved review threads do block a
+merge — while Copilot reviewed, its threads had to be answered. That protection ended on
+2026-08-17, when the reviews stopped, not when this rule was removed. But
+[`sdlc.md`](sdlc.md)'s auto-merge section still says *"Copilot reviews every PR including
+Dependabot's, so a single inline comment parks the merge"*, and that was never true of Dependabot
+pull requests — #116 and #146 above merged with no review while the rule was live. It is the stated
+safety argument for #94's *parked counts as passing*, and today nothing parks a Dependabot
+auto-merge at all: 17 are open. `sdlc.md` is carried and cannot be corrected here, which is what
+this file is for.
+
+**If the entitlement returns**, restore the rule — and verify a review actually appears on a real
+pull request before relying on it. The rule being present is exactly what made its silence
+invisible for two weeks.
+
 **Which is why `--apply` is opt-in and the diff is the default.** Running
 `scripts/apply-ruleset.sh` with no arguments prints live-versus-document and writes nothing.
 `scripts/tests/apply-ruleset.test.sh` covers it, hosted by the `Deploy scripts` job.
