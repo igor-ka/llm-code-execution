@@ -1,6 +1,6 @@
 # Frontend dev server image (Vite). For a learning/local setup we run the dev
 # server directly; a production build would use `npm run build` + a static server.
-FROM node:22-slim
+FROM node:26-slim
 
 WORKDIR /app
 
