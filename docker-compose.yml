@@ -53,7 +53,7 @@ services:
   # Per-user chat history datastore. Data persists in the named `pgdata` volume across
   # restarts. Credentials match the DATABASE_URL above (app/app/app).
   postgres:
-    image: postgres:16
+    image: postgres:18
     environment:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: app
